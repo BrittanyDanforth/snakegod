@@ -198,6 +198,7 @@ local function resetPlayerCollisionState(player)
 	player:SetAttribute("IsDead", false)
 	player:SetAttribute("IsDying", false)
 	player:SetAttribute("AwaitingReviveResponse", false)
+	player:SetAttribute("RevivePromptActive", false)
 	
 	-- Reset character properties
 	if player.Character then
@@ -403,26 +404,31 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 	print(string.format("[ORB SPAWN] Length: %d, TotalOrbs: %d, Value: %d", snakeLength, totalOrbs, orbValue))
 	
 	local spawnedOrbs = 0
-	local skipInterval = math.max(1, math.floor(#segmentPositions / totalOrbs))
 	
-	-- Spawn orbs along segments
-	for i = 1, #segmentPositions, skipInterval do
-		if spawnedOrbs >= totalOrbs then break end
+	-- Better distribution: spawn orbs evenly along the snake
+	if #segmentPositions > 0 then
+		local step = math.max(1, #segmentPositions / totalOrbs)
 		
-		local pos = segmentPositions[i]
-		if pos then
-			local spread = math.min(snakeLength / 50, 10)
-			local offset = Vector3.new(
-				math.random() * spread * 2 - spread,
-				0,
-				math.random() * spread * 2 - spread
-			)
-			
-			spawnDeathOrb(pos + offset, orbValue)
-			spawnedOrbs = spawnedOrbs + 1
-			
-			if spawnedOrbs % 5 == 0 then
-				task.wait(0.03)
+		for i = 1, #segmentPositions do
+			-- Check if we should spawn an orb at this position
+			if math.floor((i - 1) / step) >= spawnedOrbs and spawnedOrbs < totalOrbs then
+				local pos = segmentPositions[i]
+				if pos then
+					-- Smaller, more accurate spread
+					local spread = 2.5
+					local offset = Vector3.new(
+						(math.random() - 0.5) * spread,
+						0,
+						(math.random() - 0.5) * spread
+					)
+					
+					spawnDeathOrb(pos + offset, orbValue)
+					spawnedOrbs = spawnedOrbs + 1
+					
+					if spawnedOrbs % 5 == 0 then
+						task.wait(0.03)
+					end
+				end
 			end
 		end
 	end
@@ -680,12 +686,25 @@ task.spawn(function()
 				
 				if visualSnakeModel then
 					print("🔍 Found visual snake model for", player.Name)
-					for _, part in ipairs(visualSnakeModel:GetChildren()) do
-						if part:IsA("BasePart") and part.Name:match("Segment") then
-							segmentPositions[#segmentPositions + 1] = part.Position
+					-- Get segments IN ORDER by their number
+					local segmentParts = {}
+					local i = 0
+					while true do
+						local segmentName = i == 0 and "Segment0_Head" or ("Segment" .. i)
+						local segment = visualSnakeModel:FindFirstChild(segmentName)
+						if segment and segment:IsA("BasePart") then
+							segmentParts[#segmentParts + 1] = segment
+							i = i + 1
+						else
+							break
 						end
 					end
-					print("📍 Stored", #segmentPositions, "positions from visual model")
+					
+					-- Store positions in order from head to tail
+					for _, part in ipairs(segmentParts) do
+						segmentPositions[#segmentPositions + 1] = part.Position
+					end
+					print("📍 Stored", #segmentPositions, "ordered positions from visual model")
 				else
 					local segments = getActualSnakeSegments(player)
 					if segments and #segments > 0 then
@@ -775,7 +794,9 @@ task.spawn(function()
 				
 				if hasRevive or revivesAvailable > 0 then
 					-- Player can be revived
+					-- Make sure AwaitingReviveResponse is still true
 					player:SetAttribute("AwaitingReviveResponse", true)
+					player:SetAttribute("RevivePromptActive", true) -- Add this for extra safety
 					print("🚀 Sending revive prompt to", player.Name)
 					promptReviveRemote:FireClient(player)
 					
@@ -793,6 +814,7 @@ task.spawn(function()
 							reviveSessions[player] = nil
 							processingPlayers[player] = nil
 							player:SetAttribute("AwaitingReviveResponse", false)
+							player:SetAttribute("RevivePromptActive", false)
 							
 							if response == "revive" or response == true then
 								-- REVIVE LOGIC
@@ -867,6 +889,7 @@ task.spawn(function()
 							reviveSessions[player] = nil
 							processingPlayers[player] = nil
 							player:SetAttribute("AwaitingReviveResponse", false)
+							player:SetAttribute("RevivePromptActive", false)
 							
 							-- Proceed with death
 							if visualSnakeModel then
