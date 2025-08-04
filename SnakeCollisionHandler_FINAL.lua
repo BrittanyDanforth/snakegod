@@ -517,32 +517,54 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 	if #segmentPositions >= 3 then
 		local spawnedOrbs = 0
 
-		-- Calculate step to evenly distribute orbs along the snake
-		local step = math.max(1, (#segmentPositions - 1) / (totalOrbs - 1))
-
-		for i = 1, totalOrbs do
+		-- IMPROVED: Better distribution algorithm
+		-- Instead of using step, we'll skip segments to get better coverage
+		local skipInterval = math.max(1, math.floor(#segmentPositions / totalOrbs))
+		
+		-- Start from the head and work our way down
+		for i = 1, #segmentPositions do
 			if spawnedOrbs >= totalOrbs then break end
+			
+			-- Only spawn on every skipInterval segment
+			if (i - 1) % skipInterval == 0 or i == #segmentPositions then
+				local pos = segmentPositions[i]
+				if pos then
+					-- Very small spread to maintain body shape
+					local spread = 0.8 -- Even smaller spread for tighter grouping
+					local offset = Vector3.new(
+						(math.random() - 0.5) * spread,
+						0,
+						(math.random() - 0.5) * spread
+					)
 
-			-- Calculate which segment position to use
-			local segmentIndex = math.floor((i - 1) * step) + 1
-			segmentIndex = math.min(segmentIndex, #segmentPositions)
+					spawnDeathOrb(pos + offset, orbValue)
+					spawnedOrbs = spawnedOrbs + 1
 
-			local pos = segmentPositions[segmentIndex]
-			if pos then
-				-- Very small spread to maintain body shape
-				local spread = 1.5 -- Reduced from 2.5
-				local offset = Vector3.new(
-					(math.random() - 0.5) * spread,
-					0,
-					(math.random() - 0.5) * spread
-				)
+					-- Small delay every few orbs
+					if spawnedOrbs % 8 == 0 then
+						task.wait(0.02)
+					end
+				end
+			end
+		end
 
-				spawnDeathOrb(pos + offset, orbValue)
-				spawnedOrbs = spawnedOrbs + 1
-
-				-- Small delay every few orbs
-				if spawnedOrbs % 8 == 0 then
-					task.wait(0.02)
+		-- If we haven't spawned enough orbs, fill in gaps
+		if spawnedOrbs < totalOrbs and #segmentPositions > totalOrbs then
+			local remainingOrbs = totalOrbs - spawnedOrbs
+			local gapSize = math.floor(#segmentPositions / remainingOrbs)
+			
+			for i = 1, remainingOrbs do
+				local idx = math.min(i * gapSize + math.floor(skipInterval / 2), #segmentPositions)
+				local pos = segmentPositions[idx]
+				if pos then
+					local spread = 0.8
+					local offset = Vector3.new(
+						(math.random() - 0.5) * spread,
+						0,
+						(math.random() - 0.5) * spread
+					)
+					spawnDeathOrb(pos + offset, orbValue)
+					spawnedOrbs = spawnedOrbs + 1
 				end
 			end
 		end
@@ -863,18 +885,39 @@ task.spawn(function()
 					-- IMPORTANT: Collect segments BEFORE destroying anything
 					if visualSnakeModel then
 						print("🔍 Collecting segments from visual model")
-						-- Get all segments in order
+						-- Get all segments including head (Segment0_Head)
 						local segments = {}
+						
+						-- First add the head
+						local head = visualSnakeModel:FindFirstChild("Segment0_Head")
+						if head and head:IsA("BasePart") then
+							table.insert(segments, head)
+						end
+						
+						-- Then add all body segments
 						for _, child in ipairs(visualSnakeModel:GetChildren()) do
-							if child:IsA("BasePart") and child.Name:match("Segment") then
+							if child:IsA("BasePart") and child.Name:match("^Segment%d+$") and child.Name ~= "Segment0_Head" then
 								table.insert(segments, child)
 							end
 						end
 
-						-- Sort segments by name to ensure correct order
+						-- Sort segments by number
 						table.sort(segments, function(a, b)
-							local aNum = tonumber(a.Name:match("Segment(%d+)")) or (a.Name:match("Head") and 0) or 999
-							local bNum = tonumber(b.Name:match("Segment(%d+)")) or (b.Name:match("Head") and 0) or 999
+							local aNum = 0
+							local bNum = 0
+							
+							if a.Name == "Segment0_Head" then
+								aNum = 0
+							else
+								aNum = tonumber(a.Name:match("Segment(%d+)")) or 999
+							end
+							
+							if b.Name == "Segment0_Head" then
+								bNum = 0
+							else
+								bNum = tonumber(b.Name:match("Segment(%d+)")) or 999
+							end
+							
 							return aNum < bNum
 						end)
 
@@ -931,10 +974,16 @@ task.spawn(function()
 					local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
 					print("🔍 Revive check - HasRevive:", hasRevive, "RevivesAvailable:", revivesAvailable)
 
-					-- Set revive attributes if available
+					-- Set revive attributes IMMEDIATELY if available
 					if hasRevive or revivesAvailable > 0 then
-						player:SetAttribute("AwaitingReviveResponse", true)
+						-- Set RevivePromptActive FIRST to prevent SlitherIOMenu from showing
 						player:SetAttribute("RevivePromptActive", true)
+						player:SetAttribute("AwaitingReviveResponse", true)
+						
+						-- Also fire client immediately to show revive UI faster
+						task.defer(function()
+							promptReviveRemote:FireClient(player)
+						end)
 					end
 
 					-- Now freeze snake and set health
@@ -1082,9 +1131,9 @@ task.spawn(function()
 							reviveSessions[player] = nil
 						end
 
-						-- Fire the ReviveUI prompt
-						print("🚀 Sending revive prompt to", player.Name)
-						promptReviveRemote:FireClient(player)
+						-- ReviveUI prompt was already sent earlier with task.defer
+						print("🚀 Revive prompt already sent to", player.Name)
+						-- promptReviveRemote:FireClient(player) -- Already done above
 
 						-- Set up response listener
 						local responseConnection
