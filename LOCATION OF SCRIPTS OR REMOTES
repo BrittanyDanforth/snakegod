@@ -1,0 +1,11 @@
+REPLICATED STORAGE AISnake, AISnakeOrbPickup, AttachmentParentingCheck, BoostItemHandler, CollisionPerformancePatch, InventoryUI, LeaderboardUpdated, Trove, OptimizedSnakeSystem, OrbCollected, OrbUtils, PlayVFX, PlayerDied, PlayerReady, PurchaseItem, ReloadSnake, RequestMapRebuild, RespawnSnake, RewardUI, SelectSkin, SetGraphicsMode, SetPlayerName, ShopItems, ShopUI, SnakeCollision, SnakeConfig, SnakeSkins, SnakeUpgrades, UpdateTargetPosition, VFXManager
+  
+   
+   
+   ServerScriptService CharacterLoadBlocker, CharacterSetup_OLD, GamepassHandler, MobileSetup, OrbSpawner, PurchaseHandler (commented/disabled), SelectSkinHandler, SnakeCollisionHandler, SnakeNetworkHandler, SnakeSystemIntegration, UnifiedSkinSystem, SnakeSkinsData
+ 
+  
+  
+  StarterPlayerScripts CameraController, ClientAISnakeLOD, ClientSnakeLoader, DisableCameraControls, InventoryUILoader, LeaderboardManager, MobileControls, MobileHUD, OrbClientGraphics, OrbCollectedClientHandler, ReviveUI, RootOutlineRemover, ShopUILoader, SlitherUIMenu, SnakeMovement
+
+ U MGIHT NOT HAVE THEM ALL
