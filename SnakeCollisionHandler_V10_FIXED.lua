@@ -25,13 +25,8 @@ if not promptReviveRemote then
 	promptReviveRemote.Parent = remotes
 end
 
--- FIX 2: Add ReviveResponse remote for proper client-server communication
-local reviveResponseRemote = remotes:FindFirstChild("ReviveResponse")
-if not reviveResponseRemote then
-	reviveResponseRemote = Instance.new("RemoteEvent")
-	reviveResponseRemote.Name = "ReviveResponse"
-	reviveResponseRemote.Parent = remotes
-end
+-- FIX 2: ReviveResponse is handled through the same PromptRevive remote
+-- The client fires back to the server on the same remote with the response
 
 -- Other remotes
 local freezeCameraRemote = remotes:FindFirstChild("FreezeCamera") or Instance.new("RemoteEvent", remotes)
@@ -650,16 +645,31 @@ task.spawn(function()
 				end
 
 				-- Store segment positions BEFORE any destruction
-				local segments = getActualSnakeSegments(player)
+				-- First check for visual snake model segments
+				local visualSnakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
 				local segmentPositions = {}
-				if segments and #segments > 0 then
-					print("🔍 Found", #segments, "segments to store positions from")
-					for i, seg in ipairs(segments) do
-						if seg and seg:IsA("BasePart") and seg.Parent and seg.Position then
-							segmentPositions[#segmentPositions + 1] = seg.Position
+				
+				if visualSnakeModel then
+					print("🔍 Found visual snake model for", player.Name)
+					-- Get all segments from the visual model
+					for _, part in ipairs(visualSnakeModel:GetChildren()) do
+						if part:IsA("BasePart") and part.Name:match("Segment") then
+							segmentPositions[#segmentPositions + 1] = part.Position
 						end
 					end
-					print("📍 Stored", #segmentPositions, "segment positions for orb spawning")
+					print("📍 Stored", #segmentPositions, "positions from visual model")
+				else
+					-- Fallback to other segment sources
+					local segments = getActualSnakeSegments(player)
+					if segments and #segments > 0 then
+						print("🔍 Found", #segments, "segments from getActualSnakeSegments")
+						for i, seg in ipairs(segments) do
+							if seg and seg:IsA("BasePart") and seg.Parent and seg.Position then
+								segmentPositions[#segmentPositions + 1] = seg.Position
+							end
+						end
+						print("📍 Stored", #segmentPositions, "segment positions for orb spawning")
+					end
 				end
 
 				-- Clear magnet effect immediately
@@ -667,8 +677,7 @@ task.spawn(function()
 				player:SetAttribute("TempMagnetRange", 1)
 				player:SetAttribute("ActiveMagnet", false)
 
-				-- Anchor the visual snake model
-				local visualSnakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
+				-- Anchor the visual snake model (already found above)
 				if visualSnakeModel then
 					for _, part in ipairs(visualSnakeModel:GetChildren()) do
 						if part:IsA("BasePart") then
@@ -751,7 +760,7 @@ task.spawn(function()
 					}
 					reviveSessions[player] = session
 
-					session.connection = reviveResponseRemote.OnServerEvent:Connect(function(plr, response)
+					session.connection = promptReviveRemote.OnServerEvent:Connect(function(plr, response)
 						if plr == player and reviveSessions[player] == session then
 							session.connection:Disconnect() -- Clean up the listener
 							reviveSessions[player] = nil     -- End the session
@@ -1818,11 +1827,11 @@ debugCommand.Changed:Connect(function()
 	end
 end)
 
-print("⚡ SnakeCollisionHandler V10 FIXED - HOTFIX")
+print("⚡ SnakeCollisionHandler V10 FIXED - HOTFIX 2")
+print("✅ FIXED: ReviveResponse now uses the same PromptRevive remote")
+print("✅ FIXED: Death orbs now spawn from visual snake model segments")
 print("✅ FIXED: Health = 0 restored for proper death menu flow")
 print("✅ FIXED: AwaitingReviveResponse set BEFORE death to prevent race condition")
-print("✅ FIXED: Death orbs spawn with better debug logging")
-print("✅ FIXED: Camera freeze with debug output")
-print("✅ FIXED: Purchase screen should now appear properly")
+print("✅ ADDED: RevivePurchaseHandler.lua for Robux purchases")
 print("✅ All V8.2 optimizations and revive logic preserved")
 print("🔧 Ready for production use!")
