@@ -752,6 +752,14 @@ local function queuePlayerDeath(player)
 	state.isProcessing = true
 	state.canCollide = false
 	processingPlayers[player] = true
+	
+	-- CHECK REVIVE IMMEDIATELY and set attribute to prevent menu flash
+	local hasRevive = player:GetAttribute("HasRevive")
+	local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
+	if hasRevive or revivesAvailable > 0 then
+		player:SetAttribute("RevivePromptActive", true)
+		player:SetAttribute("AwaitingReviveResponse", true)
+	end
 
 	-- IMMEDIATE NUCLEAR CAMERA FREEZE
 	task.spawn(function()
@@ -764,12 +772,14 @@ local function queuePlayerDeath(player)
 		player:SetAttribute("CameraLocked", true)
 		player:SetAttribute("DeathCameraFreeze", true)
 
-		-- Disable any client-side death effects
+		-- Disable any client-side death effects IMMEDIATELY
 		player:SetAttribute("NoDeathEffects", true)
 		player:SetAttribute("DisableClientOrbs", true)
 
-		-- Notify client to disable any effects
-		disableDeathEffectsRemote:FireClient(player)
+		-- Notify client to disable any effects RIGHT NOW
+		pcall(function()
+			disableDeathEffectsRemote:FireClient(player)
+		end)
 
 		if _G.PlayerSnakes and _G.PlayerSnakes[player] then
 			local snake = _G.PlayerSnakes[player]
@@ -969,26 +979,53 @@ task.spawn(function()
 					-- Store snake references
 					local snakeInstance = _G.PlayerSnakes and _G.PlayerSnakes[player]
 
-					-- Check for revives BEFORE freezing
+					-- Check for revives BEFORE doing ANYTHING else
 					local hasRevive = player:GetAttribute("HasRevive")
 					local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
 					print("🔍 Revive check - HasRevive:", hasRevive, "RevivesAvailable:", revivesAvailable)
 
-					-- Set revive attributes IMMEDIATELY if available
+					-- Set revive attributes SUPER EARLY if available
 					if hasRevive or revivesAvailable > 0 then
-						-- Set RevivePromptActive FIRST to prevent SlitherIOMenu from showing
+						-- Set RevivePromptActive IMMEDIATELY to block SlitherIOMenu
 						player:SetAttribute("RevivePromptActive", true)
 						player:SetAttribute("AwaitingReviveResponse", true)
 						
-						-- Also fire client immediately to show revive UI faster
-						task.defer(function()
+						-- Fire client RIGHT NOW without any delay
+						pcall(function()
 							promptReviveRemote:FireClient(player)
 						end)
 					end
 
 					-- Now freeze snake and set health
 					print("❄️ Freezing snake for", player.Name)
+					
+					-- IMPORTANT: Spawn orbs BEFORE destroying the snake!
+					if #segmentPositions > 0 then
+						print("💎 Spawning orbs immediately with", #segmentPositions, "positions")
+						spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
+					else
+						-- Fallback: spawn orbs at death position
+						print("⚠️ No segments found, using fallback orb spawning")
+						local rootPart = character:FindFirstChild("HumanoidRootPart")
+						if rootPart then
+							-- Use a more spread out pattern for fallback
+							local fallbackPositions = {}
+							local numOrbs = math.min(10, math.floor(snakeLength / 10))
+							for i = 1, numOrbs do
+								local angle = (i - 1) * (360 / numOrbs) * math.pi / 180
+								local distance = 5 + (i * 2) -- Increasing distance
+								local pos = rootPart.Position + Vector3.new(
+									math.cos(angle) * distance,
+									0,
+									math.sin(angle) * distance
+								)
+								fallbackPositions[#fallbackPositions + 1] = pos
+							end
+							spawnDeathOrbsForPlayer(player, fallbackPositions, snakeLength)
+						end
+					end
 
+					-- NOW destroy the snake after orbs are spawned
 					if snakeInstance and snakeInstance.destroy then
 						snakeInstance:destroy()
 						if _G.PlayerSnakes then
@@ -1060,7 +1097,7 @@ task.spawn(function()
 
 						-- Also check workspace for any stray effect parts
 						task.defer(function()
-							local searchRadius = 20
+							local searchRadius = 30 -- Increased search radius
 							local nearbyParts = workspace:GetPartBoundsInBox(
 								rootPart.CFrame,
 								Vector3.new(searchRadius, searchRadius, searchRadius)
@@ -1071,20 +1108,44 @@ task.spawn(function()
 									-- Remove any suspicious orb-like parts
 									local shouldDestroy = false
 									
-									-- Check name patterns
-									if part.Name:lower():match("effect") or part.Name:lower():match("orb") then
+									-- Check name patterns (more aggressive)
+									local lowerName = part.Name:lower()
+									if lowerName:match("effect") or lowerName:match("orb") or 
+									   lowerName:match("particle") or lowerName:match("sphere") or
+									   lowerName:match("vfx") or lowerName:match("fx") then
 										shouldDestroy = true
 									end
 									
-									-- Only check Shape on regular Parts (not MeshParts)
-									if not shouldDestroy and part:IsA("Part") and part.Shape == Enum.PartType.Ball and 
-										part.Size.Magnitude < 2 and part.BrickColor == BrickColor.new("Medium stone grey") then
+									-- Check if it's a ball Part (more aggressive checks)
+									if not shouldDestroy and part:IsA("Part") then
+										-- Any small ball is suspicious
+										if part.Shape == Enum.PartType.Ball and part.Size.Magnitude < 3 then
+											shouldDestroy = true
+										end
+										-- Any grey/gray colored ball
+										if part.Shape == Enum.PartType.Ball and 
+										   (part.BrickColor.Name:lower():match("grey") or 
+										    part.BrickColor.Name:lower():match("gray") or
+										    part.Color:ToHSV() < 0.2) then -- Low saturation = grey
+											shouldDestroy = true
+										end
+									end
+									
+									-- Check for unanchored small parts that might be effects
+									if not shouldDestroy and not part.Anchored and part.Size.Magnitude < 2 then
 										shouldDestroy = true
 									end
 									
 									if shouldDestroy then
 										part:Destroy()
 									end
+								end
+							end
+							
+							-- EXTRA: Check for any OrbVFXMarker parts specifically
+							for _, obj in ipairs(workspace:GetDescendants()) do
+								if obj:IsA("BasePart") and obj.Name == "OrbVFXMarker" then
+									obj:Destroy()
 								end
 							end
 						end)
@@ -1095,31 +1156,7 @@ task.spawn(function()
 						humanoid.Health = 0
 					end
 
-					-- FIX: Spawn orbs using task.defer to ensure segments are captured
-					task.defer(function()
-						if #segmentPositions > 0 then
-							spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
-						else
-							-- Fallback: spawn orbs at death position
-							print("⚠️ No segments found, using fallback orb spawning")
-							if rootPart then
-								-- Use a more spread out pattern for fallback
-								local fallbackPositions = {}
-								local numOrbs = math.min(10, math.floor(snakeLength / 10))
-								for i = 1, numOrbs do
-									local angle = (i - 1) * (360 / numOrbs) * math.pi / 180
-									local distance = 5 + (i * 2) -- Increasing distance
-									local pos = rootPart.Position + Vector3.new(
-										math.cos(angle) * distance,
-										0,
-										math.sin(angle) * distance
-									)
-									fallbackPositions[#fallbackPositions + 1] = pos
-								end
-								spawnDeathOrbsForPlayer(player, fallbackPositions, snakeLength)
-							end
-						end
-					end)
+					-- Orbs already spawned above before snake destruction
 
 					-- === FIX 6: PROPERLY HANDLE REVIVE UI ===
 					if hasRevive or revivesAvailable > 0 then
