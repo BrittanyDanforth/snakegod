@@ -971,9 +971,20 @@ task.spawn(function()
 						for _, part in pairs(character:GetDescendants()) do
 							if part:IsA("BasePart") then
 								-- Check if this might be an effect orb (usually small spheres)
+								local shouldDestroy = false
+								
+								-- Check name patterns
 								if part.Name:lower():match("orb") or part.Name:lower():match("effect") or 
-									part.Name:lower():match("particle") or part.Name:lower():match("sphere") or
-									(part.Shape == Enum.PartType.Ball and part.Size.Magnitude < 5) then
+									part.Name:lower():match("particle") or part.Name:lower():match("sphere") then
+									shouldDestroy = true
+								end
+								
+								-- Only check Shape on regular Parts (not MeshParts)
+								if not shouldDestroy and part:IsA("Part") and part.Shape == Enum.PartType.Ball and part.Size.Magnitude < 5 then
+									shouldDestroy = true
+								end
+								
+								if shouldDestroy then
 									part:Destroy()
 								else
 									part.CanCollide = false
@@ -1009,9 +1020,20 @@ task.spawn(function()
 							for _, part in ipairs(nearbyParts) do
 								if part:IsA("BasePart") and part.Parent ~= character then
 									-- Remove any suspicious orb-like parts
-									if part.Name:lower():match("effect") or part.Name:lower():match("orb") or
-										(part.Shape == Enum.PartType.Ball and part.Size.Magnitude < 2 and
-											part.BrickColor == BrickColor.new("Medium stone grey")) then
+									local shouldDestroy = false
+									
+									-- Check name patterns
+									if part.Name:lower():match("effect") or part.Name:lower():match("orb") then
+										shouldDestroy = true
+									end
+									
+									-- Only check Shape on regular Parts (not MeshParts)
+									if not shouldDestroy and part:IsA("Part") and part.Shape == Enum.PartType.Ball and 
+										part.Size.Magnitude < 2 and part.BrickColor == BrickColor.new("Medium stone grey") then
+										shouldDestroy = true
+									end
+									
+									if shouldDestroy then
 										part:Destroy()
 									end
 								end
