@@ -1,0 +1,223 @@
+-- VFXManager: Handles visual effects for orbs with multiplayer-compatible graphics modes
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+
+local VFXManager = {}
+
+-- Create SetGraphicsMode RemoteEvent if it doesn't exist
+local SetGraphicsModeEvent = ReplicatedStorage:FindFirstChild("SetGraphicsMode")
+if not SetGraphicsModeEvent and RunService:IsServer() then
+	SetGraphicsModeEvent = Instance.new("RemoteEvent")
+	SetGraphicsModeEvent.Name = "SetGraphicsMode"
+	SetGraphicsModeEvent.Parent = ReplicatedStorage
+elseif not SetGraphicsModeEvent then
+	-- Client: wait for it to be created
+	SetGraphicsModeEvent = ReplicatedStorage:WaitForChild("SetGraphicsMode", 5)
+end
+
+-- Cache for effect templates to avoid recreating them
+local effectTemplates = {}
+
+-- Graphics mode configurations
+local GRAPHICS_SETTINGS = {
+	High = {
+		orbGlow = true,
+		orbParticles = true,
+		particleCount = 20,
+		lightingEnabled = true,
+		glowBrightness = 2,
+		glowRange = 8,
+	},
+	Medium = {
+		orbGlow = true,
+		orbParticles = true,
+		particleCount = 10,
+		lightingEnabled = true,
+		glowBrightness = 1.5,
+		glowRange = 6,
+	},
+	Low = {
+		orbGlow = false,
+		orbParticles = false,
+		particleCount = 0,
+		lightingEnabled = false,
+		glowBrightness = 0,
+		glowRange = 0,
+	}
+}
+
+-- Helper to get graphics mode for a player (defaults to "High")
+local function getGraphicsModeForPlayer(player)
+	if not player then 
+		-- On server or no player specified, return High
+		if RunService:IsServer() then
+			return "High"
+		end
+		-- On client, use local player's mode
+		player = Players.LocalPlayer
+	end
+
+	if player then
+		local mode = player:GetAttribute("GraphicsMode")
+		if mode == "Low" or mode == "Medium" then
+			return mode
+		end
+	end
+	return "High"
+end
+
+-- Get graphics settings
+function VFXManager.getGraphicsSettings(mode)
+	return GRAPHICS_SETTINGS[mode] or GRAPHICS_SETTINGS.High
+end
+
+-- Creates a template for the orb collection particle effect
+local function createOrbEffectTemplate(graphicsMode)
+	local settings = GRAPHICS_SETTINGS[graphicsMode] or GRAPHICS_SETTINGS.High
+
+	if not settings.orbParticles then
+		-- No particles in low graphics mode
+		return nil
+	end
+
+	local key = "OrbCollect_" .. graphicsMode
+	if effectTemplates[key] then
+		return effectTemplates[key]:Clone()
+	end
+
+	local attachment = Instance.new("Attachment")
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Parent = attachment
+
+	emitter.Color = ColorSequence.new(Color3.fromRGB(255, 255, 0), Color3.fromRGB(255, 170, 0))
+	emitter.LightEmission = settings.lightingEnabled and 1 or 0.5
+
+	if graphicsMode == "High" then
+		emitter.Size = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.5),
+			NumberSequenceKeypoint.new(0.5, 1.5),
+			NumberSequenceKeypoint.new(1, 1)
+		})
+		emitter.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0),
+			NumberSequenceKeypoint.new(0.7, 0.5),
+			NumberSequenceKeypoint.new(1, 1)
+		})
+		emitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	else -- Medium
+		emitter.Size = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.3),
+			NumberSequenceKeypoint.new(1, 0.8)
+		})
+		emitter.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.2),
+			NumberSequenceKeypoint.new(1, 1)
+		})
+		-- Simpler texture for medium
+		emitter.Texture = ""
+	end
+
+	emitter.Speed = NumberRange.new(5, 10)
+	emitter.Lifetime = NumberRange.new(0.3, 0.6)
+	emitter.Rate = 0
+	emitter.EmissionDirection = Enum.NormalId.Top
+	emitter.Shape = Enum.ParticleEmitterShape.Sphere
+	emitter.SpreadAngle = Vector2.new(360, 360)
+	emitter.ZOffset = 1
+
+	effectTemplates[key] = attachment
+	return attachment:Clone()
+end
+
+-- Plays the orb collection VFX at a given world position
+function VFXManager.playOrbCollectVFX(position, player)
+	-- SERVER: Always play effects (clients will handle their own graphics modes)
+	if RunService:IsServer() then
+		-- Create a simple effect marker that clients can detect
+		local part = Instance.new("Part")
+		part.Name = "OrbVFXMarker"
+		part.Size = Vector3.new(0.1, 0.1, 0.1)
+		part.Position = position
+		part.Anchored = true
+		part.CanCollide = false
+		part.Transparency = 1
+		part.Parent = workspace
+
+		-- Add a value to indicate this is an orb collection
+		local marker = Instance.new("StringValue")
+		marker.Name = "VFXType"
+		marker.Value = "OrbCollect"
+		marker.Parent = part
+
+		-- Clean up after a short time
+		Debris:AddItem(part, 0.5)
+		return
+	end
+
+	-- CLIENT: Check local graphics mode
+	local graphicsMode = getGraphicsModeForPlayer(player or Players.LocalPlayer)
+	local effect = createOrbEffectTemplate(graphicsMode)
+	if not effect then
+		return -- No effect in low graphics mode
+	end
+
+	effect.Parent = workspace
+	effect.WorldPosition = position
+
+	local emitter = effect:FindFirstChildOfClass("ParticleEmitter")
+	if emitter then
+		local settings = GRAPHICS_SETTINGS[graphicsMode]
+		emitter:Emit(settings.particleCount)
+	end
+
+	-- Clean up the effect
+	task.delay(0.7, function()
+		if effect and effect.Parent then
+			effect:Destroy()
+		end
+	end)
+end
+
+-- CLIENT ONLY: Watch for VFX markers from server
+if RunService:IsClient() then
+	workspace.ChildAdded:Connect(function(child)
+		if child.Name == "OrbVFXMarker" and child:FindFirstChild("VFXType") then
+			if child.VFXType.Value == "OrbCollect" then
+				-- Play the VFX based on local graphics settings
+				VFXManager.playOrbCollectVFX(child.Position, Players.LocalPlayer)
+			end
+		end
+	end)
+end
+
+-- Handle graphics mode changes
+if SetGraphicsModeEvent then
+	if RunService:IsServer() then
+		-- SERVER: Update player's attribute when they change graphics mode
+		SetGraphicsModeEvent.OnServerEvent:Connect(function(player, mode)
+			if GRAPHICS_SETTINGS[mode] then
+				player:SetAttribute("GraphicsMode", mode)
+				print("[Server] Set graphics mode for", player.Name, "to", mode)
+
+				-- Force update the player's snake graphics
+				if _G.PlayerSnakes and _G.PlayerSnakes[player] then
+					local snake = _G.PlayerSnakes[player]
+					if snake.updateGraphicsMode then
+						snake.updateGraphicsMode()
+					end
+				end
+			end
+		end)
+	else
+		-- CLIENT: Send graphics mode changes to server
+		function VFXManager.setGraphicsMode(mode)
+			if GRAPHICS_SETTINGS[mode] then
+				SetGraphicsModeEvent:FireServer(mode)
+			end
+		end
+	end
+end
+
+return VFXManager
