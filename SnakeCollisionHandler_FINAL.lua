@@ -780,6 +780,46 @@ local function queuePlayerDeath(player)
 		pcall(function()
 			disableDeathEffectsRemote:FireClient(player)
 		end)
+		
+		-- AGGRESSIVE: Clean up any effects that might spawn on death
+		task.spawn(function()
+			-- Check multiple times to catch any delayed effects
+			for i = 1, 5 do
+				task.wait(0.1)
+				
+				-- Clean up around the player's position
+				if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+					local rootPos = player.Character.HumanoidRootPart.Position
+					local nearbyParts = workspace:GetPartBoundsInBox(
+						CFrame.new(rootPos),
+						Vector3.new(10, 10, 10)
+					)
+					
+					for _, part in ipairs(nearbyParts) do
+						if part.Parent ~= player.Character then
+							-- Destroy any small grey orbs or effects
+							if part:IsA("Part") and part.Size.Magnitude < 2 then
+								-- Check for grey colors
+								local h, s, v = part.Color:ToHSV()
+								if s < 0.2 and v > 0.3 and v < 0.8 then -- Grey color range
+									part:Destroy()
+								end
+								-- Also check for default Part color (medium stone grey)
+								if part.BrickColor == BrickColor.new("Medium stone grey") then
+									part:Destroy()
+								end
+							end
+							
+							-- Destroy any VFX markers or effect parts
+							if part.Name == "OrbVFXMarker" or part.Name:lower():match("effect") or 
+							   part.Name:lower():match("vfx") or part.Name:lower():match("particle") then
+								part:Destroy()
+							end
+						end
+					end
+				end
+			end
+		end)
 
 		if _G.PlayerSnakes and _G.PlayerSnakes[player] then
 			local snake = _G.PlayerSnakes[player]
