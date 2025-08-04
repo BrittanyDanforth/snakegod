@@ -1,0 +1,1724 @@
+--[[
+BEAUTIFUL SLITHER.IO MENU V5.0 - ULTIMATE EDITION
+FIXED: Now waits for revive UI to close before showing, preventing conflicts.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local ContentProvider = game:GetService("ContentProvider")
+
+-- Configuration
+local CONFIG = {
+	MENU_VERSION = "5.0",
+	DEFAULT_THEME = "green", -- green, blue, purple, red, orange
+	THEMES = {
+		green = {
+			primary = Color3.fromRGB(76, 217, 100),
+			secondary = Color3.fromRGB(46, 187, 70),
+			accent = Color3.fromRGB(56, 197, 80),
+			text = Color3.fromRGB(255, 255, 255),
+			background = {
+				Color3.fromRGB(20, 22, 35),
+				Color3.fromRGB(15, 17, 26),
+				Color3.fromRGB(12, 14, 22),
+				Color3.fromRGB(8, 10, 18)
+			}
+		},
+		blue = {
+			primary = Color3.fromRGB(52, 152, 219),
+			secondary = Color3.fromRGB(41, 128, 185),
+			accent = Color3.fromRGB(46, 140, 200),
+			text = Color3.fromRGB(255, 255, 255),
+			background = {
+				Color3.fromRGB(20, 22, 35),
+				Color3.fromRGB(15, 17, 26),
+				Color3.fromRGB(12, 14, 22),
+				Color3.fromRGB(8, 10, 18)
+			}
+		},
+		purple = {
+			primary = Color3.fromRGB(155, 89, 182),
+			secondary = Color3.fromRGB(142, 68, 173),
+			accent = Color3.fromRGB(149, 78, 178),
+			text = Color3.fromRGB(255, 255, 255),
+			background = {
+				Color3.fromRGB(20, 22, 35),
+				Color3.fromRGB(15, 17, 26),
+				Color3.fromRGB(12, 14, 22),
+				Color3.fromRGB(8, 10, 18)
+			}
+		},
+		red = {
+			primary = Color3.fromRGB(231, 76, 60),
+			secondary = Color3.fromRGB(192, 57, 43),
+			accent = Color3.fromRGB(211, 66, 51),
+			text = Color3.fromRGB(255, 255, 255),
+			background = {
+				Color3.fromRGB(20, 22, 35),
+				Color3.fromRGB(15, 17, 26),
+				Color3.fromRGB(12, 14, 22),
+				Color3.fromRGB(8, 10, 18)
+			}
+		},
+		orange = {
+			primary = Color3.fromRGB(230, 126, 34),
+			secondary = Color3.fromRGB(211, 84, 0),
+			accent = Color3.fromRGB(220, 105, 17),
+			text = Color3.fromRGB(255, 255, 255),
+			background = {
+				Color3.fromRGB(20, 22, 35),
+				Color3.fromRGB(15, 17, 26),
+				Color3.fromRGB(12, 14, 22),
+				Color3.fromRGB(8, 10, 18)
+			}
+		}
+	},
+	PARTICLE_COUNT = 40,
+	PARTICLE_TYPES = {"circle", "square", "triangle", "star"},
+	MAX_FPS = 60,
+	LEADERBOARD_REFRESH_RATE = 3,
+	DAILY_REWARD_KEY = "SlitherIO_DailyReward",
+	SETTINGS_KEY = "SlitherIO_Settings",
+	STATS_KEY = "SlitherIO_Stats"
+}
+
+-- Track active death handlers and menu state
+local activeDeathHandler = nil
+local currentMenu = nil
+local isProcessingDeath = false
+local currentTheme = CONFIG.DEFAULT_THEME
+local playerStats = {
+	highScore = 0,
+	totalKills = 0,
+	gamesPlayed = 0,
+	longestSnake = 0,
+	timeAlive = 0
+}
+local dailyReward = {
+	lastClaimed = 0,
+	streak = 0,
+	available = false
+}
+local settings = {
+	graphicsMode = "High",
+	soundEnabled = true,
+	musicEnabled = true,
+	particlesEnabled = true,
+	showFPS = false,
+	theme = CONFIG.DEFAULT_THEME,
+	controlMode = "Mouse"
+}
+
+-- Preload assets for smoother experience
+local function preloadAssets()
+	local assets = {
+		"rbxassetid://7072718362", -- Glow
+		"rbxassetid://7072719338", -- Particle
+		"rbxassetid://7072720023", -- Star
+		"rbxassetid://7072725648"  -- Circle
+	}
+
+	for _, asset in ipairs(assets) do
+		ContentProvider:PreloadAsync({asset})
+	end
+end
+
+-- Hide the default Roblox leaderboard
+StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, false)
+
+-- Helper to clean up any lingering attributes
+local function cleanupReviveAttributes()
+	LocalPlayer:SetAttribute("ReviveDeclined", nil)
+	LocalPlayer:SetAttribute("ReviveTimerExpired", nil)
+	LocalPlayer:SetAttribute("JustRevived", nil)
+	LocalPlayer:SetAttribute("RevivingNow", nil)
+	LocalPlayer:SetAttribute("RevivePromptActive", nil)
+end
+
+-- Helper to set graphics mode (attribute + remote event)
+local function setGraphicsMode(mode)
+	LocalPlayer:SetAttribute("GraphicsMode", mode)
+	settings.graphicsMode = mode
+	saveSettings()
+
+	local event = ReplicatedStorage:FindFirstChild("SetGraphicsMode")
+	if event then
+		event:FireServer(mode)
+	end
+end
+
+-- Save settings to player data
+local function saveSettings()
+	pcall(function()
+		local encoded = game:GetService("HttpService"):JSONEncode(settings)
+		if writefile then
+			writefile(CONFIG.SETTINGS_KEY .. ".json", encoded)
+		end
+	end)
+end
+
+-- Load settings from player data
+local function loadSettings()
+	pcall(function()
+		if readfile and isfile and isfile(CONFIG.SETTINGS_KEY .. ".json") then
+			local content = readfile(CONFIG.SETTINGS_KEY .. ".json")
+			local decoded = game:GetService("HttpService"):JSONDecode(content)
+
+			-- Update settings with loaded values
+			for key, value in pairs(decoded) do
+				settings[key] = value
+			end
+
+			-- Apply theme
+			currentTheme = settings.theme or CONFIG.DEFAULT_THEME
+		end
+	end)
+end
+
+-- Save player stats
+local function savePlayerStats()
+	pcall(function()
+		local encoded = game:GetService("HttpService"):JSONEncode(playerStats)
+		if writefile then
+			writefile(CONFIG.STATS_KEY .. ".json", encoded)
+		end
+	end)
+end
+
+-- Load player stats
+local function loadPlayerStats()
+	pcall(function()
+		if readfile and isfile and isfile(CONFIG.STATS_KEY .. ".json") then
+			local content = readfile(CONFIG.STATS_KEY .. ".json")
+			local decoded = game:GetService("HttpService"):JSONDecode(content)
+
+			-- Update stats with loaded values
+			for key, value in pairs(decoded) do
+				playerStats[key] = value
+			end
+		end
+	end)
+end
+
+-- Check daily reward
+local function checkDailyReward()
+	local currentDate = os.time()
+	local dayInSeconds = 86400 -- 24 hours
+
+	pcall(function()
+		if readfile and isfile and isfile(CONFIG.DAILY_REWARD_KEY .. ".json") then
+			local content = readfile(CONFIG.DAILY_REWARD_KEY .. ".json")
+			local decoded = game:GetService("HttpService"):JSONDecode(content)
+
+			dailyReward.lastClaimed = decoded.lastClaimed or 0
+			dailyReward.streak = decoded.streak or 0
+		end
+	end)
+
+	-- Check if a new day has passed since last claim
+	if currentDate - dailyReward.lastClaimed > dayInSeconds then
+		dailyReward.available = true
+
+		-- Check if streak should continue or reset (48 hours)
+		if currentDate - dailyReward.lastClaimed > dayInSeconds * 2 then
+			dailyReward.streak = 0
+		end
+	else
+		dailyReward.available = false
+	end
+end
+
+-- Claim daily reward
+local function claimDailyReward()
+	if not dailyReward.available then return end
+
+	dailyReward.streak = dailyReward.streak + 1
+	dailyReward.lastClaimed = os.time()
+	dailyReward.available = false
+
+	-- Save to file
+	pcall(function()
+		local encoded = game:GetService("HttpService"):JSONEncode(dailyReward)
+		if writefile then
+			writefile(CONFIG.DAILY_REWARD_KEY .. ".json", encoded)
+		end
+	end)
+
+	-- Return reward based on streak
+	local rewards = {
+		{type = "coins", amount = 100},
+		{type = "coins", amount = 200},
+		{type = "coins", amount = 300},
+		{type = "coins", amount = 400},
+		{type = "coins", amount = 500},
+		{type = "coins", amount = 750},
+		{type = "skin", id = "premium_" .. math.random(1, 3)}
+	}
+
+	local day = math.min(dailyReward.streak, #rewards)
+	return rewards[day]
+end
+
+-- Enhanced respawn system with username
+local function requestRespawn()
+	-- Ensure RemoteEvent exists
+	local respawnEvent = ReplicatedStorage:FindFirstChild("RespawnSnake")
+	if not respawnEvent then
+		-- Create it if it doesn't exist (for studio testing)
+		respawnEvent = Instance.new("RemoteEvent")
+		respawnEvent.Name = "RespawnSnake"
+		respawnEvent.Parent = ReplicatedStorage
+		print("Created RespawnSnake RemoteEvent")
+	end
+
+	-- Update stats
+	playerStats.gamesPlayed = playerStats.gamesPlayed + 1
+	savePlayerStats()
+
+	-- Get username or use default
+	local username = LocalPlayer:GetAttribute("SlitherUsername") or LocalPlayer.Name
+
+	-- Send username with respawn
+	respawnEvent:FireServer(username)
+end
+
+-- Create a particle effect
+local function createParticle(parent, particleType, color, size, position)
+	local particle = Instance.new("Frame")
+	particle.Size = UDim2.new(0, size, 0, size)
+	particle.Position = position or UDim2.new(math.random(), 0, math.random(), 0)
+	particle.BackgroundColor3 = color
+	particle.BackgroundTransparency = 0.6
+	particle.BorderSizePixel = 0
+	particle.Parent = parent
+
+	if particleType == "circle" then
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(1, 0)
+		corner.Parent = particle
+	elseif particleType == "square" then
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, math.floor(size * 0.2))
+		corner.Parent = particle
+	elseif particleType == "triangle" then
+		-- Simulate triangle with an image
+		particle.BackgroundTransparency = 1
+		local image = Instance.new("ImageLabel")
+		image.Size = UDim2.new(1, 0, 1, 0)
+		image.Position = UDim2.new(0, 0, 0, 0)
+		image.BackgroundTransparency = 1
+		image.Image = "rbxassetid://7072720023" -- Triangle image
+		image.ImageColor3 = color
+		image.ImageTransparency = 0.6
+		image.Parent = particle
+	elseif particleType == "star" then
+		-- Simulate star with an image
+		particle.BackgroundTransparency = 1
+		local image = Instance.new("ImageLabel")
+		image.Size = UDim2.new(1, 0, 1, 0)
+		image.Position = UDim2.new(0, 0, 0, 0)
+		image.BackgroundTransparency = 1
+		image.Image = "rbxassetid://7072719338" -- Star image
+		image.ImageColor3 = color
+		image.ImageTransparency = 0.6
+		image.Parent = particle
+	end
+
+	-- Add glow effect
+	local glow = Instance.new("ImageLabel")
+	glow.Size = UDim2.new(3, 0, 3, 0)
+	glow.Position = UDim2.new(-1, 0, -1, 0)
+	glow.BackgroundTransparency = 1
+	glow.Image = "rbxassetid://7072718362" -- Glow image
+	glow.ImageColor3 = color
+	glow.ImageTransparency = 0.8
+	glow.ZIndex = particle.ZIndex - 1
+	glow.Parent = particle
+
+	return particle
+end
+
+-- Create a SOLID panel (NO TRANSPARENCY)
+local function createGlassPanel(parent, size, position, cornerRadius, transparency, zIndex)
+	local panel = Instance.new("Frame")
+	panel.Size = size
+	panel.Position = position
+	panel.BackgroundColor3 = Color3.fromRGB(25, 30, 45) -- Solid dark background
+	panel.BackgroundTransparency = 0 -- COMPLETELY SOLID
+	panel.BorderSizePixel = 0
+
+	if zIndex then
+		panel.ZIndex = zIndex
+	end
+
+	panel.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = cornerRadius or UDim.new(0, 16)
+	corner.Parent = panel
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(100, 100, 100)
+	stroke.Transparency = 0.5
+	stroke.Thickness = 1
+	stroke.Parent = panel
+
+	return panel
+end
+
+-- Create a button with glass effect
+local function createGlassButton(parent, size, position, text, cornerRadius, textColor, backgroundColor, transparency, textSize)
+	local button = Instance.new("TextButton")
+	button.Size = size
+	button.Position = position
+	button.BackgroundColor3 = backgroundColor or Color3.fromRGB(255, 255, 255)
+	button.BackgroundTransparency = transparency or 0.92
+	button.Text = text
+	button.Font = Enum.Font.SourceSans
+	button.TextScaled = textSize == nil
+
+	if textSize then
+		button.TextSize = textSize
+	end
+
+	button.TextColor3 = textColor or Color3.fromRGB(220, 220, 220)
+	button.AutoButtonColor = false
+	button.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = cornerRadius or UDim.new(0, 12)
+	corner.Parent = button
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 255, 255)
+	stroke.Transparency = 0.85
+	stroke.Thickness = 1
+	stroke.Parent = button
+
+	-- Add hover and click effects
+	button.MouseEnter:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+			BackgroundTransparency = transparency and transparency - 0.07 or 0.85,
+			TextColor3 = Color3.fromRGB(255, 255, 255)
+		}):Play()
+
+		TweenService:Create(stroke, TweenInfo.new(0.15), {
+			Transparency = 0.75
+		}):Play()
+	end)
+
+	button.MouseLeave:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+			BackgroundTransparency = transparency or 0.92,
+			TextColor3 = textColor or Color3.fromRGB(220, 220, 220)
+		}):Play()
+
+		TweenService:Create(stroke, TweenInfo.new(0.15), {
+			Transparency = 0.85
+		}):Play()
+	end)
+
+	button.MouseButton1Down:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.05), {
+			Size = UDim2.new(button.Size.X.Scale * 0.95, 0, button.Size.Y.Scale * 0.95, 0)
+		}):Play()
+	end)
+
+	button.MouseButton1Up:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.05), {
+			Size = size
+		}):Play()
+	end)
+
+	return button
+end
+
+-- Create a premium button with gradient and shadow
+local function createPremiumButton(parent, size, position, text, color, shadowColor)
+	local button = Instance.new("TextButton")
+	button.Size = size
+	button.Position = position
+	button.BackgroundColor3 = color
+	button.Text = text
+	button.Font = Enum.Font.SourceSansBold
+	button.TextScaled = true
+	button.TextColor3 = Color3.fromRGB(255, 255, 255)
+	button.AutoButtonColor = false
+	button.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 12)
+	corner.Parent = button
+
+	-- Enhanced gradient with shine effect
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(240, 240, 240)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(220, 220, 220))
+	}
+	gradient.Rotation = 90
+	gradient.Transparency = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0.8),
+		NumberSequenceKeypoint.new(0.5, 0.9),
+		NumberSequenceKeypoint.new(1, 0.85)
+	}
+	gradient.Parent = button
+
+	-- Multi-layer shadow for depth
+	local shadow = Instance.new("Frame")
+	shadow.Size = UDim2.new(1, 8, 1, 8)
+	shadow.Position = UDim2.new(0, -4, 0, 4)
+	shadow.BackgroundColor3 = shadowColor or Color3.fromRGB(0, 0, 0)
+	shadow.BackgroundTransparency = 0.6
+	shadow.ZIndex = button.ZIndex - 1
+	shadow.Parent = button
+
+	local shadowCorner = Instance.new("UICorner")
+	shadowCorner.CornerRadius = UDim.new(0, 16)
+	shadowCorner.Parent = shadow
+
+	-- Add hover and click effects
+	button.MouseEnter:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+			BackgroundColor3 = Color3.new(
+				math.min(color.R * 1.1, 1),
+				math.min(color.G * 1.1, 1),
+				math.min(color.B * 1.1, 1)
+			),
+			Size = UDim2.new(size.X.Scale * 1.05, 0, size.Y.Scale * 1.05, 0)
+		}):Play()
+
+		TweenService:Create(shadow, TweenInfo.new(0.15), {
+			BackgroundTransparency = 0.5,
+			Size = UDim2.new(1, 12, 1, 12),
+			Position = UDim2.new(0, -6, 0, 6)
+		}):Play()
+	end)
+
+	button.MouseLeave:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+			BackgroundColor3 = color,
+			Size = size
+		}):Play()
+
+		TweenService:Create(shadow, TweenInfo.new(0.15), {
+			BackgroundTransparency = 0.6,
+			Size = UDim2.new(1, 8, 1, 8),
+			Position = UDim2.new(0, -4, 0, 4)
+		}):Play()
+	end)
+
+	button.MouseButton1Down:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.05), {
+			Size = UDim2.new(size.X.Scale * 0.95, 0, size.Y.Scale * 0.95, 0)
+		}):Play()
+
+		TweenService:Create(shadow, TweenInfo.new(0.05), {
+			Size = UDim2.new(0.95, 8, 0.95, 8)
+		}):Play()
+	end)
+
+	button.MouseButton1Up:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.05), {
+			Size = size
+		}):Play()
+
+		TweenService:Create(shadow, TweenInfo.new(0.05), {
+			Size = UDim2.new(1, 8, 1, 8)
+		}):Play()
+	end)
+
+	return button, shadow
+end
+
+-- Function to create the menu UI
+local function createMenu(onPlay)
+	-- Load settings and stats
+	loadSettings()
+	loadPlayerStats()
+	checkDailyReward()
+
+	-- Get theme colors
+	local theme = CONFIG.THEMES[currentTheme]
+
+	-- Destroy any existing menu first
+	if currentMenu then
+		currentMenu:Destroy()
+		currentMenu = nil
+	end
+
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "SlitherIOMenu"
+	screenGui.ResetOnSpawn = false
+	screenGui.IgnoreGuiInset = true
+	screenGui.DisplayOrder = 10
+
+	-- Dark background with gradient
+	local bgFrame = Instance.new("Frame")
+	bgFrame.Size = UDim2.new(1, 0, 1, 0)
+	bgFrame.Position = UDim2.new(0, 0, 0, 0)
+	bgFrame.BackgroundColor3 = theme.background[1]
+	bgFrame.BackgroundTransparency = 0
+	bgFrame.BorderSizePixel = 0
+	bgFrame.Parent = screenGui
+
+	-- Enhanced gradient with more depth
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, theme.background[1]),
+		ColorSequenceKeypoint.new(0.3, theme.background[2]),
+		ColorSequenceKeypoint.new(0.7, theme.background[3]),
+		ColorSequenceKeypoint.new(1, theme.background[4])
+	}
+	gradient.Rotation = 90
+	gradient.Parent = bgFrame
+
+	-- Create enhanced animated particles with glow
+	if settings.particlesEnabled then
+		for i = 1, CONFIG.PARTICLE_COUNT do
+			local particleType = CONFIG.PARTICLE_TYPES[math.random(1, #CONFIG.PARTICLE_TYPES)]
+			local size = math.random(4, 12)
+			local color = i % 3 == 0 and theme.primary or
+				(i % 3 == 1 and theme.secondary or
+					Color3.fromRGB(255, 255, 255))
+
+			local particle = createParticle(bgFrame, particleType, color, size)
+
+			-- Enhanced floating animation
+			spawn(function()
+				while screenGui.Parent do
+					local targetX = math.random()
+					local targetY = math.random()
+					local duration = math.random(20, 40)
+
+					TweenService:Create(particle,
+						TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+						{Position = UDim2.new(targetX, 0, targetY, 0)}
+					):Play()
+
+					-- Pulse animation
+					TweenService:Create(particle,
+						TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+						{BackgroundTransparency = 0.8}
+					):Play()
+
+					-- Rotation animation for certain particles
+					if particleType == "square" or particleType == "triangle" or particleType == "star" then
+						TweenService:Create(particle,
+							TweenInfo.new(math.random(10, 20), Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1),
+							{Rotation = 360}
+						):Play()
+					end
+
+					task.wait(duration)
+				end
+			end)
+		end
+	end
+
+	-- Main container (NO BORDER)
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(0.5, 0, 0.6, 0)
+	frame.Position = UDim2.new(0.25, 0, 0.2, 0)
+	frame.BackgroundTransparency = 1 -- Completely transparent container
+	frame.BorderSizePixel = 0
+	frame.Parent = bgFrame
+
+	-- Enhanced logo with better glow
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(0.7, 0, 0.15, 0)
+	title.Position = UDim2.new(0.15, 0, 0.1, 0)
+	title.BackgroundTransparency = 1
+	title.Text = "sliv.io"
+	title.Font = Enum.Font.SourceSansBold
+	title.TextScaled = true
+	title.TextColor3 = theme.primary
+	title.TextStrokeTransparency = 0.5
+	title.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	title.Parent = frame
+
+	-- Version label
+	local versionLabel = Instance.new("TextLabel")
+	versionLabel.Size = UDim2.new(0.2, 0, 0.05, 0)
+	versionLabel.Position = UDim2.new(0.4, 0, 0.24, 0)
+	versionLabel.BackgroundTransparency = 1
+	versionLabel.Text = "v" .. CONFIG.MENU_VERSION
+	versionLabel.Font = Enum.Font.SourceSans
+	versionLabel.TextScaled = true
+	versionLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+	versionLabel.Parent = frame
+
+	-- Title glow animation
+	spawn(function()
+		while title.Parent do
+			TweenService:Create(title,
+				TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+				{TextStrokeTransparency = 0.3}
+			):Play()
+			task.wait(2)
+			TweenService:Create(title,
+				TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+				{TextStrokeTransparency = 0.5}
+			):Play()
+			task.wait(2)
+		end
+	end)
+
+	-- USERNAME INPUT SECTION (NEW)
+	local usernameContainer = Instance.new("Frame")
+	usernameContainer.Size = UDim2.new(0.5, 0, 0.08, 0)
+	usernameContainer.Position = UDim2.new(0.25, 0, 0.32, 0)
+	usernameContainer.BackgroundColor3 = Color3.fromRGB(30, 35, 50)
+	usernameContainer.BackgroundTransparency = 0.3
+	usernameContainer.Parent = frame
+
+	local usernameCorner = Instance.new("UICorner")
+	usernameCorner.CornerRadius = UDim.new(0, 12)
+	usernameCorner.Parent = usernameContainer
+
+	local usernameStroke = Instance.new("UIStroke")
+	usernameStroke.Color = theme.primary
+	usernameStroke.Transparency = 0.5
+	usernameStroke.Thickness = 2
+	usernameStroke.Parent = usernameContainer
+
+	-- Snake icon
+	local snakeIcon = Instance.new("TextLabel")
+	snakeIcon.Size = UDim2.new(0.12, 0, 0.8, 0)
+	snakeIcon.Position = UDim2.new(0.02, 0, 0.1, 0)
+	snakeIcon.BackgroundTransparency = 1
+	snakeIcon.Text = "🐍"
+	snakeIcon.Font = Enum.Font.SourceSans
+	snakeIcon.TextScaled = true
+	snakeIcon.Parent = usernameContainer
+
+	-- Username input
+	local usernameInput = Instance.new("TextBox")
+	usernameInput.Size = UDim2.new(0.7, 0, 0.8, 0)
+	usernameInput.Position = UDim2.new(0.14, 0, 0.1, 0)
+	usernameInput.BackgroundTransparency = 1
+	usernameInput.Text = LocalPlayer.Name
+	usernameInput.PlaceholderText = "Nickname"
+	usernameInput.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
+	usernameInput.Font = Enum.Font.SourceSansSemibold
+	usernameInput.TextScaled = true
+	usernameInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+	usernameInput.ClearTextOnFocus = false
+	usernameInput.Parent = usernameContainer
+
+	-- Character counter
+	local charCounter = Instance.new("TextLabel")
+	charCounter.Size = UDim2.new(0.12, 0, 0.5, 0)
+	charCounter.Position = UDim2.new(0.85, 0, 0.25, 0)
+	charCounter.BackgroundTransparency = 1
+	charCounter.Text = #usernameInput.Text .. "/16"
+	charCounter.Font = Enum.Font.SourceSans
+	charCounter.TextScaled = true
+	charCounter.TextColor3 = Color3.fromRGB(150, 150, 150)
+	charCounter.Parent = usernameContainer
+
+	-- Username validation
+	usernameInput:GetPropertyChangedSignal("Text"):Connect(function()
+		local text = usernameInput.Text
+		if #text > 16 then
+			usernameInput.Text = text:sub(1, 16)
+		end
+		charCounter.Text = #usernameInput.Text .. "/16"
+	end)
+
+	usernameInput.FocusLost:Connect(function()
+		if #usernameInput.Text == 0 then
+			usernameInput.Text = LocalPlayer.Name
+		end
+
+		-- Save username
+		LocalPlayer:SetAttribute("SlitherUsername", usernameInput.Text)
+
+		-- Visual feedback
+		TweenService:Create(usernameStroke, TweenInfo.new(0.3), {
+			Color = Color3.fromRGB(0, 255, 127),
+			Transparency = 0.2
+		}):Play()
+
+		task.wait(0.3)
+
+		TweenService:Create(usernameStroke, TweenInfo.new(0.3), {
+			Color = theme.primary,
+			Transparency = 0.5
+		}):Play()
+	end)
+
+	-- Premium play button with glass effect
+	local playButton, playShadow = createPremiumButton(
+		frame,
+		UDim2.new(0.4, 0, 0.12, 0),
+		UDim2.new(0.3, 0, 0.45, 0),
+		"Play",
+		theme.primary
+	)
+
+	-- Enhanced icon buttons (repositioned without daily reward)
+	local settingsButton = createGlassButton(bgFrame, UDim2.new(0.08, 0, 0.08, 0), UDim2.new(0.9, 0, 0.05, 0), "⚙", UDim.new(0, 12))
+	local shareButton = createGlassButton(bgFrame, UDim2.new(0.08, 0, 0.08, 0), UDim2.new(0.81, 0, 0.05, 0), "🔗", UDim.new(0, 12))
+	local shopButton = createGlassButton(bgFrame, UDim2.new(0.08, 0, 0.08, 0), UDim2.new(0.72, 0, 0.05, 0), "🛒", UDim.new(0, 12))
+	local statsButton = createGlassButton(bgFrame, UDim2.new(0.08, 0, 0.08, 0), UDim2.new(0.63, 0, 0.05, 0), "📊", UDim.new(0, 12))
+
+	-- REMOVED DAILY REWARD BUTTON - Will be in separate UI later
+
+	-- Premium graphics button
+	local graphicsButton = createGlassButton(
+		bgFrame,
+		UDim2.new(0.25, 0, 0.06, 0),
+		UDim2.new(0.375, 0, 0.85, 0),
+		"Graphics: " .. settings.graphicsMode
+	)
+
+	-- Theme selector button
+	local themeButton = createGlassButton(
+		bgFrame,
+		UDim2.new(0.25, 0, 0.06, 0),
+		UDim2.new(0.375, 0, 0.92, 0),
+		"Theme: " .. currentTheme:sub(1, 1):upper() .. currentTheme:sub(2)
+	)
+
+	-- Premium leaderboard with glass effect
+	local leaderboard = createGlassPanel(
+		bgFrame,
+		UDim2.new(0.15, 0, 0.3, 0),
+		UDim2.new(0.82, 0, 0.35, 0)
+	)
+
+	local leaderTitle = Instance.new("TextLabel")
+	leaderTitle.Size = UDim2.new(0.9, 0, 0.15, 0)
+	leaderTitle.Position = UDim2.new(0.05, 0, 0.05, 0)
+	leaderTitle.BackgroundTransparency = 1
+	leaderTitle.Text = "Leaderboard"
+	leaderTitle.Font = Enum.Font.SourceSansBold
+	leaderTitle.TextScaled = true
+	leaderTitle.TextColor3 = theme.primary
+	leaderTitle.Parent = leaderboard
+
+	-- Add some fake leaderboard entries
+	local leaderEntries = {
+		{name = "SlitherMaster", score = 15482},
+		{name = "SnakeGod", score = 12755},
+		{name = "VenomBite", score = 9843},
+		{name = "SlitherQueen", score = 8721},
+		{name = "ToxicCoil", score = 6532}
+	}
+
+	-- Add player's high score if available
+	if playerStats.highScore > 0 then
+		table.insert(leaderEntries, {name = LocalPlayer.Name, score = playerStats.highScore, isPlayer = true})
+		table.sort(leaderEntries, function(a, b) return a.score > b.score end)
+	end
+
+	-- Display leaderboard entries
+	for i, entry in ipairs(leaderEntries) do
+		if i > 5 then break end
+
+		-- Alternate row colors
+		if i % 2 == 0 then
+			local rowBg = Instance.new("Frame")
+			rowBg.Size = UDim2.new(0.9, 0, 0.12, 0)
+			rowBg.Position = UDim2.new(0.05, 0, 0.2 + (i-1)*0.15, 0)
+			rowBg.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+			rowBg.BackgroundTransparency = 0.7
+			rowBg.BorderSizePixel = 0
+			rowBg.Parent = leaderboard
+
+			local rowCorner = Instance.new("UICorner")
+			rowCorner.CornerRadius = UDim.new(0, 4)
+			rowCorner.Parent = rowBg
+		end
+
+		-- Rank
+		local rankLabel = Instance.new("TextLabel")
+		rankLabel.Size = UDim2.new(0.2, 0, 0.12, 0)
+		rankLabel.Position = UDim2.new(0.05, 0, 0.2 + (i-1)*0.15, 0)
+		rankLabel.BackgroundTransparency = 1
+		rankLabel.Text = "#" .. i
+		rankLabel.Font = Enum.Font.SourceSans
+		rankLabel.TextScaled = true
+		rankLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+		rankLabel.Parent = leaderboard
+
+		-- Name
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.Size = UDim2.new(0.5, 0, 0.12, 0)
+		nameLabel.Position = UDim2.new(0.25, 0, 0.2 + (i-1)*0.15, 0)
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Text = entry.name
+		nameLabel.Font = Enum.Font.SourceSans
+		nameLabel.TextScaled = true
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.TextColor3 = entry.isPlayer and theme.primary or Color3.fromRGB(220, 220, 220)
+		nameLabel.Parent = leaderboard
+
+		-- Score
+		local scoreLabel = Instance.new("TextLabel")
+		scoreLabel.Size = UDim2.new(0.2, 0, 0.12, 0)
+		scoreLabel.Position = UDim2.new(0.75, 0, 0.2 + (i-1)*0.15, 0)
+		scoreLabel.BackgroundTransparency = 1
+		scoreLabel.Text = tostring(entry.score)
+		scoreLabel.Font = Enum.Font.SourceSans
+		scoreLabel.TextScaled = true
+		scoreLabel.TextColor3 = entry.isPlayer and theme.primary or Color3.fromRGB(220, 220, 220)
+		scoreLabel.Parent = leaderboard
+	end
+
+	-- Server info with better styling
+	local serverInfo = Instance.new("TextLabel")
+	serverInfo.Size = UDim2.new(0.2, 0, 0.04, 0)
+	serverInfo.Position = UDim2.new(0.07, 0, 0.92, 2)
+	serverInfo.BackgroundTransparency = 1
+	serverInfo.Text = "Server: US-West | Players: " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
+	serverInfo.Font = Enum.Font.SourceSans
+	serverInfo.TextScaled = true
+	serverInfo.TextColor3 = Color3.fromRGB(160, 160, 160)
+	serverInfo.TextXAlignment = Enum.TextXAlignment.Left
+	serverInfo.Parent = bgFrame
+
+	-- FPS Counter
+	local fpsCounter = nil
+	if settings.showFPS then
+		fpsCounter = Instance.new("TextLabel")
+		fpsCounter.Size = UDim2.new(0.1, 0, 0.04, 0)
+		fpsCounter.Position = UDim2.new(0.07, 0, 0.05, 0)
+		fpsCounter.BackgroundTransparency = 1
+		fpsCounter.Text = "FPS: --"
+		fpsCounter.Font = Enum.Font.SourceSans
+		fpsCounter.TextScaled = true
+		fpsCounter.TextColor3 = Color3.fromRGB(160, 160, 160)
+		fpsCounter.TextXAlignment = Enum.TextXAlignment.Left
+		fpsCounter.Parent = bgFrame
+
+		-- FPS update loop
+		local lastUpdate = tick()
+		local frameCount = 0
+
+		RunService.RenderStepped:Connect(function()
+			if not fpsCounter or not fpsCounter.Parent then return end
+
+			frameCount = frameCount + 1
+			local now = tick()
+			local elapsed = now - lastUpdate
+
+			if elapsed >= 0.5 then
+				local fps = math.floor(frameCount / elapsed)
+				fpsCounter.Text = "FPS: " .. fps
+
+				-- Color code based on performance
+				if fps >= 50 then
+					fpsCounter.TextColor3 = Color3.fromRGB(76, 217, 100)
+				elseif fps >= 30 then
+					fpsCounter.TextColor3 = Color3.fromRGB(255, 200, 0)
+				else
+					fpsCounter.TextColor3 = Color3.fromRGB(255, 80, 80)
+				end
+
+				lastUpdate = now
+				frameCount = 0
+			end
+		end)
+	end
+
+	-- Helper to close all panels
+	local function closeAllPanels()
+		local panels = {"SettingsPanel", "SharePanel", "StatsPanel", "DailyRewardPanel"}
+		for _, panelName in ipairs(panels) do
+			local panel = screenGui:FindFirstChild(panelName)
+			if panel then
+				panel:Destroy()
+			end
+		end
+		-- Remove dark overlay if exists
+		local overlay = screenGui:FindFirstChild("DarkOverlay")
+		if overlay then
+			overlay:Destroy()
+		end
+	end
+
+	-- Create dark overlay for panels
+	local function createDarkOverlay()
+		local overlay = Instance.new("Frame")
+		overlay.Name = "DarkOverlay"
+		overlay.Size = UDim2.new(1, 0, 1, 0)
+		overlay.Position = UDim2.new(0, 0, 0, 0)
+		overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		overlay.BackgroundTransparency = 0.5
+		overlay.ZIndex = 15
+		overlay.Parent = screenGui
+
+		-- Click to close
+		local closeButton = Instance.new("TextButton")
+		closeButton.Size = UDim2.new(1, 0, 1, 0)
+		closeButton.BackgroundTransparency = 1
+		closeButton.Text = ""
+		closeButton.Parent = overlay
+
+		closeButton.MouseButton1Click:Connect(function()
+			closeAllPanels()
+		end)
+
+		return overlay
+	end
+
+	-- PREMIUM SETTINGS PANEL
+	local function openSettingsPanel()
+		closeAllPanels() -- Close other panels first
+
+		createDarkOverlay() -- Add dark background
+
+		-- Create SOLID panel
+		local panel = Instance.new("Frame")
+		panel.Name = "SettingsPanel"
+		panel.Size = UDim2.new(0.35, 0, 0.45, 0)
+		panel.Position = UDim2.new(0.325, 0, 0.275, 0)
+		panel.BackgroundColor3 = Color3.fromRGB(20, 25, 35) -- SOLID DARK BACKGROUND
+		panel.BackgroundTransparency = 0 -- COMPLETELY SOLID
+		panel.ZIndex = 20
+		panel.Parent = screenGui
+
+		local panelCorner = Instance.new("UICorner")
+		panelCorner.CornerRadius = UDim.new(0, 20)
+		panelCorner.Parent = panel
+
+		local panelStroke = Instance.new("UIStroke")
+		panelStroke.Color = theme.primary
+		panelStroke.Transparency = 0.5
+		panelStroke.Thickness = 2
+		panelStroke.Parent = panel
+
+		local title = Instance.new("TextLabel")
+		title.Size = UDim2.new(1, 0, 0.15, 0)
+		title.Position = UDim2.new(0, 0, 0, 0)
+		title.BackgroundTransparency = 1
+		title.Text = "Settings"
+		title.Font = Enum.Font.SourceSansBold
+		title.TextScaled = true
+		title.TextColor3 = theme.primary
+		title.ZIndex = 21
+		title.Parent = panel
+
+		-- Sound toggle
+		local soundToggle = createGlassButton(
+			panel,
+			UDim2.new(0.8, 0, 0.12, 0),
+			UDim2.new(0.1, 0, 0.2, 0),
+			"Sound: " .. (settings.soundEnabled and "On" or "Off"),
+			UDim.new(0, 8),
+			Color3.fromRGB(220, 220, 220),
+			nil,
+			0.95,
+			nil
+		)
+		soundToggle.ZIndex = 21
+
+		soundToggle.MouseButton1Click:Connect(function()
+			settings.soundEnabled = not settings.soundEnabled
+			soundToggle.Text = "Sound: " .. (settings.soundEnabled and "On" or "Off")
+			saveSettings()
+		end)
+
+		-- Music toggle
+		local musicToggle = createGlassButton(
+			panel,
+			UDim2.new(0.8, 0, 0.12, 0),
+			UDim2.new(0.1, 0, 0.35, 0),
+			"Music: " .. (settings.musicEnabled and "On" or "Off"),
+			UDim.new(0, 8),
+			Color3.fromRGB(220, 220, 220),
+			nil,
+			0.95,
+			nil
+		)
+		musicToggle.ZIndex = 21
+
+		musicToggle.MouseButton1Click:Connect(function()
+			settings.musicEnabled = not settings.musicEnabled
+			musicToggle.Text = "Music: " .. (settings.musicEnabled and "On" or "Off")
+			saveSettings()
+		end)
+
+		-- Particles toggle
+		local particlesToggle = createGlassButton(
+			panel,
+			UDim2.new(0.8, 0, 0.12, 0),
+			UDim2.new(0.1, 0, 0.5, 0),
+			"Particles: " .. (settings.particlesEnabled and "On" or "Off"),
+			UDim.new(0, 8),
+			Color3.fromRGB(220, 220, 220),
+			nil,
+			0.95,
+			nil
+		)
+		particlesToggle.ZIndex = 21
+
+		particlesToggle.MouseButton1Click:Connect(function()
+			settings.particlesEnabled = not settings.particlesEnabled
+			particlesToggle.Text = "Particles: " .. (settings.particlesEnabled and "On" or "Off")
+			saveSettings()
+		end)
+
+		-- FPS toggle
+		local fpsToggle = createGlassButton(
+			panel,
+			UDim2.new(0.8, 0, 0.12, 0),
+			UDim2.new(0.1, 0, 0.65, 0),
+			"Show FPS: " .. (settings.showFPS and "On" or "Off"),
+			UDim.new(0, 8),
+			Color3.fromRGB(220, 220, 220),
+			nil,
+			0.95,
+			nil
+		)
+		fpsToggle.ZIndex = 21
+
+		fpsToggle.MouseButton1Click:Connect(function()
+			settings.showFPS = not settings.showFPS
+			fpsToggle.Text = "Show FPS: " .. (settings.showFPS and "On" or "Off")
+			saveSettings()
+
+			-- Update FPS counter visibility
+			if settings.showFPS then
+				if not fpsCounter then
+					fpsCounter = Instance.new("TextLabel")
+					fpsCounter.Size = UDim2.new(0.1, 0, 0.04, 0)
+					fpsCounter.Position = UDim2.new(0.07, 0, 0.05, 0)
+					fpsCounter.BackgroundTransparency = 1
+					fpsCounter.Text = "FPS: --"
+					fpsCounter.Font = Enum.Font.SourceSans
+					fpsCounter.TextScaled = true
+					fpsCounter.TextColor3 = Color3.fromRGB(160, 160, 160)
+					fpsCounter.TextXAlignment = Enum.TextXAlignment.Left
+					fpsCounter.Parent = bgFrame
+				end
+			else
+				if fpsCounter then
+					fpsCounter:Destroy()
+					fpsCounter = nil
+				end
+			end
+		end)
+
+		-- Close button
+		local closeBtn = createPremiumButton(
+			panel,
+			UDim2.new(0.25, 0, 0.12, 0),
+			UDim2.new(0.375, 0, 0.85, 0),
+			"Close",
+			theme.primary
+		)
+		closeBtn.ZIndex = 21
+
+		closeBtn.MouseButton1Click:Connect(function()
+			closeAllPanels()
+		end)
+	end
+
+	-- PREMIUM SHARE PANEL
+	local function openSharePanel()
+		closeAllPanels() -- CLOSE OTHER PANELS FIRST
+
+		createDarkOverlay() -- Add dark background
+
+		-- Create SOLID panel
+		local panel = Instance.new("Frame")
+		panel.Name = "SharePanel"
+		panel.Size = UDim2.new(0.32, 0, 0.26, 0)
+		panel.Position = UDim2.new(0.34, 0, 0.36, 0)
+		panel.BackgroundColor3 = Color3.fromRGB(20, 25, 35) -- SOLID DARK BACKGROUND
+		panel.BackgroundTransparency = 0 -- COMPLETELY SOLID
+		panel.ZIndex = 20
+		panel.Parent = screenGui
+
+		local panelCorner = Instance.new("UICorner")
+		panelCorner.CornerRadius = UDim.new(0, 16)
+		panelCorner.Parent = panel
+
+		local panelStroke = Instance.new("UIStroke")
+		panelStroke.Color = theme.primary
+		panelStroke.Transparency = 0.5
+		panelStroke.Thickness = 2
+		panelStroke.Parent = panel
+
+		local title = Instance.new("TextLabel")
+		title.Size = UDim2.new(1, 0, 0.25, 0)
+		title.Position = UDim2.new(0, 0, 0, 0)
+		title.BackgroundTransparency = 1
+		title.Text = "Share Game"
+		title.Font = Enum.Font.SourceSansBold
+		title.TextScaled = true
+		title.TextColor3 = theme.primary
+		title.ZIndex = 21
+		title.Parent = panel
+
+		local linkBox = Instance.new("TextBox")
+		linkBox.Size = UDim2.new(0.8, 0, 0.25, 0)
+		linkBox.Position = UDim2.new(0.1, 0, 0.32, 0)
+		linkBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		linkBox.BackgroundTransparency = 0.95
+		linkBox.Text = "https://www.roblox.com/games/90555347135974/sliv-io-EARLY-BETA"
+		linkBox.Font = Enum.Font.SourceSans
+		linkBox.TextScaled = true
+		linkBox.TextColor3 = Color3.fromRGB(220, 220, 220)
+		linkBox.ClearTextOnFocus = false
+		linkBox.ZIndex = 21
+		linkBox.Parent = panel
+
+		local linkCorner = Instance.new("UICorner")
+		linkCorner.CornerRadius = UDim.new(0, 8)
+		linkCorner.Parent = linkBox
+
+		local copyBtn = createPremiumButton(
+			panel,
+			UDim2.new(0.35, 0, 0.18, 0),
+			UDim2.new(0.325, 0, 0.62, 0),
+			"Copy Link",
+			theme.primary
+		)
+		copyBtn.ZIndex = 21
+
+		local copiedLabel = Instance.new("TextLabel")
+		copiedLabel.Size = UDim2.new(1, 0, 0.18, 0)
+		copiedLabel.Position = UDim2.new(0, 0, 0.82, 0)
+		copiedLabel.BackgroundTransparency = 1
+		copiedLabel.Text = ""
+		copiedLabel.Font = Enum.Font.SourceSans
+		copiedLabel.TextScaled = true
+		copiedLabel.TextColor3 = theme.primary
+		copiedLabel.ZIndex = 21
+		copiedLabel.Parent = panel
+
+		copyBtn.MouseButton1Click:Connect(function()
+			local clipboardAvailable = typeof(setclipboard) == "function"
+			local success = false
+
+			if clipboardAvailable then
+				success = pcall(function()
+					setclipboard(linkBox.Text)
+				end)
+			end
+
+			if clipboardAvailable and success then
+				copiedLabel.Text = "Copied!"
+			elseif not clipboardAvailable then
+				copiedLabel.Text = "Clipboard not available"
+			else
+				copiedLabel.Text = "Copy failed"
+			end
+
+			task.wait(1.2)
+			copiedLabel.Text = ""
+		end)
+	end
+
+	-- STATS PANEL
+	local function openStatsPanel()
+		closeAllPanels() -- CLOSE OTHER PANELS FIRST
+
+		createDarkOverlay() -- Add dark background
+
+		-- Create SOLID panel
+		local panel = Instance.new("Frame")
+		panel.Name = "StatsPanel"
+		panel.Size = UDim2.new(0.32, 0, 0.4, 0)
+		panel.Position = UDim2.new(0.34, 0, 0.3, 0)
+		panel.BackgroundColor3 = Color3.fromRGB(20, 25, 35) -- SOLID DARK BACKGROUND
+		panel.BackgroundTransparency = 0 -- COMPLETELY SOLID
+		panel.ZIndex = 20
+		panel.Parent = screenGui
+
+		local panelCorner = Instance.new("UICorner")
+		panelCorner.CornerRadius = UDim.new(0, 16)
+		panelCorner.Parent = panel
+
+		local panelStroke = Instance.new("UIStroke")
+		panelStroke.Color = theme.primary
+		panelStroke.Transparency = 0.5
+		panelStroke.Thickness = 2
+		panelStroke.Parent = panel
+
+		local title = Instance.new("TextLabel")
+		title.Size = UDim2.new(1, 0, 0.15, 0)
+		title.Position = UDim2.new(0, 0, 0, 0)
+		title.BackgroundTransparency = 1
+		title.Text = "Your Stats"
+		title.Font = Enum.Font.SourceSansBold
+		title.TextScaled = true
+		title.TextColor3 = theme.primary
+		title.ZIndex = 21
+		title.Parent = panel
+
+		-- Stats display
+		local stats = {
+			{name = "High Score", value = playerStats.highScore},
+			{name = "Total Kills", value = playerStats.totalKills},
+			{name = "Games Played", value = playerStats.gamesPlayed},
+			{name = "Longest Snake", value = playerStats.longestSnake},
+			{name = "Time Alive", value = math.floor(playerStats.timeAlive / 60) .. "m " .. playerStats.timeAlive % 60 .. "s"}
+		}
+
+		for i, stat in ipairs(stats) do
+			-- Stat container
+			local statContainer = Instance.new("Frame")
+			statContainer.Size = UDim2.new(0.9, 0, 0.12, 0)
+			statContainer.Position = UDim2.new(0.05, 0, 0.2 + (i-1)*0.13, 0)
+			statContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+			statContainer.BackgroundTransparency = 0.7
+			statContainer.BorderSizePixel = 0
+			statContainer.ZIndex = 21
+			statContainer.Parent = panel
+
+			local containerCorner = Instance.new("UICorner")
+			containerCorner.CornerRadius = UDim.new(0, 8)
+			containerCorner.Parent = statContainer
+
+			-- Stat name
+			local nameLabel = Instance.new("TextLabel")
+			nameLabel.Size = UDim2.new(0.5, 0, 1, 0)
+			nameLabel.Position = UDim2.new(0, 0, 0, 0)
+			nameLabel.BackgroundTransparency = 1
+			nameLabel.Text = stat.name
+			nameLabel.Font = Enum.Font.SourceSans
+			nameLabel.TextScaled = true
+			nameLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+			nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+			nameLabel.ZIndex = 22
+			nameLabel.Parent = statContainer
+
+			-- Add padding
+			local padding = Instance.new("UIPadding")
+			padding.PaddingLeft = UDim.new(0.05, 0)
+			padding.Parent = nameLabel
+
+			-- Stat value
+			local valueLabel = Instance.new("TextLabel")
+			valueLabel.Size = UDim2.new(0.45, 0, 1, 0)
+			valueLabel.Position = UDim2.new(0.5, 0, 0, 0)
+			valueLabel.BackgroundTransparency = 1
+			valueLabel.Text = tostring(stat.value)
+			valueLabel.Font = Enum.Font.SourceSansBold
+			valueLabel.TextScaled = true
+			valueLabel.TextColor3 = theme.primary
+			valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+			valueLabel.ZIndex = 22
+			valueLabel.Parent = statContainer
+
+			-- Add padding
+			local valuePadding = Instance.new("UIPadding")
+			valuePadding.PaddingRight = UDim.new(0.05, 0)
+			valuePadding.Parent = valueLabel
+		end
+	end
+
+	-- DAILY REWARD PANEL (ENHANCED UI)
+	local function openDailyRewardPanel()
+		closeAllPanels() -- Close other panels first
+
+		createDarkOverlay() -- Add dark background
+
+		-- Main container with better visibility
+		local mainContainer = Instance.new("Frame")
+		mainContainer.Name = "DailyRewardPanel"
+		mainContainer.Size = UDim2.new(0.5, 0, 0.6, 0)
+		mainContainer.Position = UDim2.new(0.25, 0, 0.2, 0)
+		mainContainer.BackgroundColor3 = Color3.fromRGB(20, 25, 35)
+		mainContainer.BackgroundTransparency = 0
+		mainContainer.ZIndex = 20
+		mainContainer.Parent = screenGui
+
+		local containerCorner = Instance.new("UICorner")
+		containerCorner.CornerRadius = UDim.new(0, 24)
+		containerCorner.Parent = mainContainer
+
+		-- Premium stroke
+		local containerStroke = Instance.new("UIStroke")
+		containerStroke.Color = theme.primary
+		containerStroke.Transparency = 0.3
+		containerStroke.Thickness = 3
+		containerStroke.Parent = mainContainer
+
+		-- Inner panel with gradient
+		local panel = Instance.new("Frame")
+		panel.Size = UDim2.new(1, -4, 1, -4)
+		panel.Position = UDim2.new(0, 2, 0, 2)
+		panel.BackgroundColor3 = Color3.fromRGB(25, 30, 40)
+		panel.BackgroundTransparency = 0.2
+		panel.ZIndex = 21
+		panel.Parent = mainContainer
+
+		local panelCorner = Instance.new("UICorner")
+		panelCorner.CornerRadius = UDim.new(0, 22)
+		panelCorner.Parent = panel
+
+		-- Background gradient
+		local bgGradient = Instance.new("UIGradient")
+		bgGradient.Color = ColorSequence.new{
+			ColorSequenceKeypoint.new(0, theme.background[1]),
+			ColorSequenceKeypoint.new(0.3, theme.background[2]),
+			ColorSequenceKeypoint.new(1, theme.background[3])
+		}
+		bgGradient.Rotation = 90
+		bgGradient.Parent = panel
+
+		local title = Instance.new("TextLabel")
+		title.Size = UDim2.new(1, 0, 0.15, 0)
+		title.Position = UDim2.new(0, 0, 0, 0)
+		title.BackgroundTransparency = 1
+		title.Text = "Daily Reward"
+		title.Font = Enum.Font.SourceSansBold
+		title.TextScaled = true
+		title.TextColor3 = theme.primary
+		title.ZIndex = 21
+		title.Parent = panel
+
+		-- Streak display
+		local streakLabel = Instance.new("TextLabel")
+		streakLabel.Size = UDim2.new(1, 0, 0.1, 0)
+		streakLabel.Position = UDim2.new(0, 0, 0.15, 0)
+		streakLabel.BackgroundTransparency = 1
+		streakLabel.Text = "Current Streak: " .. dailyReward.streak .. " day" .. (dailyReward.streak == 1 and "" or "s")
+		streakLabel.Font = Enum.Font.SourceSans
+		streakLabel.TextScaled = true
+		streakLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+		streakLabel.ZIndex = 21
+		streakLabel.Parent = panel
+
+		-- Reward message
+		local messageLabel = Instance.new("TextLabel")
+		messageLabel.Size = UDim2.new(0.9, 0, 0.3, 0)
+		messageLabel.Position = UDim2.new(0.05, 0, 0.3, 0)
+		messageLabel.BackgroundTransparency = 1
+
+		if dailyReward.available then
+			messageLabel.Text = "Your daily reward is ready to claim!"
+			messageLabel.TextColor3 = theme.primary
+		else
+			local timeLeft = math.ceil((dailyReward.lastClaimed + 86400 - os.time()) / 3600)
+			messageLabel.Text = "Next reward available in " .. timeLeft .. " hour" .. (timeLeft == 1 and "" or "s")
+			messageLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+		end
+
+		messageLabel.Font = Enum.Font.SourceSans
+		messageLabel.TextScaled = true
+		messageLabel.ZIndex = 21
+		messageLabel.Parent = panel
+
+		-- Claim button (only if reward is available)
+		if dailyReward.available then
+			local claimBtn = createPremiumButton(
+				panel,
+				UDim2.new(0.4, 0, 0.15, 0),
+				UDim2.new(0.3, 0, 0.65, 0),
+				"Claim Reward",
+				theme.primary
+			)
+			claimBtn.ZIndex = 21
+
+			claimBtn.MouseButton1Click:Connect(function()
+				local reward = claimDailyReward()
+
+				if reward then
+					-- Update UI to show claimed reward
+					messageLabel.Text = "You received: " .. reward.amount .. " " .. reward.type
+
+					-- Apply reward
+					if reward.type == "coins" then
+						-- Add coins to player
+						local addCoinsEvent = ReplicatedStorage:FindFirstChild("AddCoins")
+						if addCoinsEvent then
+							addCoinsEvent:FireServer(reward.amount)
+						end
+					elseif reward.type == "skin" then
+						-- Add skin to player
+						local addSkinEvent = ReplicatedStorage:FindFirstChild("UnlockSkin")
+						if addSkinEvent then
+							addSkinEvent:FireServer(reward.id)
+						end
+						messageLabel.Text = "You received: Premium Skin!"
+					end
+
+					-- Remove claim button
+					claimBtn:Destroy()
+				end
+			end)
+		else
+			-- Just show close button if no reward available
+			local closeBtn = createPremiumButton(
+				panel,
+				UDim2.new(0.25, 0, 0.15, 0),
+				UDim2.new(0.375, 0, 0.65, 0),
+				"Close",
+				theme.primary
+			)
+			closeBtn.ZIndex = 21
+
+			closeBtn.MouseButton1Click:Connect(function()
+				closeAllPanels()
+			end)
+		end
+	end
+
+	-- Graphics toggle with Low/Medium/High support
+	graphicsButton.MouseButton1Click:Connect(function()
+		-- Cycle through Low -> Medium -> High -> Low
+		local graphicsModes = {"Low", "Medium", "High"}
+		local currentModeIndex = table.find(graphicsModes, settings.graphicsMode) or 3
+		currentModeIndex = currentModeIndex % 3 + 1
+		settings.graphicsMode = graphicsModes[currentModeIndex]
+		graphicsButton.Text = "Graphics: " .. settings.graphicsMode
+		setGraphicsMode(settings.graphicsMode)
+
+		-- Visual feedback
+		local originalColor = graphicsButton.TextColor3
+		graphicsButton.TextColor3 = theme.primary
+		TweenService:Create(graphicsButton, TweenInfo.new(0.3), {
+			TextColor3 = originalColor
+		}):Play()
+	end)
+
+	-- Theme toggle
+	themeButton.MouseButton1Click:Connect(function()
+		-- Cycle through themes
+		local themes = {"green", "blue", "purple", "red", "orange"}
+		local currentThemeIndex = table.find(themes, currentTheme) or 1
+		currentThemeIndex = currentThemeIndex % #themes + 1
+		currentTheme = themes[currentThemeIndex]
+		settings.theme = currentTheme
+		themeButton.Text = "Theme: " .. currentTheme:sub(1, 1):upper() .. currentTheme:sub(2)
+		saveSettings()
+
+		-- Visual feedback
+		local originalColor = themeButton.TextColor3
+		themeButton.TextColor3 = CONFIG.THEMES[currentTheme].primary
+		TweenService:Create(themeButton, TweenInfo.new(0.3), {
+			TextColor3 = originalColor
+		}):Play()
+
+		-- Notify user to restart for theme change
+		local notification = Instance.new("TextLabel")
+		notification.Size = UDim2.new(0.3, 0, 0.05, 0)
+		notification.Position = UDim2.new(0.35, 0, 0.75, 0)
+		notification.BackgroundTransparency = 1
+		notification.Text = "Theme will apply on restart"
+		notification.Font = Enum.Font.SourceSans
+		notification.TextScaled = true
+		notification.TextColor3 = CONFIG.THEMES[currentTheme].primary
+		notification.Parent = bgFrame
+
+		-- Fade out notification
+		TweenService:Create(notification, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, 2), {
+			TextTransparency = 1
+		}):Play()
+
+		game:GetService("Debris"):AddItem(notification, 3)
+	end)
+
+	-- Settings button opens settings panel
+	settingsButton.MouseButton1Click:Connect(function()
+		openSettingsPanel()
+	end)
+
+	-- Shop button opens shop UI
+	shopButton.MouseButton1Click:Connect(function()
+		-- Wait for the shop to be loaded
+		task.wait(0.1)
+		if _G.ShowShop then
+			_G.ShowShop()
+			-- Hide the menu when shop opens
+			screenGui.Enabled = false
+		else
+			warn("Shop system not loaded yet. Please try again.")
+		end
+	end)
+
+	-- Share button opens share panel
+	shareButton.MouseButton1Click:Connect(function()
+		openSharePanel()
+	end)
+
+	-- Stats button opens stats panel
+	statsButton.MouseButton1Click:Connect(function()
+		openStatsPanel()
+	end)
+
+	-- Play button action
+	playButton.MouseButton1Click:Connect(function()
+		-- Enhanced press animation
+		TweenService:Create(playButton, TweenInfo.new(0.05), {Size = UDim2.new(0.38, 0, 0.11, 0)}):Play()
+		TweenService:Create(playShadow, TweenInfo.new(0.05), {Size = UDim2.new(0.38, 0, 0.11, 0)}):Play()
+		task.wait(0.05)
+		TweenService:Create(playButton, TweenInfo.new(0.05), {Size = UDim2.new(0.4, 0, 0.12, 0)}):Play()
+		TweenService:Create(playShadow, TweenInfo.new(0.05), {Size = UDim2.new(0.4, 0, 0.12, 0)}):Play()
+		task.wait(0.1)
+
+		if onPlay then
+			onPlay()
+		end
+
+		-- Just destroy the menu immediately like the original
+		screenGui:Destroy()
+
+		-- Restore CoreGui after play
+		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, true)
+
+		-- Keep the default leaderboard hidden after play
+		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, false)
+	end)
+
+	-- Parent the menu to the player's PlayerGui
+	screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+	-- Track the current menu
+	currentMenu = screenGui
+
+	-- Block controls and CoreGui until play is pressed
+	StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
+end
+
+-- Show menu on join
+createMenu(function()
+	requestRespawn()
+end)
+
+-- =================================================================
+-- V5 DEATH HANDLER - REBUILT TO PREVENT REVIVE/MENU CONFLICT
+-- =================================================================
+local function onCharacterAdded(character)
+	-- Cancel any active death handler from previous character
+	if activeDeathHandler then
+		pcall(function() task.cancel(activeDeathHandler) end)
+		activeDeathHandler = nil
+	end
+	isProcessingDeath = false
+
+	-- Hide menu when spawning
+	if currentMenu then
+		currentMenu:Destroy()
+		currentMenu = nil
+	end
+
+	-- Clean up any lingering attributes from a previous life
+	cleanupReviveAttributes()
+
+	-- Listen for death to show menu again
+	local humanoid = character:WaitForChild("Humanoid", 5)
+	if not humanoid then return end
+
+	local deathConnection
+	deathConnection = humanoid.Died:Connect(function()
+		-- Prevent multiple death handlers from running for the same death
+		if isProcessingDeath then return end
+		isProcessingDeath = true
+
+		-- Disconnect so this doesn't fire again for the same character instance
+		if deathConnection then
+			deathConnection:Disconnect()
+		end
+
+		-- The main death handler coroutine
+		activeDeathHandler = task.spawn(function()
+			-- Wait a very short time for the ReviveUI to potentially set its "active" attribute.
+			task.wait(0.2)
+
+			local waitTime = 0
+			local maxWaitTime = 120 -- 2 minute failsafe in case an attribute gets stuck
+
+			-- This loop will wait as long as the revive prompt is active.
+			while LocalPlayer:GetAttribute("RevivePromptActive") do
+				waitTime += 0.1
+				if waitTime > maxWaitTime then
+					warn("Revive prompt timed out after 2 minutes. Forcing menu.")
+					LocalPlayer:SetAttribute("RevivePromptActive", nil) -- Break the loop
+					break
+				end
+
+				-- If player revived while we were waiting, we can exit early.
+				if LocalPlayer:GetAttribute("JustRevived") then
+					isProcessingDeath = false
+					cleanupReviveAttributes()
+					return -- Exit the coroutine, no menu needed.
+				end
+
+				task.wait(0.1)
+			end
+
+			-- The Revive prompt is now closed. Wait one final frame for attributes to sync.
+			task.wait()
+
+			-- Final check: Are we still dead and did we NOT just revive?
+			if humanoid.Health <= 0 and not LocalPlayer:GetAttribute("JustRevived") then
+				-- Double check we are still on the same character instance
+				if LocalPlayer.Character == character then
+					-- Update stats before showing menu
+					pcall(function()
+						local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
+						if leaderstats then
+							local lastScore = leaderstats.Length.Value or 0
+							if playerStats.highScore < lastScore then
+								playerStats.highScore = lastScore
+							end
+						end
+						playerStats.totalKills = playerStats.totalKills + (LocalPlayer:GetAttribute("LastKills") or 0)
+						savePlayerStats()
+					end)
+
+					-- Show the main menu
+					createMenu(function()
+						requestRespawn()
+					end)
+				end
+			end
+
+			-- Reset flag for the next life
+			isProcessingDeath = false
+			activeDeathHandler = nil
+			cleanupReviveAttributes()
+		end)
+	end)
+
+	-- Cleanup on character removal
+	character.AncestryChanged:Connect(function()
+		if not character.Parent then
+			if deathConnection then
+				deathConnection:Disconnect()
+			end
+			if activeDeathHandler then
+				pcall(function() task.cancel(activeDeathHandler) end)
+				activeDeathHandler = nil
+			end
+			isProcessingDeath = false
+		end
+	end)
+end
+
+if LocalPlayer.Character then
+	onCharacterAdded(LocalPlayer.Character)
+end
+LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
+
+-- Enhanced performance monitoring
+task.spawn(function()
+	while true do
+		task.wait(30)
+		-- Clean up any orphaned GUI elements
+		for _, gui in pairs(LocalPlayer.PlayerGui:GetChildren()) do
+			if gui.Name == "SlitherIOMenu" and not gui.Parent then
+				gui:Destroy()
+			end
+		end
+	end
+end)
+
+-- Preload assets for smoother experience
+preloadAssets()
+
+print("Premium Menu v" .. CONFIG.MENU_VERSION .. " Loaded")
