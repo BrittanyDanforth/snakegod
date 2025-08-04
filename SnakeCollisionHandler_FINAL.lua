@@ -1034,11 +1034,47 @@ task.spawn(function()
 					end
 
 					if visualSnakeModel then
+						-- AGGRESSIVE: Hide the entire visual snake model immediately
 						for _, part in ipairs(visualSnakeModel:GetChildren()) do
 							if part:IsA("BasePart") then
 								part.Anchored = true
+								-- Make it invisible immediately
+								part.Transparency = 1
+								part.CanCollide = false
+								part.CanTouch = false
+								part.CanQuery = false
+								
+								-- Special handling for eyes which might be grey/white
+								if part.Name:lower():match("eye") then
+									part:Destroy() -- Just destroy eyes immediately
+								end
+								
+								-- Destroy any effects on the segments
+								for _, child in ipairs(part:GetChildren()) do
+									if child:IsA("PointLight") or child:IsA("SpotLight") or 
+									   child:IsA("ParticleEmitter") or child:IsA("Beam") or
+									   child:IsA("Decal") or child:IsA("Texture") then
+										child:Destroy()
+									end
+								end
+							elseif part:IsA("Beam") then
+								part:Destroy() -- Destroy beams immediately
 							end
 						end
+						
+						-- Also check for any attachment holder parts
+						local beamHolder = visualSnakeModel:FindFirstChild("BeamHolder")
+						if beamHolder then
+							beamHolder:Destroy()
+						end
+						
+						-- Schedule destruction of the visual model
+						task.defer(function()
+							task.wait(0.5)
+							if visualSnakeModel and visualSnakeModel.Parent then
+								visualSnakeModel:Destroy()
+							end
+						end)
 					end
 
 					-- Handle character death animation
@@ -1052,6 +1088,9 @@ task.spawn(function()
 
 						-- Move underground
 						rootPart.CFrame = rootPart.CFrame * CFrame.new(0, -10, 0)
+						
+						-- EXTRA: Make the rootPart invisible too in case it's showing
+						rootPart.Transparency = 1
 
 						-- AGGRESSIVE CLEANUP: Remove ALL effects and potential orb-like objects
 						for _, part in pairs(character:GetDescendants()) do
