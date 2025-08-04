@@ -28,6 +28,17 @@ end
 -- FIX 2: ReviveResponse is handled through the same PromptRevive remote
 -- The client fires back to the server on the same remote with the response
 
+-- PlayerDied event not needed - SlitherIOMenu handles death through Humanoid.Died
+
+-- Create RespawnSnake remote for the menu
+local respawnSnakeRemote = ReplicatedStorage:FindFirstChild("RespawnSnake")
+if not respawnSnakeRemote then
+	respawnSnakeRemote = Instance.new("RemoteEvent")
+	respawnSnakeRemote.Name = "RespawnSnake"
+	respawnSnakeRemote.Parent = ReplicatedStorage
+	print("📢 Created RespawnSnake RemoteEvent")
+end
+
 -- Other remotes
 local freezeCameraRemote = remotes:FindFirstChild("FreezeCamera") or Instance.new("RemoteEvent", remotes)
 freezeCameraRemote.Name = "FreezeCamera"
@@ -821,11 +832,7 @@ task.spawn(function()
 									CollisionCache.playerSegments[player] = nil
 								end
 								
-								-- Fire the official death event for the menu
-								local deathEvent = ReplicatedStorage:FindFirstChild("PlayerDied")
-								if deathEvent then
-									deathEvent:Fire(player)
-								end
+								-- PlayerDied event not needed - the menu handles death through Humanoid.Died
 								
 								-- Clean up dead state after some time
 								task.spawn(function()
@@ -859,10 +866,7 @@ task.spawn(function()
 								CollisionCache.playerSegments[player] = nil
 							end
 							
-							local deathEvent = ReplicatedStorage:FindFirstChild("PlayerDied")
-							if deathEvent then
-								deathEvent:Fire(player)
-							end
+							-- PlayerDied event not needed - the menu handles death through Humanoid.Died
 							
 							task.spawn(function()
 								task.wait(5)
@@ -884,10 +888,7 @@ task.spawn(function()
 						CollisionCache.playerSegments[player] = nil
 					end
 					
-					local deathEvent = ReplicatedStorage:FindFirstChild("PlayerDied")
-					if deathEvent then
-						deathEvent:Fire(player)
-					end
+					-- PlayerDied event not needed - the menu handles death through Humanoid.Died
 					
 					task.spawn(function()
 						task.wait(5)
@@ -1827,11 +1828,34 @@ debugCommand.Changed:Connect(function()
 	end
 end)
 
-print("⚡ SnakeCollisionHandler V10 FIXED - HOTFIX 2")
-print("✅ FIXED: ReviveResponse now uses the same PromptRevive remote")
-print("✅ FIXED: Death orbs now spawn from visual snake model segments")
-print("✅ FIXED: Health = 0 restored for proper death menu flow")
-print("✅ FIXED: AwaitingReviveResponse set BEFORE death to prevent race condition")
-print("✅ FIXED: GamePassHandler now handles revive product purchases")
-print("✅ All V8.2 optimizations and revive logic preserved")
+-- Handle respawn requests from the menu
+respawnSnakeRemote.OnServerEvent:Connect(function(player, username)
+	print("🔄 Respawn requested by", player.Name, "with username:", username)
+	
+	-- Reset collision state
+	resetPlayerCollisionState(player)
+	
+	-- Set username if provided
+	if username then
+		player:SetAttribute("SlitherUsername", username)
+	end
+	
+	-- Respawn the player
+	if player.Character then
+		player.Character:Destroy()
+	end
+	wait(0.1)
+	player:LoadCharacter()
+	
+	-- Set invincibility for new spawn
+	setPlayerInvincible(player)
+end)
+
+print("⚡ SnakeCollisionHandler V10 FIXED - HOTFIX 3")
+print("✅ FIXED: Removed PlayerDied BindableEvent (not needed)")
+print("✅ FIXED: Added RespawnSnake RemoteEvent handler")
+print("✅ FIXED: ReviveResponse uses PromptRevive remote")
+print("✅ FIXED: Death orbs spawn from visual snake model")
+print("✅ FIXED: GamePassHandler handles revive purchases")
+print("✅ All V8.2 optimizations preserved")
 print("🔧 Ready for production use!")
