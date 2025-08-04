@@ -533,15 +533,22 @@ local function queuePlayerDeath(player)
 	deathTimestamps[player] = os.clock()
 	deadPlayers[player] = true -- Mark as "dying" to prevent further collision checks
 
-	-- IMMEDIATE PLAYER FREEZE (WITHOUT KILLING)
+	-- IMMEDIATE PLAYER FREEZE AND DEATH
 	task.spawn(function()
-		-- 1. Set a custom attribute to signal a "dying" state.
-		-- Your other scripts (especially UI scripts) should check for this.
+		-- 1. Set AwaitingReviveResponse FIRST to prevent race condition with death menu
+		local hasRevive = player:GetAttribute("HasRevive")
+		local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
+		if hasRevive or revivesAvailable > 0 then
+			player:SetAttribute("AwaitingReviveResponse", true)
+		end
+		
+		-- 2. Set other death attributes
 		player:SetAttribute("IsDying", true)
 		player:SetAttribute("IsDead", true)
 		player:SetAttribute("CameraLocked", true)
 		player:SetAttribute("DeathCameraFreeze", true)
 		
+		print("📷 Sending camera freeze to", player.Name)
 		freezeCameraRemote:FireClient(player, true)
 		stopCameraRemote:FireClient(player)
 
@@ -550,13 +557,13 @@ local function queuePlayerDeath(player)
 			local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
 
 			if humanoid then
-				-- Paralyze the humanoid instead of killing it
+				-- FIXED: Set health to 0 to trigger death event, but use AwaitingReviveResponse to control UI
+				humanoid.Health = 0
 				humanoid.WalkSpeed = 0
 				humanoid.JumpPower = 0
 				humanoid.JumpHeight = 0
 				humanoid.AutoRotate = false
-				humanoid.PlatformStand = true -- An effective way to stop all movement
-				-- DO NOT SET HEALTH TO 0 HERE!
+				humanoid.PlatformStand = true
 			end
 
 			if rootPart then
@@ -702,8 +709,10 @@ task.spawn(function()
 				end
 
 				-- Spawn death orbs
+				print("🎯 Starting orb spawn process for", player.Name)
 				task.defer(function()
 					if #segmentPositions > 0 then
+						print("📍 Spawning orbs from", #segmentPositions, "positions")
 						spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 					else
 						-- Fallback: spawn orbs at death position
@@ -808,11 +817,6 @@ task.spawn(function()
 								if deathEvent then
 									deathEvent:Fire(player)
 								end
-
-								-- Finally, set health to 0
-								if player.Character and player.Character:FindFirstChild("Humanoid") then
-									player.Character.Humanoid.Health = 0
-								end
 								
 								-- Clean up dead state after some time
 								task.spawn(function()
@@ -850,10 +854,6 @@ task.spawn(function()
 							if deathEvent then
 								deathEvent:Fire(player)
 							end
-
-							if player.Character and player.Character:FindFirstChild("Humanoid") then
-								player.Character.Humanoid.Health = 0
-							end
 							
 							task.spawn(function()
 								task.wait(5)
@@ -878,10 +878,6 @@ task.spawn(function()
 					local deathEvent = ReplicatedStorage:FindFirstChild("PlayerDied")
 					if deathEvent then
 						deathEvent:Fire(player)
-					end
-
-					if player.Character and player.Character:FindFirstChild("Humanoid") then
-						player.Character.Humanoid.Health = 0
 					end
 					
 					task.spawn(function()
@@ -1822,11 +1818,11 @@ debugCommand.Changed:Connect(function()
 	end
 end)
 
-print("⚡ SnakeCollisionHandler V10 FIXED")
-print("✅ FIXED: Death orbs now spawn properly using task.defer")
-print("✅ FIXED: ReviveUI uses separate ReviveResponse remote")
-print("✅ FIXED: Proper revive session management")
-print("✅ FIXED: Timeout handling for revive prompts")
-print("✅ FIXED: Segment positions captured before destruction")
-print("✅ All V8.2 optimizations preserved")
+print("⚡ SnakeCollisionHandler V10 FIXED - HOTFIX")
+print("✅ FIXED: Health = 0 restored for proper death menu flow")
+print("✅ FIXED: AwaitingReviveResponse set BEFORE death to prevent race condition")
+print("✅ FIXED: Death orbs spawn with better debug logging")
+print("✅ FIXED: Camera freeze with debug output")
+print("✅ FIXED: Purchase screen should now appear properly")
+print("✅ All V8.2 optimizations and revive logic preserved")
 print("🔧 Ready for production use!")
