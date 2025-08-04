@@ -43,6 +43,14 @@ freezeCameraRemote.Name = "FreezeCamera"
 local stopCameraRemote = remotes:FindFirstChild("StopCameraMovement") or Instance.new("RemoteEvent", remotes)
 stopCameraRemote.Name = "StopCameraMovement"
 
+-- Create remote to disable client effects
+local disableDeathEffectsRemote = ReplicatedStorage:FindFirstChild("DisableDeathEffects")
+if not disableDeathEffectsRemote then
+	disableDeathEffectsRemote = Instance.new("RemoteEvent")
+	disableDeathEffectsRemote.Name = "DisableDeathEffects"
+	disableDeathEffectsRemote.Parent = ReplicatedStorage
+end
+
 -- === PERFORMANCE CONSTANTS (unchanged) ===
 local SEGMENT_CHUNK_SIZE = 96
 local COLLISION_GRID_SIZE = 120
@@ -241,6 +249,15 @@ local function resetPlayerCollisionState(player)
 	player:SetAttribute("IsDying", false)
 	player:SetAttribute("AwaitingReviveResponse", false)
 	player:SetAttribute("RevivePromptActive", false)
+	
+	-- CRITICAL: Clear position attributes to prevent spawning at death location
+	player:SetAttribute("RevivePosition", nil)
+	player:SetAttribute("DeathPosition", nil)
+	player:SetAttribute("JustRevived", false)
+	player:SetAttribute("RevivingNow", false)
+	player:SetAttribute("NoReviveEffects", false)
+	player:SetAttribute("NoDeathEffects", false)
+	player:SetAttribute("DisableClientOrbs", false)
 
 	if player.Character then
 		local root = player.Character:FindFirstChild("HumanoidRootPart")
@@ -342,6 +359,13 @@ respawnSnakeRemote.OnServerEvent:Connect(function(player, username)
 	-- Force complete reset
 	resetPlayerCollisionState(player)
 	
+	-- CRITICAL: Ensure we're NOT reviving, just respawning normally
+	player:SetAttribute("JustRevived", false)
+	player:SetAttribute("RevivingNow", false)
+	player:SetAttribute("RevivePosition", nil)
+	player:SetAttribute("DeathPosition", nil)
+	player:SetAttribute("NoReviveEffects", false)
+	
 	-- Mark as respawning
 	local state = getCollisionState(player)
 	state.isDead = false
@@ -366,7 +390,7 @@ respawnSnakeRemote.OnServerEvent:Connect(function(player, username)
 	-- Small delay for cleanup
 	task.wait(0.1)
 	
-	-- Respawn
+	-- Respawn at normal spawn points
 	player:LoadCharacter()
 end)
 
@@ -721,6 +745,9 @@ local function queuePlayerDeath(player)
 		-- Disable any client-side death effects
 		player:SetAttribute("NoDeathEffects", true)
 		player:SetAttribute("DisableClientOrbs", true)
+		
+		-- Notify client to disable any effects
+		disableDeathEffectsRemote:FireClient(player)
 
 		if _G.PlayerSnakes and _G.PlayerSnakes[player] then
 			local snake = _G.PlayerSnakes[player]
@@ -940,27 +967,56 @@ task.spawn(function()
 						-- Move underground
 						rootPart.CFrame = rootPart.CFrame * CFrame.new(0, -10, 0)
 
-						-- Fade out character (but not effects)
+						-- AGGRESSIVE CLEANUP: Remove ALL effects and potential orb-like objects
 						for _, part in pairs(character:GetDescendants()) do
 							if part:IsA("BasePart") then
-								part.CanCollide = false
-								part.CanTouch = false
-								part.CanQuery = false
-								-- Only fade out if it's not an effect part
-								if part.Transparency < 1 and not part:FindFirstChildOfClass("PointLight") and not part:FindFirstChildOfClass("ParticleEmitter") then
-									local tween = TweenService:Create(part,
-										TweenInfo.new(0.5, Enum.EasingStyle.Linear),
-										{Transparency = 1}
-									)
-									tween:Play()
+								-- Check if this might be an effect orb (usually small spheres)
+								if part.Name:lower():match("orb") or part.Name:lower():match("effect") or 
+								   part.Name:lower():match("particle") or part.Name:lower():match("sphere") or
+								   (part.Shape == Enum.PartType.Ball and part.Size.Magnitude < 5) then
+									part:Destroy()
+								else
+									part.CanCollide = false
+									part.CanTouch = false
+									part.CanQuery = false
+									-- Only fade out normal parts
+									if part.Transparency < 1 and part ~= rootPart then
+										local tween = TweenService:Create(part,
+											TweenInfo.new(0.5, Enum.EasingStyle.Linear),
+											{Transparency = 1}
+										)
+										tween:Play()
+									end
 								end
 							elseif part:IsA("Decal") or part:IsA("Texture") then
 								part.Transparency = 1
-							elseif part:IsA("ParticleEmitter") or part:IsA("PointLight") or part:IsA("SpotLight") then
-								-- Destroy any effects immediately
+							elseif part:IsA("ParticleEmitter") or part:IsA("PointLight") or 
+							       part:IsA("SpotLight") or part:IsA("SurfaceLight") or
+							       part:IsA("Attachment") or part:IsA("Beam") then
+								-- Destroy any effects or attachments immediately
 								part:Destroy()
 							end
 						end
+						
+						-- Also check workspace for any stray effect parts
+						task.defer(function()
+							local searchRadius = 20
+							local nearbyParts = workspace:GetPartBoundsInBox(
+								rootPart.CFrame,
+								Vector3.new(searchRadius, searchRadius, searchRadius)
+							)
+							
+							for _, part in ipairs(nearbyParts) do
+								if part:IsA("BasePart") and part.Parent ~= character then
+									-- Remove any suspicious orb-like parts
+									if part.Name:lower():match("effect") or part.Name:lower():match("orb") or
+									   (part.Shape == Enum.PartType.Ball and part.Size.Magnitude < 2 and
+									    part.BrickColor == BrickColor.new("Medium stone grey")) then
+										part:Destroy()
+									end
+								end
+							end
+						end)
 					end
 					
 					-- Kill humanoid AFTER setting revive attributes
@@ -1079,7 +1135,18 @@ task.spawn(function()
 									-- Player declined revive
 									print("❌ Player declined revive")
 
-									-- Reset state
+									-- Clear all revive-related attributes
+									player:SetAttribute("JustRevived", false)
+									player:SetAttribute("RevivingNow", false)
+									player:SetAttribute("RevivePosition", nil)
+									player:SetAttribute("DeathPosition", nil)
+									player:SetAttribute("NoReviveEffects", false)
+									
+									-- Mark as truly dead
+									deadPlayers[player] = true
+									deathTimestamps[player] = os.clock()
+									
+									-- Mark death complete
 									local state = getCollisionState(player)
 									state.isProcessing = false
 									processingPlayers[player] = nil
@@ -1088,8 +1155,6 @@ task.spawn(function()
 									if visualSnakeModel then
 										visualSnakeModel:Destroy()
 									end
-
-									deadPlayers[player] = true
 
 									if CollisionCache and CollisionCache.playerSegments then
 										CollisionCache.playerSegments[player] = nil
@@ -1128,6 +1193,11 @@ task.spawn(function()
 								-- Clear attributes
 								player:SetAttribute("AwaitingReviveResponse", false)
 								player:SetAttribute("RevivePromptActive", false)
+								player:SetAttribute("JustRevived", false)
+								player:SetAttribute("RevivingNow", false)
+								player:SetAttribute("RevivePosition", nil)
+								player:SetAttribute("DeathPosition", nil)
+								player:SetAttribute("NoReviveEffects", false)
 
 								-- Reset state
 								local state = getCollisionState(player)
