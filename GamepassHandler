@@ -557,32 +557,4 @@ toggleMagnetRemote.OnServerEvent:Connect(function(player, state)
 	player:SetAttribute("MagnetActive", state)
 end)
 
--- PRODUCT PURCHASES (Revive with Robux)
-local REVIVE_PRODUCT_ID = 3356734577
-
-MarketplaceService.ProcessReceipt = function(receiptInfo)
-	local player = Players:GetPlayerByUserId(receiptInfo.PlayerId)
-	if not player then
-		return Enum.ProductPurchaseDecision.NotProcessedYet
-	end
-
-	if receiptInfo.ProductId == REVIVE_PRODUCT_ID then
-		print("💰 Processing revive purchase for", player.Name)
-		
-		-- Grant the player a revive
-		local currentRevives = player:GetAttribute("RevivesAvailable") or 0
-		player:SetAttribute("RevivesAvailable", currentRevives + 1)
-		player:SetAttribute("HasRevive", true)
-		
-		print("✅ Granted revive to", player.Name, "- Total revives:", currentRevives + 1)
-		
-		-- Purchase was successful
-		return Enum.ProductPurchaseDecision.PurchaseGranted
-	end
-
-	-- Unknown product
-	return Enum.ProductPurchaseDecision.NotProcessedYet
-end
-
 print("GamepassHandler loaded successfully with boost system!")
-print("💰 Revive Product ID:", REVIVE_PRODUCT_ID)
