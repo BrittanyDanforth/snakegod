@@ -1,4 +1,5 @@
 -- VFXManager: Handles visual effects for orbs with multiplayer-compatible graphics modes
+-- POLISHED VERSION - Fixed collision interference and optimized for performance
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -29,6 +30,7 @@ local GRAPHICS_SETTINGS = {
 		lightingEnabled = true,
 		glowBrightness = 2,
 		glowRange = 8,
+		enabled = true -- Master switch
 	},
 	Medium = {
 		orbGlow = true,
@@ -37,6 +39,7 @@ local GRAPHICS_SETTINGS = {
 		lightingEnabled = true,
 		glowBrightness = 1.5,
 		glowRange = 6,
+		enabled = true
 	},
 	Low = {
 		orbGlow = false,
@@ -45,6 +48,7 @@ local GRAPHICS_SETTINGS = {
 		lightingEnabled = false,
 		glowBrightness = 0,
 		glowRange = 0,
+		enabled = false -- Disable all effects in low mode
 	}
 }
 
@@ -60,6 +64,11 @@ local function getGraphicsModeForPlayer(player)
 	end
 
 	if player then
+		-- Check if effects are disabled for death
+		if player:GetAttribute("NoDeathEffects") or player:GetAttribute("DisableClientOrbs") then
+			return "Low" -- Force low mode to disable effects
+		end
+		
 		local mode = player:GetAttribute("GraphicsMode")
 		if mode == "Low" or mode == "Medium" then
 			return mode
@@ -77,8 +86,8 @@ end
 local function createOrbEffectTemplate(graphicsMode)
 	local settings = GRAPHICS_SETTINGS[graphicsMode] or GRAPHICS_SETTINGS.High
 
-	if not settings.orbParticles then
-		-- No particles in low graphics mode
+	-- Check if effects are enabled
+	if not settings.enabled or not settings.orbParticles then
 		return nil
 	end
 
@@ -133,8 +142,18 @@ end
 
 -- Plays the orb collection VFX at a given world position
 function VFXManager.playOrbCollectVFX(position, player)
-	-- SERVER: Always play effects (clients will handle their own graphics modes)
+	-- Skip if position is invalid
+	if not position or position.Magnitude > 10000 then
+		return
+	end
+	
+	-- SERVER: Create VFX marker with collision-safe properties
 	if RunService:IsServer() then
+		-- Check if player has death effects disabled
+		if player and (player:GetAttribute("NoDeathEffects") or player:GetAttribute("DisableClientOrbs")) then
+			return -- Don't create any VFX markers during death
+		end
+		
 		-- Create a simple effect marker that clients can detect
 		local part = Instance.new("Part")
 		part.Name = "OrbVFXMarker"
@@ -142,8 +161,10 @@ function VFXManager.playOrbCollectVFX(position, player)
 		part.Position = position
 		part.Anchored = true
 		part.CanCollide = false
+		part.CanTouch = false -- IMPORTANT: Prevent touch detection
+		part.CanQuery = false -- IMPORTANT: Prevent spatial queries
 		part.Transparency = 1
-		part.Parent = workspace
+		part.Parent = workspace.CurrentCamera or workspace -- Use CurrentCamera if available to reduce collision checks
 
 		-- Add a value to indicate this is an orb collection
 		local marker = Instance.new("StringValue")
@@ -152,44 +173,87 @@ function VFXManager.playOrbCollectVFX(position, player)
 		marker.Parent = part
 
 		-- Clean up after a short time
-		Debris:AddItem(part, 0.5)
+		Debris:AddItem(part, 0.3) -- Reduced from 0.5
 		return
 	end
 
-	-- CLIENT: Check local graphics mode
-	local graphicsMode = getGraphicsModeForPlayer(player or Players.LocalPlayer)
+	-- CLIENT: Check if effects are enabled
+	local localPlayer = Players.LocalPlayer
+	if localPlayer and (localPlayer:GetAttribute("NoDeathEffects") or localPlayer:GetAttribute("DisableClientOrbs")) then
+		return -- Skip all client effects during death
+	end
+	
+	-- Check local graphics mode
+	local graphicsMode = getGraphicsModeForPlayer(player or localPlayer)
+	local settings = GRAPHICS_SETTINGS[graphicsMode]
+	
+	if not settings.enabled then
+		return -- Effects disabled for this graphics mode
+	end
+	
 	local effect = createOrbEffectTemplate(graphicsMode)
 	if not effect then
-		return -- No effect in low graphics mode
+		return -- No effect template available
 	end
 
-	effect.Parent = workspace
+	-- Parent to a non-collision container if possible
+	effect.Parent = workspace.CurrentCamera or workspace
 	effect.WorldPosition = position
 
 	local emitter = effect:FindFirstChildOfClass("ParticleEmitter")
 	if emitter then
-		local settings = GRAPHICS_SETTINGS[graphicsMode]
 		emitter:Emit(settings.particleCount)
 	end
 
-	-- Clean up the effect
-	task.delay(0.7, function()
+	-- Clean up the effect faster
+	task.delay(0.5, function()
 		if effect and effect.Parent then
 			effect:Destroy()
 		end
 	end)
 end
 
--- CLIENT ONLY: Watch for VFX markers from server
+-- CLIENT ONLY: Watch for VFX markers from server (with optimization)
 if RunService:IsClient() then
+	-- Throttle VFX processing
+	local lastVFXTime = 0
+	local VFX_COOLDOWN = 0.05 -- Minimum time between VFX
+	
 	workspace.ChildAdded:Connect(function(child)
-		if child.Name == "OrbVFXMarker" and child:FindFirstChild("VFXType") then
-			if child.VFXType.Value == "OrbCollect" then
-				-- Play the VFX based on local graphics settings
-				VFXManager.playOrbCollectVFX(child.Position, Players.LocalPlayer)
-			end
+		-- Quick checks first
+		if child.Name ~= "OrbVFXMarker" then return end
+		
+		local currentTime = tick()
+		if currentTime - lastVFXTime < VFX_COOLDOWN then
+			return -- Skip if too frequent
+		end
+		
+		-- Check for death effects disabled
+		local localPlayer = Players.LocalPlayer
+		if localPlayer and (localPlayer:GetAttribute("NoDeathEffects") or localPlayer:GetAttribute("DisableClientOrbs")) then
+			return
+		end
+		
+		local vfxType = child:FindFirstChild("VFXType")
+		if vfxType and vfxType.Value == "OrbCollect" then
+			lastVFXTime = currentTime
+			-- Play the VFX based on local graphics settings
+			VFXManager.playOrbCollectVFX(child.Position, localPlayer)
 		end
 	end)
+	
+	-- Listen for DisableDeathEffects remote
+	local disableEffectsRemote = ReplicatedStorage:WaitForChild("DisableDeathEffects", 5)
+	if disableEffectsRemote then
+		disableEffectsRemote.OnClientEvent:Connect(function()
+			-- Clear any existing VFX markers
+			for _, child in pairs(workspace:GetChildren()) do
+				if child.Name == "OrbVFXMarker" then
+					child:Destroy()
+				end
+			end
+		end)
+	end
 end
 
 -- Handle graphics mode changes
@@ -199,13 +263,13 @@ if SetGraphicsModeEvent then
 		SetGraphicsModeEvent.OnServerEvent:Connect(function(player, mode)
 			if GRAPHICS_SETTINGS[mode] then
 				player:SetAttribute("GraphicsMode", mode)
-				print("[Server] Set graphics mode for", player.Name, "to", mode)
+				print("[VFXManager] Set graphics mode for", player.Name, "to", mode)
 
-				-- Force update the player's snake graphics
+				-- Force update the player's snake graphics if applicable
 				if _G.PlayerSnakes and _G.PlayerSnakes[player] then
 					local snake = _G.PlayerSnakes[player]
-					if snake.updateGraphicsMode then
-						snake.updateGraphicsMode()
+					if snake and snake.updateGraphicsMode then
+						snake:updateGraphicsMode()
 					end
 				end
 			end
@@ -218,6 +282,17 @@ if SetGraphicsModeEvent then
 			end
 		end
 	end
+end
+
+-- Cleanup function
+function VFXManager.cleanup()
+	-- Clear template cache
+	for _, template in pairs(effectTemplates) do
+		if template and template.Parent then
+			template:Destroy()
+		end
+	end
+	effectTemplates = {}
 end
 
 return VFXManager
