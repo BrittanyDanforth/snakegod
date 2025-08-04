@@ -138,6 +138,8 @@ local function cleanupReviveAttributes()
 	LocalPlayer:SetAttribute("JustRevived", nil)
 	LocalPlayer:SetAttribute("RevivingNow", nil)
 	LocalPlayer:SetAttribute("RevivePromptActive", nil)
+	LocalPlayer:SetAttribute("AwaitingReviveResponse", nil)
+	LocalPlayer:SetAttribute("IsDying", nil)
 end
 
 -- Helper to set graphics mode (attribute + remote event)
@@ -1615,6 +1617,13 @@ local function onCharacterAdded(character)
 
 	local deathConnection
 	deathConnection = humanoid.Died:Connect(function()
+		-- CRITICAL CHECK: Before showing the death menu, check if we are waiting for a revive prompt.
+		if LocalPlayer:GetAttribute("AwaitingReviveResponse") == true then
+			-- Don't show the main death menu! The ReviveUI has priority.
+			print("Player is dying, but waiting for revive. Halting main death menu.")
+			return 
+		end
+		
 		-- Prevent multiple death handlers from running for the same death
 		if isProcessingDeath then return end
 		isProcessingDeath = true
@@ -1633,10 +1642,11 @@ local function onCharacterAdded(character)
 			local maxWaitTime = 120 -- 2 minute failsafe in case an attribute gets stuck
 
 			-- This loop will wait as long as the revive prompt is active.
-			while LocalPlayer:GetAttribute("RevivePromptActive") do
+			while LocalPlayer:GetAttribute("AwaitingReviveResponse") or LocalPlayer:GetAttribute("RevivePromptActive") do
 				waitTime += 0.1
 				if waitTime > maxWaitTime then
 					warn("Revive prompt timed out after 2 minutes. Forcing menu.")
+					LocalPlayer:SetAttribute("AwaitingReviveResponse", nil)
 					LocalPlayer:SetAttribute("RevivePromptActive", nil) -- Break the loop
 					break
 				end
