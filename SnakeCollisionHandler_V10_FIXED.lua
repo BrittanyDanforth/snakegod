@@ -587,6 +587,7 @@ local function queuePlayerDeath(player)
 		end
 	end)
 
+	-- Mark as dead IMMEDIATELY to prevent duplicate collisions
 	deadPlayers[player] = true
 
 	table.insert(deathQueue, {
@@ -624,6 +625,11 @@ task.spawn(function()
 			isProcessingDeaths = true
 			performanceStats.deathsProcessed = performanceStats.deathsProcessed + 1
 			local death = table.remove(deathQueue, 1)
+
+			-- Ensure we always reset isProcessingDeaths
+			local function resetProcessing()
+				isProcessingDeaths = false
+			end
 
 			task.wait(0.02)
 
@@ -759,7 +765,6 @@ task.spawn(function()
 						promptReviveRemote:FireClient(player)
 
 						-- Set up response listener
-						local revived = false
 						local responseConnection
 						local responseReceived = false
 
@@ -778,8 +783,6 @@ task.spawn(function()
 								end
 								
 								if response == "revive" or response == true then
-									revived = true
-									
 									-- Handle revive
 									print("✅ Player chose to revive!")
 									
@@ -850,7 +853,8 @@ task.spawn(function()
 									end)
 								end
 								
-								isProcessingDeaths = false
+								-- CRITICAL: Reset processing flag
+								resetProcessing()
 							end
 						end)
 
@@ -860,7 +864,7 @@ task.spawn(function()
 							startTime = os.clock()
 						}
 
-						-- Set up timeout
+						-- Set up timeout with proper cleanup
 						task.spawn(function()
 							task.wait(60) -- 60 second timeout
 							
@@ -894,9 +898,12 @@ task.spawn(function()
 									deadPlayers[player] = nil
 								end)
 								
-								isProcessingDeaths = false
+								-- CRITICAL: Reset processing flag
+								resetProcessing()
 							end
 						end)
+						
+						-- DON'T reset isProcessingDeaths here - wait for response or timeout
 					else
 						-- No revive available - proceed with normal death
 						print("❌ No revive available for", player.Name)
@@ -921,10 +928,12 @@ task.spawn(function()
 							deadPlayers[player] = nil
 						end)
 						
-						isProcessingDeaths = false
+						-- CRITICAL: Reset processing flag
+						resetProcessing()
 					end
 				else
-					isProcessingDeaths = false
+					-- No character, reset processing
+					resetProcessing()
 				end
 			elseif death.type == "ai" then
 				-- AI death processing remains the same
@@ -968,7 +977,11 @@ task.spawn(function()
 					end
 				end
 				
-				isProcessingDeaths = false
+				-- CRITICAL: Reset processing flag
+				resetProcessing()
+			else
+				-- Unknown death type, reset processing
+				resetProcessing()
 			end
 		end
 	end
@@ -1785,6 +1798,25 @@ task.spawn(function()
 					session.connection:Disconnect()
 				end
 				reviveSessions[player] = nil
+			end
+		end
+	end
+end)
+
+-- === EMERGENCY RESET (in case death queue gets stuck) ===
+task.spawn(function()
+	while true do
+		task.wait(5) -- Check every 5 seconds
+		
+		-- If processing has been stuck for too long, force reset
+		if isProcessingDeaths then
+			local oldestDeath = deathQueue[1]
+			if oldestDeath and (os.clock() - oldestDeath.timestamp) > 10 then
+				warn("⚠️ Death processing stuck! Force resetting...")
+				isProcessingDeaths = false
+				
+				-- Clear stuck death
+				table.remove(deathQueue, 1)
 			end
 		end
 	end
