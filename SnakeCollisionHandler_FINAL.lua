@@ -477,7 +477,7 @@ end
 local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 	print("💎 Spawning death orbs for", player.Name, "with", #segmentPositions, "segment positions")
 
-	-- Calculate orb distribution
+	-- Calculate orb distribution based on actual segments
 	local totalOrbs = math.clamp(math.floor(snakeLength * 0.4), 3, MAX_ORBS_PER_SNAKE)
 	local orbValue = math.max(1, math.floor(snakeLength * 0.3 / totalOrbs))
 
@@ -489,18 +489,24 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 
 	print(string.format("[ORB SPAWN] Length: %d, TotalOrbs: %d, Value: %d", snakeLength, totalOrbs, orbValue))
 
-	local spawnedOrbs = 0
-	local skipInterval = math.max(1, math.floor(#segmentPositions / totalOrbs))
-
-	-- Spawn orbs along segments with better distribution
-	for i = 1, #segmentPositions do
-		if spawnedOrbs >= totalOrbs then break end
+	-- If we have actual segment positions, use them
+	if #segmentPositions >= 3 then
+		local spawnedOrbs = 0
 		
-		if (i - 1) % skipInterval == 0 then
-			local pos = segmentPositions[i]
+		-- Calculate step to evenly distribute orbs along the snake
+		local step = math.max(1, (#segmentPositions - 1) / (totalOrbs - 1))
+		
+		for i = 1, totalOrbs do
+			if spawnedOrbs >= totalOrbs then break end
+			
+			-- Calculate which segment position to use
+			local segmentIndex = math.floor((i - 1) * step) + 1
+			segmentIndex = math.min(segmentIndex, #segmentPositions)
+			
+			local pos = segmentPositions[segmentIndex]
 			if pos then
-				-- Smaller spread for body shape
-				local spread = 2.5
+				-- Very small spread to maintain body shape
+				local spread = 1.5 -- Reduced from 2.5
 				local offset = Vector3.new(
 					(math.random() - 0.5) * spread,
 					0,
@@ -510,30 +516,47 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 				spawnDeathOrb(pos + offset, orbValue)
 				spawnedOrbs = spawnedOrbs + 1
 
-				if spawnedOrbs % 5 == 0 then
-					task.wait(0.03)
+				-- Small delay every few orbs
+				if spawnedOrbs % 8 == 0 then
+					task.wait(0.02)
 				end
 			end
 		end
-	end
-
-	-- Ensure minimum orbs spawn
-	if spawnedOrbs < 3 and #segmentPositions > 0 then
-		local basePos = segmentPositions[1]
+		
+		print(string.format("✅ Spawned %d death orbs along snake body for %s", spawnedOrbs, player.Name))
+	else
+		-- Fallback: spawn in a spread pattern if no segments
+		print("⚠️ Using fallback orb pattern - not enough segment positions")
+		local basePos = segmentPositions[1] or (player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character.HumanoidRootPart.Position)
+		
 		if basePos then
-			for i = 1, 3 - spawnedOrbs do
-				local angle = (i - 1) * 120 * math.pi / 180
+			local spawnedOrbs = 0
+			local radius = math.min(snakeLength * 0.5, 30) -- Dynamic radius based on length
+			
+			for i = 1, totalOrbs do
+				if spawnedOrbs >= totalOrbs then break end
+				
+				-- Create a spiral pattern
+				local angle = (i / totalOrbs) * math.pi * 2 * 3 -- 3 rotations
+				local distance = (i / totalOrbs) * radius
+				
 				local offset = Vector3.new(
-					math.cos(angle) * 10,
+					math.cos(angle) * distance,
 					0,
-					math.sin(angle) * 10
+					math.sin(angle) * distance
 				)
+				
 				spawnDeathOrb(basePos + offset, orbValue)
+				spawnedOrbs = spawnedOrbs + 1
+				
+				if spawnedOrbs % 8 == 0 then
+					task.wait(0.02)
+				end
 			end
+			
+			print(string.format("✅ Spawned %d death orbs in spiral pattern for %s", spawnedOrbs, player.Name))
 		end
 	end
-
-	print(string.format("✅ Spawned %d death orbs for %s", spawnedOrbs, player.Name))
 end
 
 -- === HEAD RETRIEVAL (keeping existing implementation) ===
@@ -689,10 +712,15 @@ local function queuePlayerDeath(player)
 		freezeCameraRemote:FireClient(player, true)
 		stopCameraRemote:FireClient(player)
 
+		-- Set death attributes
 		player:SetAttribute("IsDead", true)
 		player:SetAttribute("IsDying", true)
 		player:SetAttribute("CameraLocked", true)
 		player:SetAttribute("DeathCameraFreeze", true)
+		
+		-- Disable any client-side death effects
+		player:SetAttribute("NoDeathEffects", true)
+		player:SetAttribute("DisableClientOrbs", true)
 
 		if _G.PlayerSnakes and _G.PlayerSnakes[player] then
 			local snake = _G.PlayerSnakes[player]
@@ -805,24 +833,48 @@ task.spawn(function()
 					local visualSnakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
 					local segmentPositions = {}
 					
-					-- Try visual model first
+					-- IMPORTANT: Collect segments BEFORE destroying anything
 					if visualSnakeModel then
 						print("🔍 Collecting segments from visual model")
-						local i = 0
-						while true do
-							local segmentName = i == 0 and "Segment0_Head" or ("Segment" .. i)
-							local segment = visualSnakeModel:FindFirstChild(segmentName)
-							if segment and segment:IsA("BasePart") and segment.Position then
+						-- Get all segments in order
+						local segments = {}
+						for _, child in ipairs(visualSnakeModel:GetChildren()) do
+							if child:IsA("BasePart") and child.Name:match("Segment") then
+								table.insert(segments, child)
+							end
+						end
+						
+						-- Sort segments by name to ensure correct order
+						table.sort(segments, function(a, b)
+							local aNum = tonumber(a.Name:match("Segment(%d+)")) or (a.Name:match("Head") and 0) or 999
+							local bNum = tonumber(b.Name:match("Segment(%d+)")) or (b.Name:match("Head") and 0) or 999
+							return aNum < bNum
+						end)
+						
+						-- Collect positions
+						for _, segment in ipairs(segments) do
+							if segment.Position then
 								segmentPositions[#segmentPositions + 1] = segment.Position
-								i = i + 1
-							else
-								break
 							end
 						end
 						print("📍 Collected", #segmentPositions, "segment positions from visual model")
 					end
 					
-					-- Fallback to other methods if needed
+					-- Fallback: Try internal snake segments
+					if #segmentPositions == 0 and _G.PlayerSnakes and _G.PlayerSnakes[player] then
+						local snake = _G.PlayerSnakes[player]
+						if snake.segments then
+							print("🔍 Collecting from internal snake segments")
+							for _, segment in ipairs(snake.segments) do
+								if segment and segment:IsA("BasePart") and segment.Parent and segment.Position then
+									segmentPositions[#segmentPositions + 1] = segment.Position
+								end
+							end
+							print("📍 Collected", #segmentPositions, "positions from internal snake")
+						end
+					end
+					
+					-- Last fallback to other methods if needed
 					if #segmentPositions == 0 then
 						local segments = getActualSnakeSegments(player)
 						if segments and #segments > 0 then
@@ -888,13 +940,14 @@ task.spawn(function()
 						-- Move underground
 						rootPart.CFrame = rootPart.CFrame * CFrame.new(0, -10, 0)
 
-						-- Fade out character
+						-- Fade out character (but not effects)
 						for _, part in pairs(character:GetDescendants()) do
 							if part:IsA("BasePart") then
 								part.CanCollide = false
 								part.CanTouch = false
 								part.CanQuery = false
-								if part.Transparency < 1 then
+								-- Only fade out if it's not an effect part
+								if part.Transparency < 1 and not part:FindFirstChildOfClass("PointLight") and not part:FindFirstChildOfClass("ParticleEmitter") then
 									local tween = TweenService:Create(part,
 										TweenInfo.new(0.5, Enum.EasingStyle.Linear),
 										{Transparency = 1}
@@ -903,6 +956,9 @@ task.spawn(function()
 								end
 							elseif part:IsA("Decal") or part:IsA("Texture") then
 								part.Transparency = 1
+							elseif part:IsA("ParticleEmitter") or part:IsA("PointLight") or part:IsA("SpotLight") then
+								-- Destroy any effects immediately
+								part:Destroy()
 							end
 						end
 					end
@@ -920,13 +976,16 @@ task.spawn(function()
 							-- Fallback: spawn orbs at death position
 							print("⚠️ No segments found, using fallback orb spawning")
 							if rootPart then
+								-- Use a more spread out pattern for fallback
 								local fallbackPositions = {}
-								for i = 1, math.min(10, math.floor(snakeLength / 10)) do
-									local angle = (i - 1) * (360 / 10) * math.pi / 180
+								local numOrbs = math.min(10, math.floor(snakeLength / 10))
+								for i = 1, numOrbs do
+									local angle = (i - 1) * (360 / numOrbs) * math.pi / 180
+									local distance = 5 + (i * 2) -- Increasing distance
 									local pos = rootPart.Position + Vector3.new(
-										math.cos(angle) * 10,
+										math.cos(angle) * distance,
 										0,
-										math.sin(angle) * 10
+										math.sin(angle) * distance
 									)
 									fallbackPositions[#fallbackPositions + 1] = pos
 								end
