@@ -162,12 +162,15 @@ function PlayerController:setSpeed(speed)
 end
 
 function PlayerController:hasReviveToken()
-    return self.data.reviveTokens > 0
+    local hasRevive = self.player:GetAttribute("HasRevive") or false
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    return hasRevive or revivesAvailable > 0
 end
 
 function PlayerController:useReviveToken()
-    if self.data.reviveTokens > 0 then
-        self.data.reviveTokens = self.data.reviveTokens - 1
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    if revivesAvailable > 0 then
+        self.player:SetAttribute("RevivesAvailable", revivesAvailable - 1)
         return true
     end
     return false
@@ -226,42 +229,9 @@ end
 
 -- Client communication
 function PlayerController:requestReviveFromClient()
-    return Promise.new(function(resolve, reject, onCancel)
-        local remotes = ReplicatedStorage:WaitForChild("Remotes")
-        local promptRevive = remotes:FindFirstChild("PromptRevive")
-        
-        if not promptRevive then
-            return reject("Revive remote not found")
-        end
-        
-        -- Setup response listener
-        local connection
-        connection = promptRevive.OnServerEvent:Connect(function(respondingPlayer, response)
-            if respondingPlayer == self.player then
-                connection:Disconnect()
-                
-                if response == "revive" and self:hasReviveToken() then
-                    resolve("Reviving")
-                else
-                    resolve("Spectating")
-                end
-            end
-        end)
-        
-        -- Send prompt to client
-        promptRevive:FireClient(self.player, {
-            show = true,
-            hasToken = self:hasReviveToken()
-        })
-        
-        -- Cleanup on cancel
-        onCancel(function()
-            if connection then
-                connection:Disconnect()
-            end
-            self:hideReviveUI()
-        end)
-    end)
+    -- This is now handled by DyingState
+    warn("[PlayerController] requestReviveFromClient is deprecated - handled by DyingState")
+    return Promise.resolve("Spectating")
 end
 
 function PlayerController:hideReviveUI()

@@ -1009,9 +1009,12 @@ task.spawn(function()
 					end
 
 					-- Clear magnet effect immediately
-					player:SetAttribute("MagnetRange", 1)
-					player:SetAttribute("TempMagnetRange", 1)
+					player:SetAttribute("MagnetRange", 0)
+					player:SetAttribute("TempMagnetRange", 0)
 					player:SetAttribute("ActiveMagnet", false)
+					player:SetAttribute("HasMagnet", false)
+					player:SetAttribute("IsDead", true)
+					player:SetAttribute("DisableOrbCollection", true)
 
 					-- Disconnect camera updates
 					disconnectPlayerCamera(player)
@@ -1019,22 +1022,23 @@ task.spawn(function()
 					-- Store snake references
 					local snakeInstance = _G.PlayerSnakes and _G.PlayerSnakes[player]
 
-					-- Check for revives BEFORE doing ANYTHING else
-					local hasRevive = player:GetAttribute("HasRevive")
-					local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
-					print("🔍 Revive check - HasRevive:", hasRevive, "RevivesAvailable:", revivesAvailable)
+									-- Check for revives BEFORE doing ANYTHING else
+				local hasRevive = player:GetAttribute("HasRevive")
+				local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
+				print("🔍 Revive check - HasRevive:", hasRevive, "RevivesAvailable:", revivesAvailable)
 
-					-- Set revive attributes SUPER EARLY if available
-					if hasRevive or revivesAvailable > 0 then
-						-- Set RevivePromptActive IMMEDIATELY to block SlitherIOMenu
-						player:SetAttribute("RevivePromptActive", true)
-						player:SetAttribute("AwaitingReviveResponse", true)
-
-						-- Fire client RIGHT NOW without any delay
-						pcall(function()
-							promptReviveRemote:FireClient(player)
-						end)
-					end
+				-- Set revive attributes SUPER EARLY if available
+				if hasRevive or revivesAvailable > 0 then
+					-- Set RevivePromptActive IMMEDIATELY to block SlitherIOMenu
+					player:SetAttribute("RevivePromptActive", true)
+					player:SetAttribute("AwaitingReviveResponse", true)
+					
+					-- Store in session to prevent duplicates
+					reviveSessions[player] = {
+						promptSent = true,
+						startTime = tick()
+					}
+				end
 
 					-- Now freeze snake and set health
 					print("❄️ Freezing snake for", player.Name)
@@ -1126,11 +1130,21 @@ task.spawn(function()
 						rootPart.CanTouch = false
 						rootPart.CanQuery = false
 
-						-- Move underground
-						rootPart.CFrame = rootPart.CFrame * CFrame.new(0, -10, 0)
+						-- Move underground AND far away to prevent magnet attraction
+						rootPart.CFrame = CFrame.new(0, -1000, 0)
+						
+						-- Disable all physics interactions
+						rootPart.Massless = true
+						rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+						rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 
 						-- EXTRA: Make the rootPart invisible too in case it's showing
 						rootPart.Transparency = 1
+						
+						-- Remove from collision groups if applicable
+						pcall(function()
+							rootPart.CollisionGroup = "Dead"
+						end)
 
 						-- AGGRESSIVE CLEANUP: Remove ALL effects and potential orb-like objects
 						for _, part in pairs(character:GetDescendants()) do
@@ -1228,30 +1242,45 @@ task.spawn(function()
 								end
 							end
 						end)
+						
+						-- Store the connection
+						if reviveSessions[player] then
+							reviveSessions[player].connection = responseConnection
+						else
+							reviveSessions[player] = {
+								connection = responseConnection,
+								startTime = tick()
+							}
+						end
+						
+						-- NOW send the prompt after handler is ready
+						print("📤 Sending revive prompt to", player.Name)
+						pcall(function()
+							promptReviveRemote:FireClient(player)
+						end)
 					end
 
 					-- Kill humanoid AFTER setting revive attributes
 					if humanoid and humanoid.Health > 0 then
 						humanoid.Health = 0
+						humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+						humanoid.WalkSpeed = 0
+						humanoid.JumpPower = 0
+						humanoid.JumpHeight = 0
+						humanoid.AutoRotate = false
+						humanoid.PlatformStand = true
 					end
 
 					-- Orbs already spawned above before snake destruction
 
 					-- === FIX 6: PROPERLY HANDLE REVIVE UI ===
 					if hasRevive or revivesAvailable > 0 then
-						-- Clear any existing revive session
-						if reviveSessions[player] then
-							if reviveSessions[player].connection then
-								reviveSessions[player].connection:Disconnect()
-							end
-							reviveSessions[player] = nil
+						-- Clear any existing revive session connection
+						if reviveSessions[player] and reviveSessions[player].connection then
+							reviveSessions[player].connection:Disconnect()
 						end
 
-						-- ReviveUI prompt was already sent earlier with task.defer
-						print("🚀 Revive prompt already sent to", player.Name)
-						-- promptReviveRemote:FireClient(player) -- Already done above
-
-						-- Set up response listener
+						-- Set up response listener FIRST
 						local responseConnection
 						local responseReceived = false
 
@@ -1328,6 +1357,7 @@ task.spawn(function()
 									player:SetAttribute("RevivePosition", nil)
 									player:SetAttribute("DeathPosition", nil)
 									player:SetAttribute("NoReviveEffects", false)
+									player:SetAttribute("DisableOrbCollection", false)
 
 									-- Mark as truly dead
 									deadPlayers[player] = true
@@ -1346,6 +1376,14 @@ task.spawn(function()
 									if CollisionCache and CollisionCache.playerSegments then
 										CollisionCache.playerSegments[player] = nil
 									end
+									
+									-- Destroy character to prevent magnet attraction
+									task.spawn(function()
+										task.wait(1) -- Wait for death animation
+										if character and character.Parent then
+											character:Destroy()
+										end
+									end)
 
 									task.spawn(function()
 										task.wait(5)

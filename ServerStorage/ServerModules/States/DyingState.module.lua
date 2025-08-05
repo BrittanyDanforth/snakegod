@@ -31,6 +31,81 @@ function DyingState:OnEnter(collisionData)
     -- - Spawning orbs
     -- - Death effects
     -- - Respawning
+    
+    -- Check if player has revive available
+    local player = self.controller.player
+    local hasRevive = player:GetAttribute("HasRevive") or false
+    local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
+    
+    if hasRevive or revivesAvailable > 0 then
+        -- Return a promise that will prompt for revive
+        return Promise.new(function(resolve, reject, onCancel)
+            -- Send revive prompt
+            local remotes = ReplicatedStorage:WaitForChild("Remotes")
+            local promptReviveRemote = remotes:FindFirstChild("PromptRevive")
+            
+            if not promptReviveRemote then
+                warn("[DyingState] PromptRevive remote not found")
+                return resolve("Spectating")
+            end
+            
+            -- Set attributes to prevent duplicate prompts
+            player:SetAttribute("RevivePromptActive", true)
+            player:SetAttribute("AwaitingReviveResponse", true)
+            
+            -- Send prompt to client
+            promptReviveRemote:FireClient(player)
+            
+            -- Set up response handler
+            local responseConnection
+            local responseReceived = false
+            
+            responseConnection = promptReviveRemote.OnServerEvent:Connect(function(plr, response)
+                if plr == player and not responseReceived then
+                    responseReceived = true
+                    responseConnection:Disconnect()
+                    
+                    player:SetAttribute("RevivePromptActive", false)
+                    player:SetAttribute("AwaitingReviveResponse", false)
+                    
+                    if response == "revive" then
+                        -- Transition to Reviving state
+                        player:SetAttribute("RevivingNow", true)
+                        player:SetAttribute("JustRevived", true)
+                        resolve("Reviving")
+                    else
+                        -- Transition to Spectating state
+                        resolve("Spectating")
+                    end
+                end
+            end)
+            
+            -- Timeout handler (10 seconds)
+            task.delay(10, function()
+                if responseConnection and responseConnection.Connected then
+                    responseConnection:Disconnect()
+                    player:SetAttribute("RevivePromptActive", false)
+                    player:SetAttribute("AwaitingReviveResponse", false)
+                    
+                    if not responseReceived then
+                        resolve("Spectating")
+                    end
+                end
+            end)
+            
+            -- Clean up on cancel
+            onCancel(function()
+                if responseConnection then
+                    responseConnection:Disconnect()
+                end
+                player:SetAttribute("RevivePromptActive", false) 
+                player:SetAttribute("AwaitingReviveResponse", false)
+            end)
+        end)
+    else
+        -- No revive available, go to spectating
+        return Promise.resolve("Spectating")
+    end
 end
 
 function DyingState:OnExecute(dt)

@@ -1642,7 +1642,7 @@ local function onCharacterAdded(character)
 				end
 
 				-- If player revived while we were waiting, we can exit early.
-				if LocalPlayer:GetAttribute("JustRevived") then
+				if LocalPlayer:GetAttribute("JustRevived") or LocalPlayer:GetAttribute("RevivingNow") then
 					isProcessingDeath = false
 					cleanupReviveAttributes()
 					return -- Exit the coroutine, no menu needed.
@@ -1655,7 +1655,10 @@ local function onCharacterAdded(character)
 			task.wait()
 
 			-- Final check: Are we still dead and did we NOT just revive?
-			if humanoid.Health <= 0 and not LocalPlayer:GetAttribute("JustRevived") then
+			local justRevived = LocalPlayer:GetAttribute("JustRevived")
+			local revivingNow = LocalPlayer:GetAttribute("RevivingNow")
+			
+			if humanoid.Health <= 0 and not justRevived and not revivingNow then
 				-- Double check we are still on the same character instance
 				if LocalPlayer.Character == character then
 					-- Update stats before showing menu
@@ -1671,10 +1674,17 @@ local function onCharacterAdded(character)
 						savePlayerStats()
 					end)
 
-					-- Show the main menu
-					createMenu(function()
-						requestRespawn()
-					end)
+					-- Final safeguard: Check one more time right before showing menu
+					task.wait(0.1) -- Small delay to catch any last-second attribute changes
+					
+					if not LocalPlayer:GetAttribute("JustRevived") and not LocalPlayer:GetAttribute("RevivingNow") then
+						-- Show the main menu
+						createMenu(function()
+							requestRespawn()
+						end)
+					else
+						print("SlitherIOMenu: Cancelled menu show - player is reviving")
+					end
 				end
 			end
 

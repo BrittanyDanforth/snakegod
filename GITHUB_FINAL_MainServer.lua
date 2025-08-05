@@ -43,6 +43,27 @@ end
 local function initializeSystems()
     warn("[MainServer] Initializing game systems...")
     
+    -- Create necessary RemoteEvents
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        remotes = Instance.new("Folder")
+        remotes.Name = "Remotes"
+        remotes.Parent = ReplicatedStorage
+    end
+    
+    -- Create VFX remotes if they don't exist
+    if not remotes:FindFirstChild("PlayerDeathEffect") then
+        local deathEffect = Instance.new("RemoteEvent")
+        deathEffect.Name = "PlayerDeathEffect"
+        deathEffect.Parent = remotes
+    end
+    
+    if not remotes:FindFirstChild("PlayerRevivedEffect") then
+        local reviveEffect = Instance.new("RemoteEvent")
+        reviveEffect.Name = "PlayerRevivedEffect"
+        reviveEffect.Parent = remotes
+    end
+    
     -- Wait for existing systems
     waitForSnakeSystem()
     
@@ -128,6 +149,13 @@ local function onPlayerAdded(player)
                     player:SetAttribute("IsDead", true)
                     player:SetAttribute("LastDeathTime", os.clock())
                     
+                    -- Clear magnet immediately to stop orb attraction
+                    player:SetAttribute("MagnetRange", 0)
+                    player:SetAttribute("TempMagnetRange", 0)
+                    player:SetAttribute("ActiveMagnet", false)
+                    player:SetAttribute("HasMagnet", false)
+                    player:SetAttribute("DisableOrbCollection", true)
+                    
                     -- Store killer info
                     if collisionData.killerPlayer then
                         player:SetAttribute("KilledBy", collisionData.killerPlayer.Name)
@@ -142,6 +170,8 @@ local function onPlayerAdded(player)
                     if humanoid and humanoid.Health > 0 then
                         humanoid.Health = 0
                     end
+                    
+                    -- The FSM DyingState will handle revive prompts
                     
                     -- The existing SnakeSystemIntegration will handle:
                     -- - Spawning orbs

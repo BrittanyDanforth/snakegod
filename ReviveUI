@@ -239,14 +239,37 @@ end
 -- Centralized function to send response to server
 local function handleResponse(response)
 	if isShowing then
+		print("ReviveUI: Sending response to server:", response)
+		
+		if response == "revive" then
+			-- Set reviving flag BEFORE closing prompt to prevent menu from showing
+			player:SetAttribute("RevivingNow", true)
+			player:SetAttribute("JustRevived", true)
+		end
+		
 		promptReviveRemote:FireServer(response)
+		
+		-- Small delay to ensure attributes propagate before closing
+		task.wait()
 		closeRevivePrompt()
 	end
 end
 
 -- Handle revive prompt from server
 promptReviveRemote.OnClientEvent:Connect(function()
-	if isShowing then return end
+	-- Prevent multiple prompts
+	if isShowing then 
+		print("ReviveUI: Already showing, ignoring duplicate prompt")
+		return 
+	end
+	
+	-- Check if we're already dead and in menu
+	local humanoid = player.Character and player.Character:FindFirstChild("Humanoid")
+	if not humanoid or humanoid.Health > 0 then
+		print("ReviveUI: Player not dead or no humanoid, ignoring prompt")
+		return
+	end
+	
 	isShowing = true
 	isPurchasing = false
 

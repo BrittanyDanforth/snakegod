@@ -41,6 +41,21 @@ end
 local function initializeSystems()
     warn("[MainServer] Initializing game systems...")
     
+    -- Ensure Remotes folder exists
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        remotes = Instance.new("Folder")
+        remotes.Name = "Remotes"
+        remotes.Parent = ReplicatedStorage
+    end
+    
+    -- Ensure PromptRevive remote exists
+    if not remotes:FindFirstChild("PromptRevive") then
+        local promptRevive = Instance.new("RemoteEvent")
+        promptRevive.Name = "PromptRevive"
+        promptRevive.Parent = remotes
+    end
+    
     -- Wait for existing systems
     waitForSnakeSystem()
     
@@ -139,13 +154,20 @@ local function onPlayerAdded(player)
                             if character then
                                 local humanoid = character:FindFirstChildOfClass("Humanoid")
                                 if humanoid and humanoid.Health > 0 then
-                                    -- Set killer info for the existing system
+                                                                -- Set killer info for the existing system
                                     if collisionData.killerPlayer then
                                         player:SetAttribute("KilledBy", collisionData.killerPlayer.Name)
                                     elseif collisionData.isAI then
                                         player:SetAttribute("KilledBy", "AI Snake")
                                     else
                                         player:SetAttribute("KilledBy", "Wall")
+                                    end
+                                    
+                                    -- Store death position for revive
+                                    local rootPart = character:FindFirstChild("HumanoidRootPart")
+                                    if rootPart then
+                                        local pos = rootPart.Position
+                                        player:SetAttribute("DeathPosition", tostring(pos.X) .. "," .. tostring(pos.Y) .. "," .. tostring(pos.Z))
                                     end
                                     
                                     -- Kill the humanoid - this triggers existing death handling
