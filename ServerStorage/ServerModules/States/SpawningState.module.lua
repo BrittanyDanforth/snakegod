@@ -20,7 +20,12 @@ function SpawningState:OnEnter(previousState)
     warn("[SpawningState] Entered spawning state for", self.controller.player.Name, "from state:", previousState)
     
     -- Check if this is a revive spawn
-    local isReviving = previousState == "Reviving"
+    local isReviving = previousState == "Reviving" or self.controller.fsm.previousStateForSpawning == "Reviving"
+    
+    -- Clear the flag
+    if self.controller.fsm.previousStateForSpawning then
+        self.controller.fsm.previousStateForSpawning = nil
+    end
     
     -- Reset player data for respawn
     self.controller.data.lastRespawnTime = os.clock()

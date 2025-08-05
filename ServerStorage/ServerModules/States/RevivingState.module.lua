@@ -70,18 +70,9 @@ function RevivingState:OnEnter()
             
             if not cancelled and not self.controller.isDestroyed then
                 -- Successfully revived
-                warn("[RevivingState] Countdown complete, reviving player")
-                
-                -- Make sure attributes are set
-                self.controller.player:SetAttribute("JustRevived", true)
-                self.controller.player:SetAttribute("RevivingNow", true)
-                
-                -- Force respawn immediately
-                task.spawn(function()
-                    warn("[RevivingState] Calling LoadCharacter for", self.controller.player.Name)
-                    self.controller.player:LoadCharacter()
-                end)
-                
+                warn("[RevivingState] Countdown complete, transitioning to Spawning")
+                -- Pass the current state name so SpawningState knows we're reviving
+                self.controller.fsm.previousStateForSpawning = "Reviving"
                 resolve("Spawning")
             else
                 -- Cancelled or destroyed

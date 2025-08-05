@@ -134,8 +134,10 @@ local function onPlayerAdded(player)
                             -- Death handling via new collision system
                     event:Connect(function(collisionData)
                         if eventName == "onFatalHit" then
-                            -- Check if already dying
-                            if controller.fsm:getCurrentState() == "Dying" then
+                            -- Check if already dying or in death process
+                            local currentState = controller.fsm:getCurrentState()
+                            if currentState == "Dying" or currentState == "Reviving" or currentState == "Spectating" then
+                                warn("[MainServer] Already in death process, ignoring collision")
                                 return
                             end
                             

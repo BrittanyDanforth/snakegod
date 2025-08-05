@@ -53,6 +53,7 @@ function FSM:changeState(newStateName, ...)
     
     -- Enter new state
     if self.currentState.OnEnter then
+        warn("[FSM] Entering state:", newStateName, "with args:", ...)
         local result = self.currentState:OnEnter(...)
         
         -- If OnEnter returns a Promise, track it
