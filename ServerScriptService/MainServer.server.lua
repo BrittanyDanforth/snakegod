@@ -115,50 +115,55 @@ local function onPlayerAdded(player)
     for eventName, event in pairs(controller.events) do
         -- Death handling via new collision system
         event:Connect(function(collisionData)
-            if eventName == "onFatalHit" then
-                warn("[MainServer] FATAL COLLISION for", player.Name, "Type:", 
-                    collisionData.isHeadCollision and "Head" or 
-                    collisionData.isWallCollision and "Wall" or 
-                    collisionData.isBodyCollision and "Body" or "Unknown")
-                
-                -- Get killer info
-                if collisionData.killerPlayer then
-                    warn("[MainServer] Killed by player:", collisionData.killerPlayer.Name)
-                elseif collisionData.isAI then
-                    warn("[MainServer] Killed by AI Snake")
-                end
-                
-                -- Kill the player's character to trigger the existing death system
-                local character = player.Character
-                if character then
-                    -- Set death attributes first
-                    player:SetAttribute("IsDead", true)
-                    player:SetAttribute("LastDeathTime", os.clock())
-                    
-                    -- Store killer info
-                    if collisionData.killerPlayer then
-                        player:SetAttribute("KilledBy", collisionData.killerPlayer.Name)
-                    elseif collisionData.isAI then
-                        player:SetAttribute("KilledBy", "AI Snake")
-                    else
-                        player:SetAttribute("KilledBy", "Wall")
-                    end
-                    
-                    -- Kill the humanoid to trigger existing death handling
-                    local humanoid = character:FindFirstChildOfClass("Humanoid")
-                    if humanoid and humanoid.Health > 0 then
-                        humanoid.Health = 0
-                    end
-                    
-                    -- The existing SnakeSystemIntegration will handle:
-                    -- - Spawning orbs
-                    -- - Removing the snake
-                    -- - Showing death UI
-                    -- - Etc.
-                end
-                
-                -- Update FSM state
-                controller.fsm:changeState("Dying", collisionData)
+                                    if eventName == "onFatalHit" then
+                            -- Prevent multiple death triggers
+                            if controller.fsm:getCurrentState() == "Dying" then
+                                return -- Already dying
+                            end
+                            
+                            warn("[MainServer] FATAL COLLISION for", player.Name, "Type:", 
+                                collisionData.isHeadCollision and "Head" or 
+                                collisionData.isWallCollision and "Wall" or 
+                                collisionData.isBodyCollision and "Body" or "Unknown")
+                            
+                            -- Get killer info
+                            if collisionData.killerPlayer then
+                                warn("[MainServer] Killed by player:", collisionData.killerPlayer.Name)
+                            elseif collisionData.isAI then
+                                warn("[MainServer] Killed by AI Snake")
+                            end
+                            
+                            -- Update FSM state FIRST to prevent multiple triggers
+                            controller.fsm:changeState("Dying", collisionData)
+                            
+                            -- Kill the player's character to trigger the existing death system
+                            local character = player.Character
+                            if character then
+                                -- Set death attributes first
+                                player:SetAttribute("IsDead", true)
+                                player:SetAttribute("LastDeathTime", os.clock())
+                                
+                                -- Store killer info
+                                if collisionData.killerPlayer then
+                                    player:SetAttribute("KilledBy", collisionData.killerPlayer.Name)
+                                elseif collisionData.isAI then
+                                    player:SetAttribute("KilledBy", "AI Snake")
+                                else
+                                    player:SetAttribute("KilledBy", "Wall")
+                                end
+                                
+                                -- Kill the humanoid to trigger existing death handling
+                                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                                if humanoid and humanoid.Health > 0 then
+                                    humanoid.Health = 0
+                                end
+                                
+                                -- The existing SnakeSystemIntegration will handle:
+                                -- - Spawning orbs
+                                -- - Removing the snake
+                                -- - Showing death UI
+                                -- - Etc.
+                            end
             elseif eventName == "onOrbCollision" then
                 -- Let existing orb system handle collection
                 -- The OrbSpawner system has all the logic
@@ -190,11 +195,19 @@ local function onPlayerAdded(player)
     
     -- Handle character removal
     player.CharacterRemoving:Connect(function()
+        warn("[MainServer] Character removing for", player.Name)
+        
+        -- Clear snake references
         if controller.snakeObject then
             controller.snakeObject = nil
         end
         if existingSnakes[player] then
             existingSnakes[player] = nil
+        end
+        
+        -- If dying, ensure we clean up properly
+        if controller.fsm:getCurrentState() == "Dying" then
+            controller:hideReviveUI()
         end
     end)
 end
@@ -227,11 +240,18 @@ local function setupRemoteHandlers()
             
             local controller = playerControllers[player]
             if controller then
-                -- The existing system will handle snake creation
-                -- We just update our state
-                controller.fsm:changeState("Spawning")
+                -- Clear any death state
+                local currentState = controller.fsm:getCurrentState()
+                warn("[MainServer] Respawn requested - current state:", currentState)
                 
-                -- Wait for snake to be created
+                -- Hide any active UI
+                controller:hideReviveUI()
+                
+                -- Reset collision state
+                controller.collisionState.canCollide = false
+                
+                -- Don't use Spawning state since it conflicts with SnakeAdapter
+                -- Just wait for the snake to be created by SnakeSystemIntegration
                 task.spawn(function()
                     task.wait(1)
                     local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
@@ -240,6 +260,12 @@ local function setupRemoteHandlers()
                         if head then
                             controller.snakeObject = snakeModel
                             existingSnakes[player] = snakeModel
+                            
+                            -- Apply spawn invincibility
+                            controller:setInvincible(3)
+                            
+                            -- Enable collisions and set to Alive
+                            controller.collisionState.canCollide = true
                             controller.fsm:changeState("Alive")
                             warn("[MainServer] Player respawned and set to Alive state")
                         end
