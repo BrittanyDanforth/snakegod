@@ -51,6 +51,14 @@ if not disableDeathEffectsRemote then
 	disableDeathEffectsRemote.Parent = ReplicatedStorage
 end
 
+-- Create remote for revive effect (for direct communication with GamePassHandler)
+local playerRevivedEffectRemote = remotes:FindFirstChild("PlayerRevivedEffect")
+if not playerRevivedEffectRemote then
+	playerRevivedEffectRemote = Instance.new("RemoteEvent")
+	playerRevivedEffectRemote.Name = "PlayerRevivedEffect"
+	playerRevivedEffectRemote.Parent = remotes
+end
+
 -- === PERFORMANCE CONSTANTS (unchanged) ===
 local SEGMENT_CHUNK_SIZE = 96
 local COLLISION_GRID_SIZE = 120
@@ -783,37 +791,61 @@ local function queuePlayerDeath(player)
 		
 		-- AGGRESSIVE: Clean up any effects that might spawn on death
 		task.spawn(function()
-			-- Check multiple times to catch any delayed effects
-			for i = 1, 5 do
+			-- Check 10 times instead of 5 to catch any delayed effects
+			for i = 1, 10 do
 				task.wait(0.1)
 				
 				-- Clean up around the player's position
-				if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-					local rootPos = player.Character.HumanoidRootPart.Position
-					local nearbyParts = workspace:GetPartBoundsInBox(
-						CFrame.new(rootPos),
-						Vector3.new(10, 10, 10)
-					)
+				if player.Character then
+					-- NEW: Check for ForceField objects specifically
+					local head = player.Character:FindFirstChild("Head")
+					if head then
+						local forcefield = head:FindFirstChildOfClass("ForceField")
+						if forcefield then
+							forcefield:Destroy()
+						end
+					end
 					
-					for _, part in ipairs(nearbyParts) do
-						if part.Parent ~= player.Character then
-							-- Destroy any small grey orbs or effects
-							if part:IsA("Part") and part.Size.Magnitude < 2 then
-								-- Check for grey colors
-								local h, s, v = part.Color:ToHSV()
-								if s < 0.2 and v > 0.3 and v < 0.8 then -- Grey color range
-									part:Destroy()
-								end
-								-- Also check for default Part color (medium stone grey)
-								if part.BrickColor == BrickColor.new("Medium stone grey") then
-									part:Destroy()
-								end
+					local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
+					if rootPart then
+						local forcefield = rootPart:FindFirstChildOfClass("ForceField")
+						if forcefield then
+							forcefield:Destroy()
+						end
+						
+						-- Check character for any ForceField
+						for _, child in ipairs(player.Character:GetChildren()) do
+							if child:IsA("ForceField") then
+								child:Destroy()
 							end
-							
-							-- Destroy any VFX markers or effect parts
-							if part.Name == "OrbVFXMarker" or part.Name:lower():match("effect") or 
-							   part.Name:lower():match("vfx") or part.Name:lower():match("particle") then
-								part:Destroy()
+						end
+						
+						local rootPos = rootPart.Position
+						local nearbyParts = workspace:GetPartBoundsInBox(
+							CFrame.new(rootPos),
+							Vector3.new(10, 10, 10)
+						)
+						
+						for _, part in ipairs(nearbyParts) do
+							if part.Parent ~= player.Character then
+								-- Destroy any small grey orbs or effects
+								if part:IsA("Part") and part.Size.Magnitude < 2 then
+									-- Check for grey colors
+									local h, s, v = part.Color:ToHSV()
+									if s < 0.2 and v > 0.3 and v < 0.8 then -- Grey color range
+										part:Destroy()
+									end
+									-- Also check for default Part color (medium stone grey)
+									if part.BrickColor == BrickColor.new("Medium stone grey") then
+										part:Destroy()
+									end
+								end
+								
+								-- Destroy any VFX markers or effect parts
+								if part.Name == "OrbVFXMarker" or part.Name:lower():match("effect") or 
+								   part.Name:lower():match("vfx") or part.Name:lower():match("particle") then
+									part:Destroy()
+								end
 							end
 						end
 					end
@@ -1176,7 +1208,7 @@ task.spawn(function()
 
 						-- Also check workspace for any stray effect parts
 						task.defer(function()
-							local searchRadius = 30 -- Increased search radius
+							local searchRadius = 50 -- Expanded search radius
 							local nearbyParts = workspace:GetPartBoundsInBox(
 								rootPart.CFrame,
 								Vector3.new(searchRadius, searchRadius, searchRadius)
@@ -1295,6 +1327,10 @@ task.spawn(function()
 
 									player:SetAttribute("RevivePosition", tostring(deathPosition))
 									player:SetAttribute("ReviveSnakeLength", snakeLength)
+									
+									-- DIRECT COMMUNICATION: Tell GamePassHandler about the revive
+									-- This replaces the unreliable JustRevived attribute check
+									playerRevivedEffectRemote:FireClient(player)
 
 									-- Clear dead state
 									resetPlayerCollisionState(player)
@@ -1321,13 +1357,9 @@ task.spawn(function()
 								else
 									-- Player declined revive
 									print("❌ Player declined revive")
-
-									-- Clear all revive-related attributes
-									player:SetAttribute("JustRevived", false)
-									player:SetAttribute("RevivingNow", false)
-									player:SetAttribute("RevivePosition", nil)
-									player:SetAttribute("DeathPosition", nil)
-									player:SetAttribute("NoReviveEffects", false)
+									
+									-- Use master reset function to ensure EVERYTHING is cleared
+									resetPlayerCollisionState(player)
 
 									-- Mark as truly dead
 									deadPlayers[player] = true
@@ -1376,15 +1408,9 @@ task.spawn(function()
 								end
 
 								reviveSessions[player] = nil
-
-								-- Clear attributes
-								player:SetAttribute("AwaitingReviveResponse", false)
-								player:SetAttribute("RevivePromptActive", false)
-								player:SetAttribute("JustRevived", false)
-								player:SetAttribute("RevivingNow", false)
-								player:SetAttribute("RevivePosition", nil)
-								player:SetAttribute("DeathPosition", nil)
-								player:SetAttribute("NoReviveEffects", false)
+								
+								-- Use master reset function to clean all state
+								resetPlayerCollisionState(player)
 
 								-- Reset state
 								local state = getCollisionState(player)

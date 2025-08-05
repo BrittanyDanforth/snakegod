@@ -295,13 +295,8 @@ Players.PlayerAdded:Connect(function(player)
 			end)
 		end
 
-		-- *** REVIVE EFFECT FIX ***
-		-- The code that created the unwanted orb was here. It has been removed.
-		if player:GetAttribute("JustRevived") then
-			print("✨ Player revived. Visual revive effect has been disabled by developer.")
-			-- The code that created the PointLight, Particles, and ForceField is now gone.
-			-- This will make the revive spawn look identical to a normal spawn.
-		end
+		-- *** REVIVE EFFECT REMOVED ***
+		-- JustRevived attribute check removed - now using direct remote communication
 	end)
 end)
 
@@ -555,6 +550,22 @@ toggleMagnetRemote.OnServerEvent:Connect(function(player, state)
 
 	-- Also set the active state
 	player:SetAttribute("MagnetActive", state)
+end)
+
+-- NEW: Direct communication for revive effects
+-- This replaces the unreliable JustRevived attribute checking
+local playerRevivedEffectRemote = remotes:WaitForChild("PlayerRevivedEffect")
+playerRevivedEffectRemote.OnServerEvent:Connect(function(player)
+	-- This code now ONLY runs when the server explicitly tells it to after a revive.
+	-- It is no longer tied to the chaotic CharacterAdded event.
+	
+	print("✨ Player revived. Effect trigger received by GamepassHandler.")
+	
+	-- Because you want the orb GONE, we will leave this function EMPTY.
+	-- By doing nothing here, you guarantee no revive effect will ever be created.
+	
+	-- IF you ever wanted to bring the effect back, you would put the code to
+	-- create the PointLight, Particles, or ForceField right here.
 end)
 
 print("GamepassHandler loaded successfully with boost system!")
