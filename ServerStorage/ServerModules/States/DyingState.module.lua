@@ -101,6 +101,8 @@ function DyingState:OnEnter(collisionData)
                             resolve("Reviving")
                         else
                             warn("[DyingState] Player declined revive")
+                            -- Kill the humanoid since they're not reviving
+                            self:_killPlayer()
                             resolve("Spectating")
                         end
                     end
@@ -117,6 +119,8 @@ function DyingState:OnEnter(collisionData)
                         self.controller.player:SetAttribute("AwaitingReviveResponse", false)
                         
                         warn("[DyingState] Revive prompt timed out")
+                        -- Kill the humanoid since they didn't respond
+                        self:_killPlayer()
                         resolve("Spectating")
                     end
                 end)
@@ -140,6 +144,8 @@ function DyingState:OnEnter(collisionData)
         else
             -- No revives available, go straight to spectating
             warn("[DyingState] No revive tokens available")
+            -- Kill the humanoid since no revives
+            self:_killPlayer()
             resolve("Spectating")
         end
     end)
@@ -197,6 +203,18 @@ function DyingState:_freezeCamera()
     
     if freezeCamera then
         freezeCamera:FireClient(self.controller.player, true)
+    end
+end
+
+function DyingState:_killPlayer()
+    -- Kill the humanoid to trigger death systems
+    local character = self.controller.player.Character
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.Health > 0 then
+            warn("[DyingState] Killing player humanoid")
+            humanoid.Health = 0
+        end
     end
 end
 

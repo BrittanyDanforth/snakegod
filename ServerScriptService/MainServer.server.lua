@@ -151,27 +151,23 @@ local function onPlayerAdded(player)
                                 warn("[MainServer] Killed by AI Snake")
                             end
                             
-                            -- Change to Dying state immediately
+                            -- Store killer info first
+                            if collisionData.killerPlayer then
+                                player:SetAttribute("KilledBy", collisionData.killerPlayer.Name)
+                            elseif collisionData.isAI then
+                                player:SetAttribute("KilledBy", "AI Snake")
+                            else
+                                player:SetAttribute("KilledBy", "Wall")
+                            end
+                            
+                            -- Change to Dying state - this will handle revive prompt
                             controller.fsm:changeState("Dying", collisionData)
                             
-                            -- Then kill the player to trigger existing systems
-                            local character = player.Character
-                            if character then
-                                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                                if humanoid and humanoid.Health > 0 then
-                                    -- Set killer info for the existing system
-                                    if collisionData.killerPlayer then
-                                        player:SetAttribute("KilledBy", collisionData.killerPlayer.Name)
-                                    elseif collisionData.isAI then
-                                        player:SetAttribute("KilledBy", "AI Snake")
-                                    else
-                                        player:SetAttribute("KilledBy", "Wall")
-                                    end
-                                    
-                                    -- Kill the humanoid - this triggers existing death handling
-                                    humanoid.Health = 0
-                                end
-                            end
+                            -- DO NOT kill the humanoid here - let DyingState handle it
+                            -- The DyingState will either:
+                            -- 1. Show revive prompt and wait for response
+                            -- 2. Transition to Spectating if no revives
+                            -- After that, we can kill the humanoid
                         elseif eventName == "onOrbCollision" then
                             -- Let existing orb system handle collection
                             -- The OrbSpawner system has all the logic
