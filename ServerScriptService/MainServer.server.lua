@@ -331,6 +331,13 @@ local function onPlayerAdded(player)
     player.CharacterRemoving:Connect(function()
         warn("[MainServer] Character removing for", player.Name)
         
+        -- Clean up revive-related attributes to prevent UI issues
+        player:SetAttribute("RevivePromptActive", nil)
+        player:SetAttribute("AwaitingReviveResponse", nil)
+        player:SetAttribute("IsReviving", nil)
+        player:SetAttribute("RevivingNow", nil)
+        player:SetAttribute("JustRevived", nil)
+        
         -- Clear snake references
         if controller.snakeObject then
             controller.snakeObject = nil

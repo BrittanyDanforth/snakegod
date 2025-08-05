@@ -110,15 +110,56 @@ SlitherIOMenu automatically hides (via CharacterAdded)
 
 ## Testing Checklist
 
-- [ ] Player death triggers Dying state
-- [ ] Revive prompt appears if tokens available
-- [ ] Accepting revive transitions to Reviving state
+- [ ] Player dies when colliding with AI snake head
+- [ ] Revive prompt appears if player has revive tokens
 - [ ] Declining revive transitions to Spectating state
-- [ ] Revive timeout transitions to Spectating state
-- [ ] Death menu appears when entering Spectating state
-- [ ] Stats are correctly passed to death menu
-- [ ] Respawn button triggers proper state transition
-- [ ] Menu hides when character spawns
+- [ ] Accepting revive shows countdown UI
+- [ ] Player respawns at death location with same length
+- [ ] Death screen only appears after declining revive or no tokens
+- [ ] Stats are properly updated and saved
+- [ ] Multiple rapid deaths are handled gracefully
+- [ ] Disconnecting during death flow doesn't cause errors
+
+## Recent Bug Fixes (Latest Update)
+
+### 1. Fixed Collision Detection Not Working
+**Problem**: `ensureFSMStates` method was causing errors, preventing FSM initialization.
+**Solution**: 
+- Removed direct `ensureFSMStates` call in MainServer
+- Added fallback logic to initialize FSM if needed
+- Added defensive checks in CollisionModule to assume "Alive" state when FSM state is unknown but snake exists
+
+### 2. Fixed Duplicate Revive Prompts
+**Problem**: Revive UI would sometimes show multiple times while alive.
+**Solution**:
+- Added duplicate check in DyingState before sending revive prompt
+- Added cleanup of revive attributes when character is removed
+- Prevented sending prompt if one is already active
+
+### 3. Fixed Death Menu Flashing
+**Problem**: Death menu would briefly flash when player was alive.
+**Solution**:
+- Added flag in SpectatingState to only send death screen once
+- Added small delay before sending death screen to ensure states are set
+- Enhanced client-side checks to verify player is truly dead
+
+### 4. Fixed Revive Sometimes Not Working
+**Problem**: Revive would occasionally fail to complete.
+**Solution**:
+- Added player existence check in RevivingState before completing revive
+- Added error handling for LoadCharacter failures in SpawningState
+- Added better logging for debugging revive failures
+
+### 5. Added Attribute Cleanup
+**Location**: MainServer character removal handler
+**Attributes Cleaned**:
+- RevivePromptActive
+- AwaitingReviveResponse
+- IsReviving
+- RevivingNow
+- JustRevived
+
+This prevents UI issues when respawning or during character transitions.
 
 ## Common Issues & Solutions
 

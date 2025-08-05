@@ -110,6 +110,13 @@ function DyingState:OnEnter(collisionData)
             end
             
             if promptRevive then
+                -- Check if we haven't already sent a prompt
+                if self.controller.player:GetAttribute("RevivePromptActive") then
+                    warn("[DyingState] Revive prompt already active, not sending duplicate")
+                    resolve("Spectating")
+                    return
+                end
+                
                 -- Set attributes for revive system
                 self.controller.player:SetAttribute("RevivePromptActive", true)
                 self.controller.player:SetAttribute("AwaitingReviveResponse", true)

@@ -63,7 +63,14 @@ function SpawningState:OnEnter(previousState)
     if isReviving then
         warn("[SpawningState] Triggering LoadCharacter for revive")
         -- LoadCharacter will trigger CharacterAdded, which SnakeSystemIntegration listens to
-        self.controller.player:LoadCharacter()
+        local success, err = pcall(function()
+            self.controller.player:LoadCharacter()
+        end)
+        
+        if not success then
+            warn("[SpawningState] Failed to LoadCharacter:", err)
+            return resolve("Spectating")
+        end
         
         -- Wait for character and snake to be created
         local maxWaitTime = 5

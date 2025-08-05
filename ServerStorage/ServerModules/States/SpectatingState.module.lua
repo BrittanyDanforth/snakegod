@@ -14,6 +14,7 @@ function SpectatingState.new(controller)
     self.controller = controller
     self.name = "Spectating"
     self.spectateIndex = 1
+    self.deathScreenSent = false
     return self
 end
 
@@ -33,6 +34,9 @@ function SpectatingState:OnEnter()
     end
     
     -- This state is entered when player is truly dead (no revives or declined)
+    -- Wait a moment to ensure all states are properly set
+    task.wait(0.1)
+    
     -- Now we tell the client to show the death screen
     self:_sendDeathScreenCommand()
     
@@ -54,6 +58,9 @@ end
 function SpectatingState:OnExit()
     -- Clear spectating attributes
     self.controller.player:SetAttribute("IsSpectating", false)
+    
+    -- Reset flags
+    self.deathScreenSent = false
     
     -- Reset camera to player
     self:_resetCamera()
@@ -143,6 +150,12 @@ end
 
 -- Send death screen command to client
 function SpectatingState:_sendDeathScreenCommand()
+    -- Only send death screen once per spectating session
+    if self.deathScreenSent then
+        warn("[SpectatingState] Death screen already sent, skipping")
+        return
+    end
+    
     local remotes = ReplicatedStorage:WaitForChild("Remotes")
     local showDeathScreenRemote = remotes:FindFirstChild("ShowDeathScreen")
     
@@ -166,6 +179,8 @@ function SpectatingState:_sendDeathScreenCommand()
             stats = stats,
             timestamp = os.time()
         })
+        self.deathScreenSent = true
+        warn("[SpectatingState] Death screen command sent")
     else
         warn("[SpectatingState] ShowDeathScreen remote not found")
     end

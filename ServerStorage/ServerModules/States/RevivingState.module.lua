@@ -69,6 +69,13 @@ function RevivingState:OnEnter()
             end
             
             if not cancelled and not self.controller.isDestroyed then
+                -- Check if player still exists
+                if not self.controller.player or not self.controller.player.Parent then
+                    warn("[RevivingState] Player no longer exists, cannot complete revive")
+                    resolve("Spectating")
+                    return
+                end
+                
                 -- Successfully revived
                 warn("[RevivingState] Countdown complete, transitioning to Spawning")
                 -- Pass the current state name so SpawningState knows we're reviving
@@ -76,6 +83,7 @@ function RevivingState:OnEnter()
                 resolve("Spawning")
             else
                 -- Cancelled or destroyed
+                warn("[RevivingState] Revive cancelled or controller destroyed")
                 resolve("Spectating")
             end
         end)
