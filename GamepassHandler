@@ -553,7 +553,22 @@ toggleMagnetRemote.OnServerEvent:Connect(function(player, state)
 end)
 
 -- NEW: Direct communication for revive effects
--- Note: This RemoteEvent is fired by SnakeCollisionHandler to the client
--- Any revival effects should be handled in a LocalScript, not here
+-- Listen for the BindableEvent from SnakeCollisionHandler
+local serverEvents = ReplicatedStorage:FindFirstChild("ServerEvents") or Instance.new("Folder")
+serverEvents.Name = "ServerEvents"
+serverEvents.Parent = ReplicatedStorage
+
+local playerRevivedEffectBindable = serverEvents:WaitForChild("PlayerRevivedEffect")
+playerRevivedEffectBindable.Event:Connect(function(player)
+	-- This code now runs when the server tells us a player was revived
+	print("✨ Player revived. Effect trigger received by GamepassHandler for:", player.Name)
+	
+	-- Since you want the orb GONE, we leave this function EMPTY.
+	-- By doing nothing here, you guarantee no revive effect will ever be created.
+	
+	-- IF you ever wanted to bring the effect back, you would put the code to
+	-- create the PointLight, Particles, or ForceField right here.
+	-- You would need to use a RemoteEvent to tell the client to show effects.
+end)
 
 print("GamepassHandler loaded successfully with boost system!")
