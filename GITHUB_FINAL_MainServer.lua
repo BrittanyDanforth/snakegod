@@ -128,6 +128,13 @@ local function onPlayerAdded(player)
                     player:SetAttribute("IsDead", true)
                     player:SetAttribute("LastDeathTime", os.clock())
                     
+                    -- Clear magnet immediately to stop orb attraction
+                    player:SetAttribute("MagnetRange", 0)
+                    player:SetAttribute("TempMagnetRange", 0)
+                    player:SetAttribute("ActiveMagnet", false)
+                    player:SetAttribute("HasMagnet", false)
+                    player:SetAttribute("DisableOrbCollection", true)
+                    
                     -- Store killer info
                     if collisionData.killerPlayer then
                         player:SetAttribute("KilledBy", collisionData.killerPlayer.Name)
