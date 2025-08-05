@@ -246,7 +246,19 @@ end
 
 -- Handle revive prompt from server
 promptReviveRemote.OnClientEvent:Connect(function()
-	if isShowing then return end
+	-- Prevent multiple prompts
+	if isShowing then 
+		print("ReviveUI: Already showing, ignoring duplicate prompt")
+		return 
+	end
+	
+	-- Check if we're already dead and in menu
+	local humanoid = player.Character and player.Character:FindFirstChild("Humanoid")
+	if not humanoid or humanoid.Health > 0 then
+		print("ReviveUI: Player not dead or no humanoid, ignoring prompt")
+		return
+	end
+	
 	isShowing = true
 	isPurchasing = false
 

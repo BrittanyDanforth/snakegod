@@ -156,6 +156,29 @@ local function onCharacterAdded(character)
 	-- Check if player is reviving and has a stored snake length BEFORE any delays
 	local reviveSnakeLength = player:GetAttribute("ReviveSnakeLength")
 	local isReviving = player:GetAttribute("RevivingNow") or player:GetAttribute("JustRevived")
+	
+	-- Check for revive position
+	local revivePositionStr = player:GetAttribute("RevivePosition")
+	if revivePositionStr and isReviving then
+		-- Parse the position string
+		local success, revivePos = pcall(function()
+			local parts = string.split(revivePositionStr, ",")
+			if #parts == 3 then
+				return Vector3.new(tonumber(parts[1]), tonumber(parts[2]), tonumber(parts[3]))
+			else
+				-- Try direct conversion for Vector3 string format
+				return Vector3.new(string.match(revivePositionStr, "([%d.-]+),%s*([%d.-]+),%s*([%d.-]+)"))
+			end
+		end)
+		
+		if success and revivePos then
+			rootPart.CFrame = CFrame.new(revivePos)
+			print("🎯 Restored revive position:", revivePos)
+			player:SetAttribute("RevivePosition", nil) -- Clear after use
+		else
+			warn("⚠️ Failed to parse revive position:", revivePositionStr)
+		end
+	end
 
 	if reviveSnakeLength and reviveSnakeLength > 0 then
 		print("🔄 Found revive snake length:", reviveSnakeLength, "for", player.Name)

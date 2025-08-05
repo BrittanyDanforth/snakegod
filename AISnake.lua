@@ -1878,11 +1878,12 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		self:updateBrain()
 
 		-- Fade in segments
-		for i, segment in ipairs(self.Segments) do
-			if segment and segment.Parent then
-				task.spawn(function()
-					local fadeSteps = 10
-					for step = 1, fadeSteps do
+		if self.Segments then
+			for i, segment in ipairs(self.Segments) do
+				if segment and segment.Parent then
+					task.spawn(function()
+						local fadeSteps = 10
+						for step = 1, fadeSteps do
 						if segment and segment.Parent then
 							segment.Transparency = 1 - (step / fadeSteps)
 						end
