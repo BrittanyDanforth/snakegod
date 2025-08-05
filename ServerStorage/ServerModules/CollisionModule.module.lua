@@ -78,8 +78,23 @@ function CollisionModule:update(dt)
         end
         
         -- Only check alive players who can collide
-        local currentState = controller.fsm:getCurrentState()
-        local canCollide = controller:canCollide()
+        local currentState = "Unknown"
+        local canCollide = false
+        
+        -- Safely get current state
+        pcall(function()
+            if controller.fsm and controller.fsm.getCurrentState then
+                currentState = controller.fsm:getCurrentState()
+            end
+            canCollide = controller:canCollide()
+        end)
+        
+        -- Fallback: if we can't get state but player has a snake, assume they're alive
+        if currentState == "Unknown" and controller.snakeObject then
+            warn("[CollisionModule] FSM state unknown for", player.Name, "- assuming Alive for collision check")
+            currentState = "Alive"
+            canCollide = true
+        end
         
         if currentState == "Alive" and canCollide then
             self:_checkPlayerCollisions(controller)
@@ -94,6 +109,9 @@ function CollisionModule:_checkPlayerCollisions(controller)
         warn("[CollisionModule] No head found for", controller.player.Name)
         return 
     end
+    
+    warn("[CollisionModule] Checking collisions for", controller.player.Name, "at position", head.Position)
+    warn("[CollisionModule] Snake cache has", #self.snakeCache, "snakes")
     
     -- Check for orb collection
     self:_checkOrbCollection(controller, head)

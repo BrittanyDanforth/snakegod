@@ -128,8 +128,37 @@ function PlayerController:_setupStates()
     
     -- Connect collision events to alive state
     self.events.onFatalHit:Connect(function(collisionData)
-        if self.fsm:getCurrentState() == "Alive" then
-            self.fsm:changeState("Dying", collisionData)
+        warn("[PlayerController] onFatalHit triggered for", self.player.Name)
+        
+        -- Try to get current state safely
+        local currentState = "Unknown"
+        pcall(function()
+            currentState = self.fsm:getCurrentState()
+        end)
+        
+        warn("[PlayerController] Current state:", currentState)
+        
+        -- If we're alive or state is unknown but we have a snake, process the death
+        if currentState == "Alive" or (currentState == "Unknown" and self.snakeObject) then
+            warn("[PlayerController] Processing fatal collision - changing to Dying state")
+            
+            local success, err = pcall(function()
+                self.fsm:changeState("Dying", collisionData)
+            end)
+            
+            if not success then
+                warn("[PlayerController] Failed to change to Dying state:", err)
+                -- Fallback: directly kill the humanoid
+                if self.player.Character then
+                    local humanoid = self.player.Character:FindFirstChildOfClass("Humanoid")
+                    if humanoid then
+                        warn("[PlayerController] Fallback: killing humanoid directly")
+                        humanoid.Health = 0
+                    end
+                end
+            end
+        else
+            warn("[PlayerController] Ignoring collision - not in Alive state")
         end
     end)
 end
