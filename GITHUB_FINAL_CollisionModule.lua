@@ -1,6 +1,8 @@
 --[[
-    CollisionModule.module - FIXED VERSION for actual game structure
-    Works with SnakeFolder for players and AISnakes folder for AI
+    CollisionModule.module - FINAL FIXED VERSION for actual game structure
+    Works with SnakeFolder for players and AISnakeModel_ for AI
+    
+    GITHUB READY VERSION - All Fixes Applied Including onOrbCollision
 ]]
 
 local RunService = game:GetService("RunService")
@@ -103,7 +105,7 @@ function CollisionModule:_checkOrbCollection(controller, head)
     
     for _, orb in pairs(orbFolder:GetChildren()) do
         if orb:IsA("BasePart") and (orb.Position - head.Position).Magnitude <= COLLISION_CONFIG.ORB_COLLECTION_RADIUS then
-            -- Fire orb collection event
+            -- Fire orb collection event (FIXED: using correct event name)
             controller.events.onOrbCollision:Fire(orb)
             
             -- Let the existing system handle the orb collection

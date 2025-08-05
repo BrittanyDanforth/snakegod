@@ -1,6 +1,8 @@
 --[[
-    MainServer.server.lua - FIXED VERSION
+    MainServer.server.lua - FINAL FIXED VERSION
     Works alongside SnakeSystemIntegration
+    
+    GITHUB READY VERSION - All Fixes Applied
 ]]
 
 local Players = game:GetService("Players")
