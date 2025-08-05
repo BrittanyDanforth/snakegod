@@ -239,7 +239,18 @@ end
 -- Centralized function to send response to server
 local function handleResponse(response)
 	if isShowing then
+		print("ReviveUI: Sending response to server:", response)
+		
+		if response == "revive" then
+			-- Set reviving flag BEFORE closing prompt to prevent menu from showing
+			player:SetAttribute("RevivingNow", true)
+			player:SetAttribute("JustRevived", true)
+		end
+		
 		promptReviveRemote:FireServer(response)
+		
+		-- Small delay to ensure attributes propagate before closing
+		task.wait()
 		closeRevivePrompt()
 	end
 end
