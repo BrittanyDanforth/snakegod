@@ -18,6 +18,8 @@ local Config = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForCh
 
 -- Player controller storage
 local playerControllers = {}
+-- Expose for debugging
+_G.PlayerControllers = playerControllers
 
 -- Collision system
 local collisionSystem = nil
@@ -102,6 +104,9 @@ local function onPlayerAdded(player)
                 currentController.snakeModel = snakeModel  -- Set both for compatibility
                 existingSnakes[player] = snakeModel
 
+                -- Ensure FSM states are initialized
+                currentController:ensureFSMStates()
+                
                 -- Safely set initial state to Alive when snake is created
                 local success, err = pcall(function()
                     currentController.fsm:changeState("Alive")

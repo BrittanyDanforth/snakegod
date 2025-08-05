@@ -348,12 +348,20 @@ function PlayerController:destroy()
     -- Cleanup all connections and tasks
     self.maid:Destroy()
     
-    -- Clear references
-    self.player = nil
-    self.snakeObject = nil
-    self.snakeModel = nil
-    self.data = nil
-    self.events = nil
+    -- Clear all events
+    for _, event in pairs(self.events) do
+        if event.Destroy then
+            event:Destroy()
+        end
+    end
+end
+
+-- Helper method to check if FSM is properly initialized
+function PlayerController:ensureFSMStates()
+    if not self.fsm.states or not next(self.fsm.states) then
+        warn("[PlayerController] FSM states not initialized, setting up now")
+        self:_setupStates()
+    end
 end
 
 return PlayerController
