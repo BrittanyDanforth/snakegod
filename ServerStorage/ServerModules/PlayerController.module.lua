@@ -202,9 +202,53 @@ function PlayerController:setSnakeObject(snakeObject)
 end
 
 function PlayerController:getSnakeHead()
-    if self.snakeObject and self.snakeObject.model then
-        return self.snakeObject.model:FindFirstChild("Head")
+    -- Try multiple methods to find the snake head
+    
+    -- Method 1: Check if we have a direct snake object reference
+    if self.snakeObject then
+        -- If it's a model
+        if self.snakeObject:IsA("Model") then
+            local head = self.snakeObject:FindFirstChild("Segment0_Head") or
+                        self.snakeObject:FindFirstChild("1") or
+                        self.snakeObject:FindFirstChild("Head")
+            if head then return head end
+        end
+        
+        -- If snakeObject has a model property
+        if self.snakeObject.model then
+            local head = self.snakeObject.model:FindFirstChild("Segment0_Head") or
+                        self.snakeObject.model:FindFirstChild("1") or
+                        self.snakeObject.model:FindFirstChild("Head")
+            if head then return head end
+        end
     end
+    
+    -- Method 2: Look for Snake_[PlayerName] in workspace
+    local snakeModel = workspace:FindFirstChild("Snake_" .. self.player.Name)
+    if snakeModel then
+        local head = snakeModel:FindFirstChild("Segment0_Head") or
+                    snakeModel:FindFirstChild("1") or
+                    snakeModel:FindFirstChild("Head")
+        if head then return head end
+    end
+    
+    -- Method 3: Check SnakeFolder
+    local snakeFolder = workspace:FindFirstChild("SnakeFolder")
+    if snakeFolder then
+        local playerSnake = snakeFolder:FindFirstChild(self.player.Name)
+        if playerSnake then
+            local head = playerSnake:FindFirstChild("Segment0_Head") or
+                        playerSnake:FindFirstChild("1") or
+                        playerSnake:FindFirstChild("Head")
+            if head then return head end
+        end
+    end
+    
+    -- Method 4: Fallback to HumanoidRootPart
+    if self.player.Character then
+        return self.player.Character:FindFirstChild("HumanoidRootPart")
+    end
+    
     return nil
 end
 

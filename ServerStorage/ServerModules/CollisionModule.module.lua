@@ -207,23 +207,42 @@ function CollisionModule:_updateCaches()
     -- Update snake cache - find all snakes
     self.snakeCache = {}
     
-    -- Find player snakes in SnakeFolder
+    -- Find player snakes - try multiple methods
+    -- Method 1: Look in SnakeFolder
     local snakeFolder = workspace:FindFirstChild("SnakeFolder")
     if snakeFolder then
         for _, snakeModel in pairs(snakeFolder:GetChildren()) do
             if snakeModel:IsA("Model") then
-                -- Player snakes have numbered segments: "1", "2", "3", etc.
-                local head = snakeModel:FindFirstChild("1")
+                -- Try different head naming conventions
+                local head = snakeModel:FindFirstChild("1") or 
+                            snakeModel:FindFirstChild("Segment0_Head") or
+                            snakeModel:FindFirstChild("Head")
+                            
                 if head and head:IsA("BasePart") then
                     local segments = {}
+                    
+                    -- First add the head
+                    table.insert(segments, head)
+                    
+                    -- Try numbered segments starting from 1
                     local i = 1
                     while true do
                         local segment = snakeModel:FindFirstChild(tostring(i))
-                        if segment and segment:IsA("BasePart") then
+                        if segment and segment:IsA("BasePart") and segment ~= head then
                             table.insert(segments, segment)
                             i = i + 1
                         else
                             break
+                        end
+                    end
+                    
+                    -- If no numbered segments, try Segment[N] pattern
+                    if #segments == 1 then
+                        for j = 1, 1000 do
+                            local segment = snakeModel:FindFirstChild("Segment" .. j)
+                            if segment and segment:IsA("BasePart") then
+                                table.insert(segments, segment)
+                            end
                         end
                     end
                     
@@ -234,12 +253,65 @@ function CollisionModule:_updateCaches()
                         ownerPlayer = Players:FindFirstChild(playerName)
                     end
                     
+                    warn("[CollisionModule] Found player snake:", snakeModel.Name, "with", #segments, "segments")
+                    
                     table.insert(self.snakeCache, {
                         Head = head,
                         Model = snakeModel,
                         Segments = segments,
                         IsAI = false,
                         Player = ownerPlayer
+                    })
+                end
+            end
+        end
+    end
+    
+    -- Method 2: Look for Snake_[PlayerName] pattern in workspace
+    for _, player in pairs(Players:GetPlayers()) do
+        local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
+        if snakeModel and snakeModel:IsA("Model") then
+            -- Check if we already added this snake
+            local alreadyAdded = false
+            for _, cached in ipairs(self.snakeCache) do
+                if cached.Model == snakeModel then
+                    alreadyAdded = true
+                    break
+                end
+            end
+            
+            if not alreadyAdded then
+                local head = snakeModel:FindFirstChild("Segment0_Head") or
+                            snakeModel:FindFirstChild("1") or
+                            snakeModel:FindFirstChild("Head")
+                            
+                if head and head:IsA("BasePart") then
+                    local segments = {}
+                    table.insert(segments, head)
+                    
+                    -- Collect all segments
+                    for _, child in pairs(snakeModel:GetChildren()) do
+                        if child:IsA("BasePart") and child ~= head and 
+                           (child.Name:match("Segment") or child.Name:match("^%d+$")) then
+                            table.insert(segments, child)
+                        end
+                    end
+                    
+                    -- Sort segments by name if they're numbered
+                    table.sort(segments, function(a, b)
+                        local aNum = tonumber(a.Name) or tonumber(a.Name:match("%d+")) or 999
+                        local bNum = tonumber(b.Name) or tonumber(b.Name:match("%d+")) or 999
+                        return aNum < bNum
+                    end)
+                    
+                    warn("[CollisionModule] Found player snake via Snake_ pattern:", snakeModel.Name, "with", #segments, "segments for", player.Name)
+                    
+                    table.insert(self.snakeCache, {
+                        Head = head,
+                        Model = snakeModel,
+                        Segments = segments,
+                        IsAI = false,
+                        Player = player
                     })
                 end
             end

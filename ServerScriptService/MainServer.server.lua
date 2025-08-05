@@ -76,11 +76,12 @@ local function onPlayerAdded(player)
     
     -- Listen for snake creation from SnakeSystemIntegration
     local function checkForSnake()
+        -- Method 1: Check SnakeFolder
         local snakeFolder = workspace:FindFirstChild("SnakeFolder")
         if snakeFolder then
             local playerSnake = snakeFolder:FindFirstChild(player.Name)
             if playerSnake then
-                warn("[MainServer] Found snake from SnakeSystemIntegration for", player.Name)
+                warn("[MainServer] Found snake in SnakeFolder for", player.Name)
                 controller.snakeObject = playerSnake
                 existingSnakes[player] = playerSnake
                 
@@ -88,8 +89,24 @@ local function onPlayerAdded(player)
                 if controller.fsm:getCurrentState() ~= "Alive" then
                     controller.fsm:changeState("Alive")
                 end
+                return true
             end
         end
+        
+        -- Method 2: Check for Snake_[PlayerName] pattern
+        local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
+        if snakeModel and snakeModel:IsA("Model") then
+            warn("[MainServer] Found snake via Snake_ pattern for", player.Name)
+            controller.snakeObject = snakeModel
+            existingSnakes[player] = snakeModel
+            
+            if controller.fsm:getCurrentState() ~= "Alive" then
+                controller.fsm:changeState("Alive")
+            end
+            return true
+        end
+        
+        return false
     end
     
     -- Check periodically for snake creation
