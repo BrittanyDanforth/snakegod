@@ -78,16 +78,24 @@ function CollisionModule:update(dt)
         end
         
         -- Only check alive players who can collide
-        if controller.fsm:getCurrentState() == "Alive" and controller:canCollide() then
+        local currentState = controller.fsm:getCurrentState()
+        local canCollide = controller:canCollide()
+        
+        if currentState == "Alive" and canCollide then
             self:_checkPlayerCollisions(controller)
             checksThisFrame = checksThisFrame + 1
+        elseif frameCount % 60 == 0 then -- Log every second
+            warn("[CollisionModule] Skipping collision check for", player.Name, "- State:", currentState, "CanCollide:", canCollide, "Invincible:", controller:isInvincible())
         end
     end
 end
 
 function CollisionModule:_checkPlayerCollisions(controller)
     local head = controller:getSnakeHead()
-    if not head then return end
+    if not head then 
+        warn("[CollisionModule] No head found for", controller.player.Name)
+        return 
+    end
     
     -- Check for orb collection
     self:_checkOrbCollection(controller, head)

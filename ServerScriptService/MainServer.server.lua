@@ -87,8 +87,12 @@ local function onPlayerAdded(player)
                 existingSnakes[player] = snakeModel
                 
                 -- Set initial state to Alive when snake is created
-                if controller.fsm:getCurrentState() ~= "Alive" then
+                local currentState = controller.fsm:getCurrentState()
+                warn("[MainServer] Current state for", player.Name, "is:", currentState or "nil")
+                if currentState ~= "Alive" then
+                    warn("[MainServer] Changing state to Alive for", player.Name)
                     controller.fsm:changeState("Alive")
+                    warn("[MainServer] State changed to:", controller.fsm:getCurrentState())
                 end
                 return true
             end
