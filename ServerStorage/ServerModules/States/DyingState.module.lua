@@ -19,61 +19,18 @@ function DyingState.new(controller)
 end
 
 function DyingState:OnEnter(collisionData)
-    -- This returns a Promise that resolves to the next state
-    return Promise.new(function(resolve, reject, onCancel)
-        -- Check if controller is still valid
-        if self.controller.isDestroyed then
-            return reject("Controller destroyed")
-        end
-        
-        -- Update death statistics
-        self.controller.data.deathCount = self.controller.data.deathCount + 1
-        self.controller.data.lastDeathTime = os.clock()
-        
-        -- Set death attributes
-        self.controller.player:SetAttribute("IsDead", true)
-        
-        -- Disable collisions immediately
-        self.controller.collisionState.canCollide = false
-        
-        -- Step 1: Play death effects (non-yielding)
-        self.controller:playDeathEffects(collisionData)
-        
-        -- Spawn death orbs if needed
-        if collisionData and not collisionData.preventOrbs then
-            self:_spawnDeathOrbs()
-        end
-        
-        -- Freeze camera
-        self:_freezeCamera()
-        
-        -- Step 2: Wait for death animation
-        local deathAnimPromise = Promise.delay(2) -- 2 second death animation
-        
-        deathAnimPromise:andThen(function()
-            -- Check if we should offer revive
-            if self.controller:hasReviveToken() and not self.controller.isDestroyed then
-                -- Step 3: Request revive from client
-                return self.controller:requestReviveFromClient()
-            else
-                -- No revive available, go straight to spectating
-                return Promise.resolve("Spectating")
-            end
-        end):andThen(function(nextState)
-            -- Resolve the main promise with the next state
-            resolve(nextState)
-        end):catch(function(err)
-            warn("Death sequence error:", err)
-            resolve("Spectating") -- Default to spectating on error
-        end)
-        
-        -- Critical: Setup cancellation handler
-        onCancel(function()
-            -- This runs if the player leaves or state is forcibly changed
-            self.controller:hideReviveUI()
-            self:_cleanupDeath()
-        end)
-    end)
+    -- Disable collisions immediately
+    self.controller.collisionState.canCollide = false
+    
+    -- Log the death
+    warn("[DyingState] Player", self.controller.player.Name, "entered dying state")
+    
+    -- Don't return a promise - let the existing death system handle everything
+    -- The existing SnakeSystemIntegration will handle:
+    -- - Showing ReviveUI
+    -- - Spawning orbs
+    -- - Death effects
+    -- - Respawning
 end
 
 function DyingState:OnExecute(dt)

@@ -86,9 +86,12 @@ local function onPlayerAdded(player)
                 controller.snakeObject = snakeModel
                 existingSnakes[player] = snakeModel
                 
+                -- Set initial state to Alive when snake is created
+                controller.fsm:changeState("Alive")
+                
                 -- Apply spawn invincibility
                 controller:setInvincible(3)
-                warn("[MainServer] Snake ready with 3 second spawn protection")
+                warn("[MainServer] State set to Alive with 3 second spawn protection")
                 return true
             end
         end
@@ -111,9 +114,9 @@ local function onPlayerAdded(player)
                             -- Death handling via new collision system
                     event:Connect(function(collisionData)
                         if eventName == "onFatalHit" then
-                            -- Check if already dead
-                            if player:GetAttribute("IsDead") then
-                                return -- Already dead
+                            -- Check if already dying
+                            if controller.fsm:getCurrentState() == "Dying" then
+                                return
                             end
                             
                             warn("[MainServer] FATAL COLLISION for", player.Name, "Type:", 
@@ -128,7 +131,10 @@ local function onPlayerAdded(player)
                                 warn("[MainServer] Killed by AI Snake")
                             end
                             
-                            -- Just kill the player - let the existing system handle EVERYTHING
+                            -- Change to Dying state immediately
+                            controller.fsm:changeState("Dying", collisionData)
+                            
+                            -- Then kill the player to trigger existing systems
                             local character = player.Character
                             if character then
                                 local humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -142,7 +148,7 @@ local function onPlayerAdded(player)
                                         player:SetAttribute("KilledBy", "Wall")
                                     end
                                     
-                                    -- Kill the humanoid - this triggers everything else
+                                    -- Kill the humanoid - this triggers existing death handling
                                     humanoid.Health = 0
                                 end
                             end
@@ -218,8 +224,33 @@ local function setupRemoteHandlers()
         respawnRemote.OnServerEvent:Connect(function(player)
             warn("[MainServer] Respawn requested for", player.Name)
             
-            -- Don't do anything - let SnakeSystemIntegration handle the respawn
-            -- We'll detect the new snake in CharacterAdded
+            local controller = playerControllers[player]
+            if controller then
+                -- Reset state for respawn
+                warn("[MainServer] Handling respawn for", player.Name)
+                controller.collisionState.canCollide = false
+                
+                -- Wait for new snake to be created
+                task.spawn(function()
+                    task.wait(1.5) -- Give time for snake creation
+                    local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
+                    if snakeModel and snakeModel:IsA("Model") then
+                        local head = snakeModel:FindFirstChild("Segment0_Head")
+                        if head then
+                            controller.snakeObject = snakeModel
+                            existingSnakes[player] = snakeModel
+                            
+                            -- Transition to Alive state
+                            controller.fsm:changeState("Alive")
+                            
+                            -- Apply spawn invincibility
+                            controller:setInvincible(3)
+                            
+                            warn("[MainServer] Respawn complete - state set to Alive")
+                        end
+                    end
+                end)
+            end
         end)
     end
     

@@ -77,23 +77,14 @@ function CollisionModule:update(dt)
             break
         end
         
-        -- Check if player can be checked for collisions
-        local character = player.Character
-        if not character then continue end
+        -- Only check alive players who can collide
+        local currentState = controller.fsm:getCurrentState()
+        local canCollide = controller:canCollide()
         
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then continue end
-        
-        -- Check if player has a snake
-        local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
-        if not snakeModel then continue end
-        
-        -- Don't check if invincible
-        if controller:isInvincible() then continue end
-        
-        -- Check collisions
-        self:_checkPlayerCollisions(controller)
-        checksThisFrame = checksThisFrame + 1
+        if currentState == "Alive" and canCollide then
+            self:_checkPlayerCollisions(controller)
+            checksThisFrame = checksThisFrame + 1
+        end
     end
 end
 
