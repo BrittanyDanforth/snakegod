@@ -43,6 +43,27 @@ end
 local function initializeSystems()
     warn("[MainServer] Initializing game systems...")
     
+    -- Create necessary RemoteEvents
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        remotes = Instance.new("Folder")
+        remotes.Name = "Remotes"
+        remotes.Parent = ReplicatedStorage
+    end
+    
+    -- Create VFX remotes if they don't exist
+    if not remotes:FindFirstChild("PlayerDeathEffect") then
+        local deathEffect = Instance.new("RemoteEvent")
+        deathEffect.Name = "PlayerDeathEffect"
+        deathEffect.Parent = remotes
+    end
+    
+    if not remotes:FindFirstChild("PlayerRevivedEffect") then
+        local reviveEffect = Instance.new("RemoteEvent")
+        reviveEffect.Name = "PlayerRevivedEffect"
+        reviveEffect.Parent = remotes
+    end
+    
     -- Wait for existing systems
     waitForSnakeSystem()
     
@@ -148,6 +169,60 @@ local function onPlayerAdded(player)
                     local humanoid = character:FindFirstChildOfClass("Humanoid")
                     if humanoid and humanoid.Health > 0 then
                         humanoid.Health = 0
+                    end
+                    
+                    -- Check for revive and prompt
+                    local hasRevive = player:GetAttribute("HasRevive")
+                    local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
+                    
+                    if hasRevive or revivesAvailable > 0 then
+                        -- Send revive prompt
+                        local remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+                        if remotes then
+                            local promptReviveRemote = remotes:FindFirstChild("PromptRevive")
+                            if promptReviveRemote then
+                                -- Set attributes
+                                player:SetAttribute("RevivePromptActive", true)
+                                player:SetAttribute("AwaitingReviveResponse", true)
+                                
+                                -- Send prompt
+                                promptReviveRemote:FireClient(player)
+                                
+                                -- Set up response handler
+                                local responseConnection
+                                responseConnection = promptReviveRemote.OnServerEvent:Connect(function(plr, response)
+                                    if plr == player then
+                                        responseConnection:Disconnect()
+                                        
+                                        player:SetAttribute("RevivePromptActive", false)
+                                        player:SetAttribute("AwaitingReviveResponse", false)
+                                        
+                                        if response == "revive" then
+                                            -- Handle revive
+                                            player:SetAttribute("JustRevived", true)
+                                            player:SetAttribute("RevivingNow", true)
+                                            
+                                            if revivesAvailable > 0 then
+                                                player:SetAttribute("RevivesAvailable", revivesAvailable - 1)
+                                            end
+                                            
+                                            -- Respawn player
+                                            wait(0.1)
+                                            player:LoadCharacter()
+                                        end
+                                    end
+                                end)
+                                
+                                -- Timeout handler
+                                task.delay(10, function()
+                                    if responseConnection.Connected then
+                                        responseConnection:Disconnect()
+                                        player:SetAttribute("RevivePromptActive", false)
+                                        player:SetAttribute("AwaitingReviveResponse", false)
+                                    end
+                                end)
+                            end
+                        end
                     end
                     
                     -- The existing SnakeSystemIntegration will handle:

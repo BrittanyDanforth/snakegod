@@ -39,14 +39,33 @@ if not DeathVFXConfig then
 				NumberSequenceKeypoint.new(0.7, 0.3),
 				NumberSequenceKeypoint.new(1, 1)
 			})
+		},
+		REVIVAL_COLORS = {
+			primary = Color3.fromRGB(100, 255, 100),   -- Light green
+			secondary = Color3.fromRGB(50, 200, 50),   -- Darker green
+			glow = Color3.fromRGB(150, 255, 150)       -- Bright green glow
 		}
 	}
 end
 
 -- Wait for the Remotes folder and the specific event to exist
-local remotes = ReplicatedStorage:WaitForChild("Remotes")
-local reviveEffectRemote = remotes:WaitForChild("PlayerRevivedEffect")
-local deathEffectRemote = remotes:WaitForChild("PlayerDeathEffect", 5)
+local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
+local reviveEffectRemote, deathEffectRemote
+
+if remotes then
+	reviveEffectRemote = remotes:WaitForChild("PlayerRevivedEffect", 5)
+	deathEffectRemote = remotes:WaitForChild("PlayerDeathEffect", 5)
+	
+	if not reviveEffectRemote then
+		warn("[VFXHandler_Client] Could not find 'PlayerRevivedEffect' RemoteEvent. Revive VFX will not play.")
+	end
+	
+	if not deathEffectRemote then
+		warn("[VFXHandler_Client] Could not find 'PlayerDeathEffect' RemoteEvent. Death VFX may not play reliably.")
+	end
+else
+	warn("[VFXHandler_Client] Could not find Remotes folder.")
+end
 
 -- Function to create death VFX using configurable colors
 local function createDeathVFX(character)
@@ -241,15 +260,17 @@ local function createReviveVFX()
 end
 
 -- This LocalScript is on the client, so it can correctly listen for OnClientEvent
-reviveEffectRemote.OnClientEvent:Connect(function()
-    print("✅ VFXHandler_Client received the 'PlayerRevivedEffect' command from the server.")
-    
-    -- To keep the revival effect GONE, leave this commented out:
-    -- createReviveVFX()
-    
-    -- Uncomment the line above if you want to enable revival VFX
-    -- The VFX will respect the player's graphics settings automatically
-end)
+if reviveEffectRemote then
+	reviveEffectRemote.OnClientEvent:Connect(function()
+		print("✅ VFXHandler_Client received the 'PlayerRevivedEffect' command from the server.")
+
+		-- To keep the revival effect GONE, leave this commented out:
+		-- createReviveVFX()
+
+		-- Uncomment the line above if you want to enable revival VFX
+		-- The VFX will respect the player's graphics settings automatically
+	end)
+end
 
 -- Listen for death effects
 if deathEffectRemote then
@@ -264,12 +285,13 @@ end
 -- Also trigger death VFX when humanoid dies
 local function onCharacterAdded(character)
 	local humanoid = character:WaitForChild("Humanoid")
-	humanoid.Died:Connect(function()
-		-- Only create VFX if not disabled
-		if not Players.LocalPlayer:GetAttribute("NoDeathEffects") then
-			createDeathVFX(character)
-		end
-	end)
+	-- DISABLED: Death VFX is handled by server to prevent issues
+	-- humanoid.Died:Connect(function()
+	-- 	-- Only create VFX if not disabled
+	-- 	if not Players.LocalPlayer:GetAttribute("NoDeathEffects") then
+	-- 		createDeathVFX(character)
+	-- 	end
+	-- end)
 end
 
 local player = Players.LocalPlayer
@@ -278,4 +300,4 @@ if player.Character then
 end
 player.CharacterAdded:Connect(onCharacterAdded)
 
-print("VFXHandler_Client loaded - Death VFX colors are customizable in DeathVFXConfig")
+print("VFXHandler_Client V2 (Fixed) loaded - Death VFX colors are customizable in DeathVFXConfig")
