@@ -98,6 +98,14 @@ function DyingState:OnEnter(collisionData)
                             end
                             
                             warn("[DyingState] Player chose to revive")
+                            
+                            -- DIRECTLY transition to RevivingState instead of using promise
+                            -- This ensures it happens immediately
+                            task.spawn(function()
+                                task.wait(0.1) -- Small delay to ensure promise completes
+                                self.controller.fsm:changeState("Reviving")
+                            end)
+                            
                             resolve("Reviving")
                         else
                             warn("[DyingState] Player declined revive")
