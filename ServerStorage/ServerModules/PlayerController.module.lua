@@ -162,12 +162,14 @@ function PlayerController:setSpeed(speed)
 end
 
 function PlayerController:hasReviveToken()
-    return self.data.reviveTokens > 0
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    return revivesAvailable > 0
 end
 
 function PlayerController:useReviveToken()
-    if self.data.reviveTokens > 0 then
-        self.data.reviveTokens = self.data.reviveTokens - 1
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    if revivesAvailable > 0 then
+        self.player:SetAttribute("RevivesAvailable", revivesAvailable - 1)
         return true
     end
     return false

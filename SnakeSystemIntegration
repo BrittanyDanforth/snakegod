@@ -300,7 +300,7 @@ local function onCharacterAdded(character)
 	-- Store connections on snake object for cleanup
 	snake.skinConnection = skinConnection
 
-	-- Handle death
+	-- Handle death - ONLY destroy snake, no orb spawning
 	local deathConnection
 	deathConnection = humanoid.Died:Connect(function()
 		if activeSnakes[player] then
@@ -317,9 +317,8 @@ local function onCharacterAdded(character)
 				snake._connections.boost:Disconnect()
 			end
 
-			-- NO DEATH ORB SPAWNING HERE - SnakeCollisionHandler handles this!
-			-- The collision handler already spawns death orbs properly distributed along the snake
-			-- Removing duplicate spawning that was causing both red and rainbow orbs to appear
+			-- IMPORTANT: Death orbs are spawned by MainServer's DeathOrbHandler
+			-- This script ONLY handles snake destruction
 
 			-- Clean up snake
 			activeSnakes[player]:destroy()

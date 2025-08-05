@@ -66,7 +66,7 @@ function RevivingState:OnEnter()
             end
             
             if not cancelled and not self.controller.isDestroyed then
-                -- Successfully revived
+                -- Successfully revived - transition to Spawning state
                 resolve("Spawning")
             else
                 -- Cancelled or destroyed

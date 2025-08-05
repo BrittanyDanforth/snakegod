@@ -295,30 +295,9 @@ local function setupRemoteHandlers()
             
             local controller = playerControllers[player]
             if controller then
-                -- Reset state for respawn
-                warn("[MainServer] Handling respawn for", player.Name)
-                controller.collisionState.canCollide = false
-                
-                -- Wait for new snake to be created
-                task.spawn(function()
-                    task.wait(1.5) -- Give time for snake creation
-                    local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
-                    if snakeModel and snakeModel:IsA("Model") then
-                        local head = snakeModel:FindFirstChild("Segment0_Head")
-                        if head then
-                            controller.snakeObject = snakeModel
-                            existingSnakes[player] = snakeModel
-                            
-                            -- Transition to Alive state
-                            controller.fsm:changeState("Alive")
-                            
-                            -- Apply spawn invincibility
-                            controller:setInvincible(3)
-                            
-                            warn("[MainServer] Respawn complete - state set to Alive")
-                        end
-                    end
-                end)
+                -- Transition to Spawning state
+                warn("[MainServer] Transitioning to Spawning state for", player.Name)
+                controller.fsm:changeState("Spawning")
             end
         end)
     end
