@@ -117,9 +117,12 @@ function DyingState:OnEnter(collisionData)
                     return
                 end
                 
-                -- Set attributes for revive system
+                -- Set attributes for revive system BEFORE firing to client
                 self.controller.player:SetAttribute("RevivePromptActive", true)
                 self.controller.player:SetAttribute("AwaitingReviveResponse", true)
+                
+                -- Small delay to ensure attributes are set
+                task.wait(0.1)
                 
                 -- Fire revive prompt to client
                 promptRevive:FireClient(self.controller.player, {

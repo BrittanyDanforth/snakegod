@@ -20,6 +20,15 @@ end
 function RevivingState:OnEnter()
     warn("[RevivingState] Entered reviving state for", self.controller.player.Name)
     
+    -- Clear any lingering death UI
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local deathUIRemote = remotes:FindFirstChild("ControlDeathUI")
+    if deathUIRemote then
+        deathUIRemote:FireClient(self.controller.player, {
+            action = "hide"
+        })
+    end
+    
     -- This returns a Promise that resolves to the next state
     return Promise.new(function(resolve, reject, onCancel)
         -- Validate we can revive
@@ -31,8 +40,10 @@ function RevivingState:OnEnter()
         -- Use revive token
         self.controller:useReviveToken()
         
-        -- Set reviving attribute
+        -- Set reviving attributes (multiple for redundancy)
         self.controller.player:SetAttribute("IsReviving", true)
+        self.controller.player:SetAttribute("RevivingNow", true)
+        self.controller.player:SetAttribute("RevivePromptActive", false)
         
         -- Start countdown
         local countdownDuration = self.controller.config.reviveCountdown or 5
@@ -116,11 +127,23 @@ function RevivingState:OnExecute(dt)
 end
 
 function RevivingState:OnExit()
-    -- Clear reviving attribute
+    -- Clear ALL reviving attributes
     self.controller.player:SetAttribute("IsReviving", false)
+    self.controller.player:SetAttribute("RevivingNow", false)
+    self.controller.player:SetAttribute("RevivePromptActive", false)
+    self.controller.player:SetAttribute("AwaitingReviveResponse", false)
     
     -- Hide UI
     self.controller:hideReviveUI()
+    
+    -- Ensure death UI stays hidden
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local deathUIRemote = remotes:FindFirstChild("ControlDeathUI")
+    if deathUIRemote then
+        deathUIRemote:FireClient(self.controller.player, {
+            action = "hide"
+        })
+    end
     
     -- Notify state change
     self.controller:notifyStateChange("ReviveComplete")

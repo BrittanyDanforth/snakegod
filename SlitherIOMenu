@@ -1598,6 +1598,28 @@ end)
 -- Listen for server command to show death screen
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local showDeathScreenRemote = remotes:WaitForChild("ShowDeathScreen", 10)
+local controlDeathUIRemote = remotes:WaitForChild("ControlDeathUI", 10)
+
+-- Handle explicit death UI control from server
+if controlDeathUIRemote then
+	controlDeathUIRemote.OnClientEvent:Connect(function(data)
+		if data.action == "hide" then
+			-- Hide death UI immediately
+			if screenGui and screenGui.Parent then
+				screenGui.Enabled = false
+			end
+		elseif data.action == "show" then
+			-- Only show if we're not in a revive state
+			if not LocalPlayer:GetAttribute("RevivePromptActive") and
+			   not LocalPlayer:GetAttribute("IsReviving") and
+			   not LocalPlayer:GetAttribute("RevivingNow") then
+				createMenu(function()
+					requestRespawn()
+				end)
+			end
+		end
+	end)
+end
 
 if showDeathScreenRemote then
 	showDeathScreenRemote.OnClientEvent:Connect(function(deathData)

@@ -246,7 +246,18 @@ end
 
 -- Handle revive prompt from server
 promptReviveRemote.OnClientEvent:Connect(function()
-	if isShowing then return end
+	-- Check multiple conditions to prevent duplicate prompts
+	if isShowing then 
+		warn("ReviveUI: Already showing, ignoring duplicate prompt")
+		return 
+	end
+	
+	-- Also check if we're already in a revive state
+	if player:GetAttribute("IsReviving") or player:GetAttribute("RevivingNow") then
+		warn("ReviveUI: Player already reviving, ignoring prompt")
+		return
+	end
+	
 	isShowing = true
 	isPurchasing = false
 
