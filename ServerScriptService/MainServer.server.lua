@@ -87,12 +87,18 @@ local function onPlayerAdded(player)
                 controller.snakeModel = snakeModel  -- Set both for compatibility
                 existingSnakes[player] = snakeModel
 
-                -- Set initial state to Alive when snake is created
-                controller.fsm:changeState("Alive")
-
-                -- Apply spawn invincibility
-                controller:setInvincible(3)
-                warn("[MainServer] State set to Alive with 3 second spawn protection")
+                -- Safely set initial state to Alive when snake is created
+                local success, err = pcall(function()
+                    controller.fsm:changeState("Alive")
+                end)
+                
+                if success then
+                    -- Apply spawn invincibility
+                    controller:setInvincible(3)
+                    warn("[MainServer] State set to Alive with 3 second spawn protection")
+                else
+                    warn("[MainServer] Failed to set initial Alive state:", err)
+                end
                 return true
             end
         end
@@ -258,13 +264,30 @@ local function setupRemoteHandlers()
                             controller.snakeObject = snakeModel
                             existingSnakes[player] = snakeModel
                             
-                            -- Transition to Alive state
-                            controller.fsm:changeState("Alive")
+                            -- Safely transition to Alive state
+                            local success, err = pcall(function()
+                                controller.fsm:changeState("Alive")
+                            end)
                             
-                            -- Apply spawn invincibility
-                            controller:setInvincible(3)
-                            
-                            warn("[MainServer] Respawn complete - state set to Alive")
+                            if success then
+                                -- Apply spawn invincibility
+                                controller:setInvincible(3)
+                                warn("[MainServer] Respawn complete - state set to Alive")
+                            else
+                                warn("[MainServer] Failed to change to Alive state:", err)
+                                -- Try to reinitialize controller if needed
+                                if controller and not controller.isDestroyed then
+                                    controller:_setupStates()
+                                    -- Try again
+                                    local retry = pcall(function()
+                                        controller.fsm:changeState("Alive")
+                                        controller:setInvincible(3)
+                                    end)
+                                    if retry then
+                                        warn("[MainServer] Successfully recovered after reinitializing states")
+                                    end
+                                end
+                            end
                         end
                     end
                 end)

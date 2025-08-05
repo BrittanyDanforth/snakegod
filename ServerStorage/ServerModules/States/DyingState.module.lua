@@ -40,20 +40,33 @@ function DyingState:OnEnter(collisionData)
     warn("[DyingState] Player", self.controller.player.Name, "entered dying state")
     warn("[DyingState] Death position:", self.deathPosition, "Current length:", self.currentLength)
     
-    -- Kill the player first - this triggers death effects and stops movement
+    -- Store character reference for later
     local character = self.controller.player.Character
-    if character then
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if humanoid and humanoid.Health > 0 then
-            warn("[DyingState] Killing player humanoid")
-            humanoid.Health = 0
-        end
-    end
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     
     -- Return promise for next state
     return Promise.new(function(resolve, reject, onCancel)
-        -- Wait a moment for death to process
-        task.wait(0.5)
+        -- Disable movement but don't kill yet
+        if humanoid then
+            humanoid.WalkSpeed = 0
+            humanoid.JumpPower = 0
+            humanoid.PlatformStand = true
+        end
+        
+        -- Make snake invisible/non-collidable
+        if self.controller.snakeObject then
+            if self.controller.snakeObject:IsA("Model") then
+                for _, part in ipairs(self.controller.snakeObject:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                        part.Transparency = 0.5
+                    end
+                end
+            end
+        end
+        
+        -- Short pause before showing prompt
+        task.wait(0.2)
         
         -- Check for revives
         if self.controller:hasReviveToken() then
@@ -114,6 +127,10 @@ function DyingState:OnEnter(collisionData)
                             resolve("Reviving")
                         else
                             warn("[DyingState] Player declined revive")
+                            -- Now kill the player since they declined
+                            if humanoid and humanoid.Health > 0 then
+                                humanoid.Health = 0
+                            end
                             resolve("Spectating")
                         end
                     end
@@ -130,6 +147,10 @@ function DyingState:OnEnter(collisionData)
                         self.controller.player:SetAttribute("AwaitingReviveResponse", false)
                         
                         warn("[DyingState] Revive prompt timed out")
+                        -- Kill the player since they didn't respond
+                        if humanoid and humanoid.Health > 0 then
+                            humanoid.Health = 0
+                        end
                         resolve("Spectating")
                     end
                 end)
@@ -148,11 +169,22 @@ function DyingState:OnEnter(collisionData)
                 end)
             else
                 warn("[DyingState] PromptRevive remote not found!")
+                -- Kill the player since we can't prompt
+                if humanoid and humanoid.Health > 0 then
+                    humanoid.Health = 0
+                end
+                task.wait(0.5)
                 resolve("Spectating")
             end
         else
             -- No revives available, go straight to spectating
             warn("[DyingState] No revive tokens available")
+            -- Kill the player since no revives
+            if humanoid and humanoid.Health > 0 then
+                humanoid.Health = 0
+            end
+            -- Wait for death to process
+            task.wait(0.5)
             resolve("Spectating")
         end
     end)

@@ -71,10 +71,8 @@ function FSM:changeState(newStateName, ...)
                 end
             end):catch(function(err)
                 warn("[FSM] State promise error:", err)
-                -- Optionally transition to a default state on error
-                if self.states["Spectating"] then
-                    self:changeState("Spectating")
-                end
+                -- Don't automatically transition to spectating to avoid loops
+                -- Let the game logic handle error recovery
             end)
         end
     end

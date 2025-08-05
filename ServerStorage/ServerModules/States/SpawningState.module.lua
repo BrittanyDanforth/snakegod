@@ -69,8 +69,16 @@ function SpawningState:OnEnter(previousState)
         task.wait(1.5)
         
         -- The snake should now be created by SnakeSystemIntegration
-        -- Just transition to Alive state
-        self.controller.fsm:changeState("Alive")
+        -- Safely transition to Alive state
+        local success, err = pcall(function()
+            self.controller.fsm:changeState("Alive")
+        end)
+        
+        if not success then
+            warn("[SpawningState] Failed to transition to Alive state:", err)
+            -- Try spectating as fallback
+            self.controller.fsm:changeState("Spectating")
+        end
         return
     end
     
@@ -107,7 +115,17 @@ function SpawningState:OnEnter(previousState)
     
     -- Enable collisions and transition to alive
     self.controller.collisionState.canCollide = true
-    self.controller.fsm:changeState("Alive")
+    
+    -- Safely transition to Alive state
+    local success, err = pcall(function()
+        self.controller.fsm:changeState("Alive")
+    end)
+    
+    if not success then
+        warn("[SpawningState] Failed to transition to Alive state:", err)
+        -- Try spectating as fallback
+        self.controller.fsm:changeState("Spectating")
+    end
 end
 
 function SpawningState:OnExecute(dt)
