@@ -25,12 +25,32 @@ function DyingState:OnEnter(collisionData)
     -- Log the death
     warn("[DyingState] Player", self.controller.player.Name, "entered dying state")
     
-    -- Don't return a promise - let the existing death system handle everything
-    -- The existing SnakeSystemIntegration will handle:
-    -- - Showing ReviveUI
-    -- - Spawning orbs
-    -- - Death effects
-    -- - Respawning
+    -- Check if player has revives
+    local player = self.controller.player
+    local hasRevive = player:GetAttribute("HasRevive")
+    local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
+    
+    if hasRevive or revivesAvailable > 0 then
+        -- Show revive prompt
+        self.controller:requestReviveFromClient():andThen(function(result)
+            if result == "Reviving" then
+                -- Player chose to revive
+                player:SetAttribute("JustRevived", true)
+                player:SetAttribute("RevivingNow", true)
+                
+                -- Deduct revive
+                if revivesAvailable > 0 then
+                    player:SetAttribute("RevivesAvailable", revivesAvailable - 1)
+                end
+                
+                -- Respawn the player
+                player:LoadCharacter()
+            else
+                -- Player declined or no revives
+                -- Let normal death continue
+            end
+        end)
+    end
 end
 
 function DyingState:OnExecute(dt)

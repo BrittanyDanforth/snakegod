@@ -2,6 +2,12 @@
 -- Fixes: Death orbs spawn properly, ReviveUI shows correctly
 -- Maintains V8.2 structure while fixing critical issues
 
+-- CRITICAL: Check if we should disable this handler
+if _G.DISABLE_OLD_COLLISION_HANDLER then
+    warn("🛑 SnakeCollisionHandler_FINAL disabled by global flag - using new modular system")
+    return
+end
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

@@ -12,6 +12,7 @@ local RunService = game:GetService("RunService")
 local ServerModules = ServerStorage:WaitForChild("ServerModules")
 local PlayerController = require(ServerModules.PlayerController)
 local CollisionModule = require(ServerModules.CollisionModule)
+local DeathOrbHandler = require(ServerModules.DeathOrbHandler)
 
 -- Shared configuration  
 local Config = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Config"))
@@ -21,6 +22,9 @@ local playerControllers = {}
 
 -- Collision system
 local collisionSystem = nil
+
+-- Death orb system
+local deathOrbHandler = nil
 
 -- Track existing snakes from SnakeSystemIntegration
 local snakeSystemIntegration = nil
@@ -48,6 +52,9 @@ local function initializeSystems()
     -- Initialize collision system
     collisionSystem = CollisionModule.new(playerControllers)
     collisionSystem:start()
+    
+    -- Initialize death orb handler
+    deathOrbHandler = DeathOrbHandler.new()
     
     -- Disable the old InitializeCollisionHandler if it exists
     local collisionHandler = workspace:FindFirstChild("SnakeCollisionHandlerV1")
@@ -181,12 +188,48 @@ local function onPlayerAdded(player)
                     end)
     end
     
+    -- Monitor revive state for orb cleanup
+    player:GetAttributeChangedSignal("JustRevived"):Connect(function()
+        if player:GetAttribute("JustRevived") then
+            -- Player is reviving, clean up death orbs
+            local character = player.Character
+            if character then
+                local rootPart = character:FindFirstChild("HumanoidRootPart")
+                if rootPart and deathOrbHandler then
+                    deathOrbHandler:cleanupOrbsNearPosition(rootPart.Position)
+                end
+            end
+        end
+    end)
+    
     -- Monitor character spawning
     player.CharacterAdded:Connect(function(character)
         warn("[MainServer] Character added for", player.Name)
         
         -- Reset controller state
         controller.snakeObject = nil
+        
+        -- Set up death handler for orb spawning
+        local humanoid = character:WaitForChild("Humanoid")
+        humanoid.Died:Connect(function()
+            -- Get snake length for orb calculation
+            local snakeLength = 55 -- default
+            if player:FindFirstChild("leaderstats") then
+                local lengthValue = player.leaderstats:FindFirstChild("Length")
+                if lengthValue then
+                    snakeLength = lengthValue.Value or 55
+                end
+            end
+            
+            -- Get death position
+            local rootPart = character:FindFirstChild("HumanoidRootPart")
+            local deathPosition = rootPart and rootPart.Position or Vector3.new(0, 5, 0)
+            
+            -- Spawn death orbs
+            if deathOrbHandler then
+                deathOrbHandler:spawnDeathOrbsForPlayer(player, snakeLength, deathPosition)
+            end
+        end)
         
         -- Wait a bit for SnakeSystemIntegration to create the snake
         task.wait(1)

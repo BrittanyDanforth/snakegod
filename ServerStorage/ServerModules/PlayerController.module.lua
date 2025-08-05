@@ -248,11 +248,8 @@ function PlayerController:requestReviveFromClient()
             end
         end)
         
-        -- Send prompt to client
-        promptRevive:FireClient(self.player, {
-            show = true,
-            hasToken = self:hasReviveToken()
-        })
+        -- Send prompt to client (ReviveUI expects no parameters)
+        promptRevive:FireClient(self.player)
         
         -- Cleanup on cancel
         onCancel(function()
@@ -265,14 +262,8 @@ function PlayerController:requestReviveFromClient()
 end
 
 function PlayerController:hideReviveUI()
-    local remotes = ReplicatedStorage:WaitForChild("Remotes")
-    local promptRevive = remotes:FindFirstChild("PromptRevive")
-    
-    if promptRevive then
-        promptRevive:FireClient(self.player, {
-            show = false
-        })
-    end
+    -- ReviveUI hides itself when it gets a response
+    -- No need to send another event
 end
 
 function PlayerController:playDeathEffects(collisionData)
