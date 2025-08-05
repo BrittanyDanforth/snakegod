@@ -1,11 +1,12 @@
 --[[
-    CollisionModule.module - Centralized, high-performance collision detection
-    Uses modern spatial queries and CollectionService for optimization
+    CollisionModule.module - FIXED VERSION for actual game structure
+    Works with SnakeFolder for players and AISnakes folder for AI
 ]]
 
 local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
 local workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
 
 local CollisionModule = {}
 CollisionModule.__index = CollisionModule
@@ -30,13 +31,16 @@ function CollisionModule.new(playerControllers)
     -- Cache for performance
     self.orbCache = {}
     self.obstacleCache = {}
+    self.snakeCache = {} -- All snake data
     self.lastCacheUpdate = 0
     self.CACHE_UPDATE_INTERVAL = 1 -- Update cache every second
     
+    warn("[CollisionModule] Created new collision module")
     return self
 end
 
 function CollisionModule:start()
+    warn("[CollisionModule] Starting collision detection system")
     -- Connect to heartbeat for collision checks
     self.collisionConnection = RunService.Heartbeat:Connect(function(dt)
         self:update(dt)
@@ -85,128 +89,207 @@ function CollisionModule:_checkPlayerCollisions(controller)
     local head = controller:getSnakeHead()
     if not head then return end
     
-    -- Check for orb collection (using faster bounding radius)
+    -- Check for orb collection
     self:_checkOrbCollection(controller, head)
     
-    -- Check for fatal collisions (using precise GetPartsInPart)
+    -- Check for fatal collisions
     self:_checkFatalCollisions(controller, head)
 end
 
 function CollisionModule:_checkOrbCollection(controller, head)
-    -- Use GetPartBoundsInRadius for fast orb detection
-    local params = OverlapParams.new()
-    params.FilterType = Enum.RaycastFilterType.Whitelist
-    params.FilterDescendantsInstances = self.orbCache
+    -- Check all orbs manually since they might not be tagged
+    local orbFolder = workspace:FindFirstChild("Orbs")
+    if not orbFolder then return end
     
-    local nearbyParts = workspace:GetPartBoundsInRadius(
-        head.Position,
-        COLLISION_CONFIG.ORB_COLLECTION_RADIUS,
-        params
-    )
-    
-    for _, orb in ipairs(nearbyParts) do
-        if orb.Parent and CollectionService:HasTag(orb, "Orb") then
+    for _, orb in pairs(orbFolder:GetChildren()) do
+        if orb:IsA("BasePart") and (orb.Position - head.Position).Magnitude <= COLLISION_CONFIG.ORB_COLLECTION_RADIUS then
             -- Fire orb collection event
-            controller.events.onOrbCollision:Fire(orb)
+            controller.events.onOrbCollided:Fire(orb)
             
-            -- Remove from cache
-            local index = table.find(self.orbCache, orb)
-            if index then
-                table.remove(self.orbCache, index)
-            end
-            
-            -- Destroy the orb
-            orb:Destroy()
+            -- Let the existing system handle the orb collection
+            -- since it has special logic for different orb types
         end
     end
 end
 
 function CollisionModule:_checkFatalCollisions(controller, head)
-    -- Create collision hitbox slightly larger than head
-    local params = OverlapParams.new()
-    params.FilterType = Enum.RaycastFilterType.Whitelist
-    
-    -- Build whitelist: other snake bodies + obstacles
-    local whitelist = {}
-    
-    -- Add all snake bodies except our own
-    for _, part in ipairs(CollectionService:GetTagged("SnakeBody")) do
-        -- Skip our own snake parts
-        if not CollectionService:HasTag(part, controller.playerTag) then
-            table.insert(whitelist, part)
-        elseif controller.snakeObject then
-            -- For self-collision, check segment distance
-            local segmentIndex = tonumber(part:GetAttribute("SegmentIndex"))
-            if segmentIndex and segmentIndex > COLLISION_CONFIG.SELF_COLLISION_IGNORE_SEGMENTS then
-                table.insert(whitelist, part)
+    -- Check collision with other snakes
+    for _, snakeData in ipairs(self.snakeCache) do
+        -- Skip self
+        if snakeData.Player == controller.player then
+            continue
+        end
+        
+        -- Check head-to-head collision
+        if snakeData.Head and (snakeData.Head.Position - head.Position).Magnitude <= COLLISION_CONFIG.HEAD_RADIUS then
+            local collisionData = {
+                isFatal = true,
+                hitPart = snakeData.Head,
+                hitPosition = head.Position,
+                preventOrbs = false,
+                isHeadCollision = true,
+                killerPlayer = snakeData.Player,
+                isAI = snakeData.IsAI
+            }
+            
+            warn("[CollisionModule] HEAD COLLISION DETECTED between", controller.player.Name, "and", snakeData.IsAI and "AI Snake" or snakeData.Player.Name)
+            controller.events.onFatalHit:Fire(collisionData)
+            return
+        end
+        
+        -- Check collision with snake body segments
+        if snakeData.Segments then
+            for i, segment in ipairs(snakeData.Segments) do
+                if segment and segment:IsA("BasePart") then
+                    -- For self collision, skip first N segments
+                    if snakeData.Player == controller.player and i <= COLLISION_CONFIG.SELF_COLLISION_IGNORE_SEGMENTS then
+                        continue
+                    end
+                    
+                    if (segment.Position - head.Position).Magnitude <= COLLISION_CONFIG.BODY_DISTANCE then
+                        local collisionData = {
+                            isFatal = true,
+                            hitPart = segment,
+                            hitPosition = head.Position,
+                            preventOrbs = false,
+                            isBodyCollision = true,
+                            killerPlayer = snakeData.Player,
+                            isAI = snakeData.IsAI
+                        }
+                        
+                        warn("[CollisionModule] BODY COLLISION DETECTED between", controller.player.Name, "and", snakeData.IsAI and "AI Snake" or (snakeData.Player and snakeData.Player.Name or "Unknown"))
+                        controller.events.onFatalHit:Fire(collisionData)
+                        return
+                    end
+                end
             end
         end
     end
     
-    -- Add obstacles
+    -- Check collision with obstacles/walls
     for _, obstacle in ipairs(self.obstacleCache) do
-        table.insert(whitelist, obstacle)
-    end
-    
-    params.FilterDescendantsInstances = whitelist
-    
-    -- Check for collisions
-    local touchingParts = workspace:GetPartsInPart(head, params)
-    
-    if #touchingParts > 0 then
-        -- Determine collision type
-        local hitPart = touchingParts[1]
-        local collisionData = {
-            isFatal = true,
-            hitPart = hitPart,
-            hitPosition = head.Position,
-            preventOrbs = false
-        }
-        
-        -- Check if we hit another player's head (grants kill credit)
-        if CollectionService:HasTag(hitPart, "SnakeHead") then
-            collisionData.killerPlayer = self:_getPlayerFromPart(hitPart)
-            collisionData.isHeadCollision = true
-        elseif CollectionService:HasTag(hitPart, "Obstacle") then
-            collisionData.isWallCollision = true
-        else
-            collisionData.isBodyCollision = true
+        if obstacle and obstacle:IsA("BasePart") and (obstacle.Position - head.Position).Magnitude <= COLLISION_CONFIG.HEAD_RADIUS * 2 then
+            local collisionData = {
+                isFatal = true,
+                hitPart = obstacle,
+                hitPosition = head.Position,
+                preventOrbs = false,
+                isWallCollision = true
+            }
+            
+            warn("[CollisionModule] WALL COLLISION DETECTED for", controller.player.Name)
+            controller.events.onFatalHit:Fire(collisionData)
+            return
         end
-        
-        -- Fire fatal collision event
-        controller.events.onFatalHit:Fire(collisionData)
     end
 end
 
 function CollisionModule:_updateCaches()
     -- Update orb cache
-    self.orbCache = CollectionService:GetTagged("Orb")
+    self.orbCache = {}
+    local orbFolder = workspace:FindFirstChild("Orbs")
+    if orbFolder then
+        for _, orb in pairs(orbFolder:GetChildren()) do
+            if orb:IsA("BasePart") then
+                table.insert(self.orbCache, orb)
+            end
+        end
+    end
     
-    -- Update obstacle cache
-    self.obstacleCache = CollectionService:GetTagged("Obstacle")
+    -- Update obstacle cache (walls, boundaries)
+    self.obstacleCache = {}
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and (obj.Name == "Obstacle" or obj.Name == "Boundary" or obj.Name == "Wall") then
+            table.insert(self.obstacleCache, obj)
+        end
+    end
+    
+    -- Update snake cache - find all snakes
+    self.snakeCache = {}
+    
+    -- Find player snakes in SnakeFolder
+    local snakeFolder = workspace:FindFirstChild("SnakeFolder")
+    if snakeFolder then
+        for _, snakeModel in pairs(snakeFolder:GetChildren()) do
+            if snakeModel:IsA("Model") then
+                -- Player snakes have numbered segments: "1", "2", "3", etc.
+                local head = snakeModel:FindFirstChild("1")
+                if head and head:IsA("BasePart") then
+                    local segments = {}
+                    local i = 1
+                    while true do
+                        local segment = snakeModel:FindFirstChild(tostring(i))
+                        if segment and segment:IsA("BasePart") then
+                            table.insert(segments, segment)
+                            i = i + 1
+                        else
+                            break
+                        end
+                    end
+                    
+                    -- Find the player who owns this snake
+                    local ownerPlayer = nil
+                    local playerName = snakeModel:GetAttribute("OwnerPlayer") or snakeModel.Name
+                    if playerName then
+                        ownerPlayer = Players:FindFirstChild(playerName)
+                    end
+                    
+                    table.insert(self.snakeCache, {
+                        Head = head,
+                        Model = snakeModel,
+                        Segments = segments,
+                        IsAI = false,
+                        Player = ownerPlayer
+                    })
+                end
+            end
+        end
+    end
+    
+    -- Find AI snakes in AISnakes folder
+    local aiSnakeFolder = workspace:FindFirstChild("AISnakes")
+    if aiSnakeFolder then
+        for _, aiSnake in pairs(aiSnakeFolder:GetChildren()) do
+            if aiSnake:IsA("Model") then
+                local head = aiSnake:FindFirstChild("Head")
+                if head and head:IsA("BasePart") then
+                    -- AI snakes have different structure
+                    local segments = {}
+                    local bodyFolder = aiSnake:FindFirstChild("Body")
+                    if bodyFolder then
+                        for _, segment in pairs(bodyFolder:GetChildren()) do
+                            if segment:IsA("BasePart") then
+                                table.insert(segments, segment)
+                            end
+                        end
+                    end
+                    
+                    table.insert(self.snakeCache, {
+                        Head = head,
+                        Model = aiSnake,
+                        Segments = segments,
+                        IsAI = true,
+                        Player = nil
+                    })
+                end
+            end
+        end
+    end
+    
+    warn("[CollisionModule] Cache updated - Orbs:", #self.orbCache, "Obstacles:", #self.obstacleCache, "Snakes:", #self.snakeCache)
 end
 
+-- Helper to get player from part
 function CollisionModule:_getPlayerFromPart(part)
-    -- Find which player owns this part
-    for player, controller in pairs(self.controllers) do
-        if CollectionService:HasTag(part, controller.playerTag) then
-            return player
+    -- Check if part belongs to a player snake
+    if part.Parent and part.Parent.Parent then
+        local snakeFolder = workspace:FindFirstChild("SnakeFolder")
+        if snakeFolder and part.Parent.Parent == snakeFolder then
+            local playerName = part.Parent:GetAttribute("OwnerPlayer") or part.Parent.Name
+            return Players:FindFirstChild(playerName)
         end
     end
     return nil
-end
-
--- Add a new orb to the cache immediately
-function CollisionModule:registerOrb(orb)
-    table.insert(self.orbCache, orb)
-end
-
--- Remove an orb from cache
-function CollisionModule:unregisterOrb(orb)
-    local index = table.find(self.orbCache, orb)
-    if index then
-        table.remove(self.orbCache, index)
-    end
 end
 
 return CollisionModule
