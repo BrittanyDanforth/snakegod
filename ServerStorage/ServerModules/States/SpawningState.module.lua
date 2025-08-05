@@ -69,7 +69,9 @@ function SpawningState:OnEnter(previousState)
         
         if not success then
             warn("[SpawningState] Failed to LoadCharacter:", err)
-            return resolve("Spectating")
+            -- Fix: There's no resolve here, just transition to spectating
+            self.controller.fsm:changeState("Spectating")
+            return
         end
         
         -- Wait for character and snake to be created

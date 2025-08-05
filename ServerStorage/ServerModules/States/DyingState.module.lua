@@ -91,10 +91,14 @@ function DyingState:OnEnter(collisionData)
         if self.controller:hasReviveToken() then
             warn("[DyingState] Player has revive tokens available")
             
-            -- Check if we're already prompting to prevent duplicates
-            if self.controller.player:GetAttribute("RevivePromptActive") then
+            -- Check if prompt is already active (safety check)
+            if self.controller.player:GetAttribute("RevivePromptActive") or 
+               self.controller.player:GetAttribute("AwaitingReviveResponse") then
                 warn("[DyingState] Revive prompt already active, skipping duplicate")
-                return resolve("Spectating")
+                -- Kill the humanoid and go to spectating
+                self:_killPlayer()
+                resolve("Spectating")
+                return
             end
             
             -- Get remotes
@@ -269,8 +273,23 @@ function DyingState:OnExecute(dt)
 end
 
 function DyingState:OnExit()
+    -- Clear ALL death-related attributes to prevent UI flashing
+    self.controller.player:SetAttribute("RevivePromptActive", false)
+    self.controller.player:SetAttribute("AwaitingReviveResponse", false)
+    self.controller.player:SetAttribute("IsReviving", false)
+    self.controller.player:SetAttribute("RevivingNow", false)
+    
     -- Ensure UI is hidden
     self.controller:hideReviveUI()
+    
+    -- Also hide death UI in case it's showing
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local deathUIRemote = remotes:FindFirstChild("ControlDeathUI")
+    if deathUIRemote then
+        deathUIRemote:FireClient(self.controller.player, {
+            action = "hide"
+        })
+    end
     
     -- Notify state change
     self.controller:notifyStateChange("DeathComplete")

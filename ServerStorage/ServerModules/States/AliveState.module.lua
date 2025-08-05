@@ -28,6 +28,19 @@ function AliveState:OnEnter()
     self.controller.player:SetAttribute("ReviveDeclined", false)
     self.controller.player:SetAttribute("ReviveTimerExpired", false)
     
+    -- Hide any lingering UI
+    self.controller:hideReviveUI()
+    
+    -- Also ensure death UI is hidden
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local deathUIRemote = remotes:FindFirstChild("ControlDeathUI")
+    if deathUIRemote then
+        deathUIRemote:FireClient(self.controller.player, {
+            action = "hide"
+        })
+    end
+    
     -- Spawn protection
     if self.spawnProtectionDuration > 0 then
         warn("[AliveState] Spawn protection active for", self.spawnProtectionDuration, "seconds")

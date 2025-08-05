@@ -31,6 +31,22 @@ function SpectatingState:OnEnter()
         self.controller.player:SetAttribute("JustRevived", false)
         self.controller.player:SetAttribute("RevivePromptActive", false)
         self.controller.player:SetAttribute("AwaitingReviveResponse", false)
+        
+        -- If player is in revive process, don't show death screen
+        warn("[SpectatingState] Not showing death screen - player was in revive process")
+        return
+    end
+    
+    -- Also check if player character is somehow alive
+    if self.controller.player.Character then
+        local humanoid = self.controller.player.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.Health > 0 then
+            warn("[SpectatingState] WARNING: Player is alive in spectating state! Not showing death screen")
+            -- Force transition back to Alive state
+            task.wait(0.1)
+            self.controller.fsm:changeState("Alive")
+            return
+        end
     end
     
     -- This state is entered when player is truly dead (no revives or declined)
