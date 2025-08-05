@@ -84,7 +84,7 @@ function CollisionModule:update(dt)
         if currentState == "Alive" and canCollide then
             self:_checkPlayerCollisions(controller)
             checksThisFrame = checksThisFrame + 1
-        elseif frameCount % 60 == 0 then -- Log every second
+        elseif self.frameCount % 60 == 0 then -- Log every second
             warn("[CollisionModule] Skipping collision check for", player.Name, "- State:", currentState, "CanCollide:", canCollide, "Invincible:", controller:isInvincible())
         end
     end
