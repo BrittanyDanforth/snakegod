@@ -315,6 +315,15 @@ end
 local function setupRemoteHandlers()
     local remotes = ReplicatedStorage:WaitForChild("Remotes")
     
+    -- Create ShowDeathScreen remote for death menu
+    local showDeathScreenRemote = remotes:FindFirstChild("ShowDeathScreen")
+    if not showDeathScreenRemote then
+        showDeathScreenRemote = Instance.new("RemoteEvent")
+        showDeathScreenRemote.Name = "ShowDeathScreen"
+        showDeathScreenRemote.Parent = remotes
+        warn("[MainServer] Created ShowDeathScreen remote event")
+    end
+    
     -- Listen for respawn events from existing system
     local respawnRemote = remotes:FindFirstChild("RespawnSnake")
     if respawnRemote then

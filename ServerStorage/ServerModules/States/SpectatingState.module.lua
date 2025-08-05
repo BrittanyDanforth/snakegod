@@ -33,6 +33,9 @@ function SpectatingState:OnEnter()
     -- Switch to spectator camera
     self:_setupSpectatorCamera()
     
+    -- Send death screen command to client
+    self:_sendDeathScreenCommand()
+    
     -- Notify state change
     self.controller:notifyStateChange("Spectating")
 end
@@ -129,6 +132,36 @@ function SpectatingState:cycleSpectateTarget(direction)
             mode = "spectate",
             target = alivePlayers[self.spectateIndex]
         })
+    end
+end
+
+-- Send death screen command to client
+function SpectatingState:_sendDeathScreenCommand()
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local showDeathScreenRemote = remotes:FindFirstChild("ShowDeathScreen")
+    
+    if showDeathScreenRemote then
+        -- Gather stats for the death screen
+        local stats = {}
+        local leaderstats = self.controller.player:FindFirstChild("leaderstats")
+        
+        if leaderstats then
+            local length = leaderstats:FindFirstChild("Length")
+            if length then
+                stats.score = length.Value
+            end
+        end
+        
+        -- Get kills from attribute
+        stats.kills = self.controller.player:GetAttribute("LastKills") or 0
+        
+        -- Send the command with stats
+        showDeathScreenRemote:FireClient(self.controller.player, {
+            stats = stats,
+            timestamp = os.time()
+        })
+    else
+        warn("[SpectatingState] ShowDeathScreen remote not found")
     end
 end
 

@@ -1592,112 +1592,50 @@ end)
 -- =================================================================
 -- V5 DEATH HANDLER - REBUILT TO PREVENT REVIVE/MENU CONFLICT
 -- =================================================================
-local function onCharacterAdded(character)
-	-- Cancel any active death handler from previous character
-	if activeDeathHandler then
-		pcall(function() task.cancel(activeDeathHandler) end)
-		activeDeathHandler = nil
-	end
-	isProcessingDeath = false
+-- SERVER-DRIVEN APPROACH: No longer detects death locally
+-- Now waits for server to tell us when to show the death screen
 
+-- Listen for server command to show death screen
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local showDeathScreenRemote = remotes:WaitForChild("ShowDeathScreen", 10)
+
+if showDeathScreenRemote then
+	showDeathScreenRemote.OnClientEvent:Connect(function(deathData)
+		-- Clean up any lingering attributes
+		cleanupReviveAttributes()
+		
+		-- Update stats if provided
+		if deathData and deathData.stats then
+			pcall(function()
+				if deathData.stats.score and playerStats.highScore < deathData.stats.score then
+					playerStats.highScore = deathData.stats.score
+				end
+				if deathData.stats.kills then
+					playerStats.totalKills = playerStats.totalKills + deathData.stats.kills
+				end
+				savePlayerStats()
+			end)
+		end
+		
+		-- Show the main menu
+		createMenu(function()
+			requestRespawn()
+		end)
+	end)
+else
+	warn("ShowDeathScreen remote not found - death menu will not function properly")
+end
+
+-- Listen for character spawning to hide the menu
+local function onCharacterAdded(character)
 	-- Hide menu when spawning
 	if currentMenu then
 		currentMenu:Destroy()
 		currentMenu = nil
 	end
-
+	
 	-- Clean up any lingering attributes from a previous life
 	cleanupReviveAttributes()
-
-	-- Listen for death to show menu again
-	local humanoid = character:WaitForChild("Humanoid", 5)
-	if not humanoid then return end
-
-	local deathConnection
-	deathConnection = humanoid.Died:Connect(function()
-		-- Prevent multiple death handlers from running for the same death
-		if isProcessingDeath then return end
-		isProcessingDeath = true
-
-		-- Disconnect so this doesn't fire again for the same character instance
-		if deathConnection then
-			deathConnection:Disconnect()
-		end
-
-		-- The main death handler coroutine
-		activeDeathHandler = task.spawn(function()
-			-- Wait a very short time for the ReviveUI to potentially set its "active" attribute.
-			task.wait(0.2)
-
-			local waitTime = 0
-			local maxWaitTime = 120 -- 2 minute failsafe in case an attribute gets stuck
-
-			-- This loop will wait as long as the revive prompt is active.
-			while LocalPlayer:GetAttribute("RevivePromptActive") do
-				waitTime += 0.1
-				if waitTime > maxWaitTime then
-					warn("Revive prompt timed out after 2 minutes. Forcing menu.")
-					LocalPlayer:SetAttribute("RevivePromptActive", nil) -- Break the loop
-					break
-				end
-
-				-- If player revived while we were waiting, we can exit early.
-				if LocalPlayer:GetAttribute("JustRevived") then
-					isProcessingDeath = false
-					cleanupReviveAttributes()
-					return -- Exit the coroutine, no menu needed.
-				end
-
-				task.wait(0.1)
-			end
-
-			-- The Revive prompt is now closed. Wait one final frame for attributes to sync.
-			task.wait()
-
-			-- Final check: Are we still dead and did we NOT just revive?
-			if humanoid.Health <= 0 and not LocalPlayer:GetAttribute("JustRevived") then
-				-- Double check we are still on the same character instance
-				if LocalPlayer.Character == character then
-					-- Update stats before showing menu
-					pcall(function()
-						local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
-						if leaderstats then
-							local lastScore = leaderstats.Length.Value or 0
-							if playerStats.highScore < lastScore then
-								playerStats.highScore = lastScore
-							end
-						end
-						playerStats.totalKills = playerStats.totalKills + (LocalPlayer:GetAttribute("LastKills") or 0)
-						savePlayerStats()
-					end)
-
-					-- Show the main menu
-					createMenu(function()
-						requestRespawn()
-					end)
-				end
-			end
-
-			-- Reset flag for the next life
-			isProcessingDeath = false
-			activeDeathHandler = nil
-			cleanupReviveAttributes()
-		end)
-	end)
-
-	-- Cleanup on character removal
-	character.AncestryChanged:Connect(function()
-		if not character.Parent then
-			if deathConnection then
-				deathConnection:Disconnect()
-			end
-			if activeDeathHandler then
-				pcall(function() task.cancel(activeDeathHandler) end)
-				activeDeathHandler = nil
-			end
-			isProcessingDeath = false
-		end
-	end)
 end
 
 if LocalPlayer.Character then
