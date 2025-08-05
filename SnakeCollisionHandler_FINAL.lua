@@ -51,16 +51,12 @@ if not disableDeathEffectsRemote then
 	disableDeathEffectsRemote.Parent = ReplicatedStorage
 end
 
--- Create bindable event for revive effect (for server-to-server communication with GamePassHandler)
-local serverEvents = ReplicatedStorage:FindFirstChild("ServerEvents") or Instance.new("Folder")
-serverEvents.Name = "ServerEvents"
-serverEvents.Parent = ReplicatedStorage
-
-local playerRevivedEffectBindable = serverEvents:FindFirstChild("PlayerRevivedEffect")
-if not playerRevivedEffectBindable then
-	playerRevivedEffectBindable = Instance.new("BindableEvent")
-	playerRevivedEffectBindable.Name = "PlayerRevivedEffect"
-	playerRevivedEffectBindable.Parent = serverEvents
+-- Create remote for revive effect (for server-to-client communication)
+local playerRevivedEffectRemote = remotes:FindFirstChild("PlayerRevivedEffect")
+if not playerRevivedEffectRemote then
+	playerRevivedEffectRemote = Instance.new("RemoteEvent")
+	playerRevivedEffectRemote.Name = "PlayerRevivedEffect"
+	playerRevivedEffectRemote.Parent = remotes
 end
 
 -- === PERFORMANCE CONSTANTS (unchanged) ===
@@ -1332,9 +1328,9 @@ task.spawn(function()
 									player:SetAttribute("RevivePosition", tostring(deathPosition))
 									player:SetAttribute("ReviveSnakeLength", snakeLength)
 									
-														-- DIRECT COMMUNICATION: Tell GamePassHandler about the revive
+														-- DIRECT COMMUNICATION: Fire to client for visual effects
 					-- This replaces the unreliable JustRevived attribute check
-					playerRevivedEffectBindable:Fire(player)
+					playerRevivedEffectRemote:FireClient(player)
 
 									-- Clear dead state
 									resetPlayerCollisionState(player)
