@@ -1019,22 +1019,23 @@ task.spawn(function()
 					-- Store snake references
 					local snakeInstance = _G.PlayerSnakes and _G.PlayerSnakes[player]
 
-					-- Check for revives BEFORE doing ANYTHING else
-					local hasRevive = player:GetAttribute("HasRevive")
-					local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
-					print("🔍 Revive check - HasRevive:", hasRevive, "RevivesAvailable:", revivesAvailable)
+									-- Check for revives BEFORE doing ANYTHING else
+				local hasRevive = player:GetAttribute("HasRevive")
+				local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
+				print("🔍 Revive check - HasRevive:", hasRevive, "RevivesAvailable:", revivesAvailable)
 
-					-- Set revive attributes SUPER EARLY if available
-					if hasRevive or revivesAvailable > 0 then
-						-- Set RevivePromptActive IMMEDIATELY to block SlitherIOMenu
-						player:SetAttribute("RevivePromptActive", true)
-						player:SetAttribute("AwaitingReviveResponse", true)
-
-						-- Fire client RIGHT NOW without any delay
-						pcall(function()
-							promptReviveRemote:FireClient(player)
-						end)
-					end
+				-- Set revive attributes SUPER EARLY if available
+				if hasRevive or revivesAvailable > 0 then
+					-- Set RevivePromptActive IMMEDIATELY to block SlitherIOMenu
+					player:SetAttribute("RevivePromptActive", true)
+					player:SetAttribute("AwaitingReviveResponse", true)
+					
+					-- Store in session to prevent duplicates
+					reviveSessions[player] = {
+						promptSent = true,
+						startTime = tick()
+					}
+				end
 
 					-- Now freeze snake and set health
 					print("❄️ Freezing snake for", player.Name)
@@ -1228,6 +1229,22 @@ task.spawn(function()
 								end
 							end
 						end)
+						
+						-- Store the connection
+						if reviveSessions[player] then
+							reviveSessions[player].connection = responseConnection
+						else
+							reviveSessions[player] = {
+								connection = responseConnection,
+								startTime = tick()
+							}
+						end
+						
+						-- NOW send the prompt after handler is ready
+						print("📤 Sending revive prompt to", player.Name)
+						pcall(function()
+							promptReviveRemote:FireClient(player)
+						end)
 					end
 
 					-- Kill humanoid AFTER setting revive attributes
@@ -1239,19 +1256,12 @@ task.spawn(function()
 
 					-- === FIX 6: PROPERLY HANDLE REVIVE UI ===
 					if hasRevive or revivesAvailable > 0 then
-						-- Clear any existing revive session
-						if reviveSessions[player] then
-							if reviveSessions[player].connection then
-								reviveSessions[player].connection:Disconnect()
-							end
-							reviveSessions[player] = nil
+						-- Clear any existing revive session connection
+						if reviveSessions[player] and reviveSessions[player].connection then
+							reviveSessions[player].connection:Disconnect()
 						end
 
-						-- ReviveUI prompt was already sent earlier with task.defer
-						print("🚀 Revive prompt already sent to", player.Name)
-						-- promptReviveRemote:FireClient(player) -- Already done above
-
-						-- Set up response listener
+						-- Set up response listener FIRST
 						local responseConnection
 						local responseReceived = false
 
