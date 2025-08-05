@@ -31,7 +31,26 @@ function FSM:addState(stateName, stateObject)
 end
 
 function FSM:changeState(newStateName, ...)
-    assert(self.states[newStateName], "State '" .. tostring(newStateName) .. "' not found")
+    -- Safety check for destroyed FSM
+    if not self.states or not next(self.states) then
+        warn("[FSM] Attempted to change state on destroyed FSM")
+        return
+    end
+    
+    -- Check if state exists
+    if not self.states[newStateName] then
+        warn("[FSM] State '" .. tostring(newStateName) .. "' not found")
+        warn("[FSM] Available states:", table.concat(self:getStateNames(), ", "))
+        return
+    end
+    
+    -- Prevent redundant state changes
+    if self.currentStateName == newStateName then
+        warn("[FSM] Already in state:", newStateName)
+        return
+    end
+    
+    warn("[FSM] Changing state from", self.currentStateName, "to", newStateName, "with args:", ...)
     
     -- Cancel any active promise from the current state
     if self.activePromise then
@@ -53,7 +72,6 @@ function FSM:changeState(newStateName, ...)
     
     -- Enter new state
     if self.currentState.OnEnter then
-        warn("[FSM] Entering state:", newStateName, "with args:", ...)
         local result = self.currentState:OnEnter(...)
         
         -- If OnEnter returns a Promise, track it
@@ -64,7 +82,7 @@ function FSM:changeState(newStateName, ...)
             -- Handle promise resolution
             result:andThen(function(nextState)
                 warn("[FSM] Promise resolved, transitioning to:", nextState)
-                if typeof(nextState) == "string" and self.states[nextState] then
+                if typeof(nextState) == "string" and self.states and self.states[nextState] then
                     self:changeState(nextState)
                 else
                     warn("[FSM] Invalid next state:", nextState)
@@ -86,6 +104,16 @@ end
 
 function FSM:getCurrentState()
     return self.currentStateName
+end
+
+function FSM:getStateNames()
+    local names = {}
+    if self.states then
+        for name, _ in pairs(self.states) do
+            table.insert(names, name)
+        end
+    end
+    return names
 end
 
 function FSM:destroy()

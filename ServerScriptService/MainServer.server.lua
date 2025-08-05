@@ -211,25 +211,26 @@ local function onPlayerAdded(player)
     end
     
     -- Monitor character spawning
-    local characterAddedConnection
-    characterAddedConnection = player.CharacterAdded:Connect(function(character)
+    local characterAddedConnection = player.CharacterAdded:Connect(function(character)
         warn("[MainServer] Character added for", player.Name)
         
-        -- Get the current controller (might be a new one after LoadCharacter)
+        -- Get current controller
         local currentController = playerControllers[player]
         if not currentController then
-            warn("[MainServer] No controller found for", player.Name, "- creating new one")
-            currentController = PlayerController.new(player, Config)
-            playerControllers[player] = currentController
+            warn("[MainServer] No controller found for character added")
+            return
         end
         
-        -- Reset controller state
-        currentController.snakeObject = nil
-        
-        -- Check if this is a revival
-        local isReviving = player:GetAttribute("JustRevived") or player:GetAttribute("RevivingNow")
+        -- Check if this is a revive spawn
+        local isReviving = player:GetAttribute("RevivingNow") or player:GetAttribute("JustRevived")
         if isReviving then
-            warn("[MainServer] Character added during revival for", player.Name)
+            warn("[MainServer] This is a revive spawn, letting SnakeSystemIntegration handle snake creation")
+            -- Don't reset controller state or change FSM state for revives
+            -- SnakeSystemIntegration will create the snake with the saved length
+        else
+            -- Normal spawn - reset controller state
+            currentController.snakeObject = nil
+            currentController.snakeModel = nil
         end
         
         -- Set up death handler for orb spawning

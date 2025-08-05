@@ -44,6 +44,8 @@ function DyingState:OnEnter(collisionData)
     local character = self.controller.player.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     
+    -- IMPORTANT: Do NOT kill the humanoid yet - wait for revive decision
+    
     -- Return promise for next state
     return Promise.new(function(resolve, reject, onCancel)
         -- First, tell the client NOT to show death screen yet
@@ -136,25 +138,28 @@ function DyingState:OnEnter(collisionData)
                         self.controller.player:SetAttribute("AwaitingReviveResponse", false)
                         
                         if response == "revive" then
-                            -- Store revival info
+                            -- Set revive attributes for SnakeSystemIntegration
                             self.controller.player:SetAttribute("ReviveSnakeLength", self.currentLength)
                             if self.deathPosition then
                                 self.controller.player:SetAttribute("RevivePosition", 
-                                    string.format("%.2f, %.2f, %.2f", 
-                                        self.deathPosition.X, 
-                                        self.deathPosition.Y, 
-                                        self.deathPosition.Z
-                                    )
-                                )
+                                    string.format("%f,%f,%f", self.deathPosition.X, self.deathPosition.Y, self.deathPosition.Z))
                             end
                             
                             warn("[DyingState] Player chose to revive")
+                            -- Do NOT kill the humanoid - they're reviving!
                             resolve("Reviving")
                         else
                             warn("[DyingState] Player declined revive")
                             self.controller.player:SetAttribute("AwaitingReviveResponse", false)
                             
-                            -- Show death UI now
+                            -- Player declined - kill humanoid and show death UI
+                            if humanoid and humanoid.Health > 0 then
+                                warn("[DyingState] Killing player humanoid (declined revive)")
+                                humanoid.Health = 0
+                            end
+                            
+                            -- Show death UI after killing
+                            task.wait(0.5)
                             if deathUIRemote then
                                 deathUIRemote:FireClient(self.controller.player, {
                                     action = "show"
@@ -174,7 +179,14 @@ function DyingState:OnEnter(collisionData)
                         self.controller.player:SetAttribute("RevivePromptActive", false)
                         self.controller.player:SetAttribute("AwaitingReviveResponse", false)
                         
+                        -- Kill humanoid on timeout
+                        if humanoid and humanoid.Health > 0 then
+                            warn("[DyingState] Killing player humanoid (timeout)")
+                            humanoid.Health = 0
+                        end
+                        
                         -- Show death UI on timeout
+                        task.wait(0.5)
                         if deathUIRemote then
                             deathUIRemote:FireClient(self.controller.player, {
                                 action = "show"
@@ -199,8 +211,11 @@ function DyingState:OnEnter(collisionData)
                 end)
             else
                 warn("[DyingState] PromptRevive remote not found!")
+                -- Wait a bit before killing to prevent jarring transition
+                task.wait(1.0)
                 -- Kill the player since we can't prompt
                 if humanoid and humanoid.Health > 0 then
+                    warn("[DyingState] Killing player humanoid (no prompt remote)")
                     humanoid.Health = 0
                 end
                 task.wait(0.5)
@@ -210,11 +225,20 @@ function DyingState:OnEnter(collisionData)
             -- No revives available, go straight to spectating
             warn("[DyingState] No revive tokens available")
             
-            -- Show death UI immediately since no revives
+            -- Wait a bit before showing death UI to prevent jarring transition
+            task.wait(1.0)
+            
+            -- Show death UI after delay
             if deathUIRemote then
                 deathUIRemote:FireClient(self.controller.player, {
                     action = "show"
                 })
+            end
+            
+            -- Kill the player after showing UI
+            if humanoid and humanoid.Health > 0 then
+                warn("[DyingState] Killing player humanoid (no revives)")
+                humanoid.Health = 0
             end
             
             -- Wait for death to process
