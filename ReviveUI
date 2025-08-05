@@ -246,7 +246,21 @@ end
 
 -- Handle revive prompt from server
 promptReviveRemote.OnClientEvent:Connect(function()
-	if isShowing then return end
+	if isShowing then 
+		print("ReviveUI: Already showing, ignoring duplicate prompt")
+		return 
+	end
+	
+	-- Safety check: clear any stale attributes
+	if not player.Character or not player.Character:FindFirstChild("Humanoid") or player.Character.Humanoid.Health <= 0 then
+		-- We're actually dead, so proceed
+	else
+		-- We're alive, this is likely a stale prompt
+		print("ReviveUI: Player is alive, ignoring stale prompt")
+		player:SetAttribute("RevivePromptActive", false)
+		return
+	end
+	
 	isShowing = true
 	isPurchasing = false
 
@@ -301,11 +315,17 @@ end)
 
 -- Button Connections
 yesButton.MouseButton1Click:Connect(function()
-	if not isPurchasing then handleResponse("revive") end
+	if not isPurchasing and isShowing then 
+		print("ReviveUI: Sending response to server: revive")
+		handleResponse("revive") 
+	end
 end)
 
 noButton.MouseButton1Click:Connect(function()
-	if not isPurchasing then handleResponse("decline") end
+	if not isPurchasing and isShowing then 
+		print("ReviveUI: Sending response to server: decline")
+		handleResponse("decline") 
+	end
 end)
 
 buyButton.MouseButton1Click:Connect(function()

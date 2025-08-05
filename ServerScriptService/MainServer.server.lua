@@ -119,6 +119,12 @@ local function onPlayerAdded(player)
                                 return
                             end
                             
+                            -- Check if revive prompt is active
+                            if player:GetAttribute("RevivePromptActive") or player:GetAttribute("AwaitingReviveResponse") then
+                                warn("[MainServer] Revive prompt active, ignoring collision for", player.Name)
+                                return
+                            end
+                            
                             warn("[MainServer] FATAL COLLISION for", player.Name, "Type:", 
                                 collisionData.isHeadCollision and "Head" or 
                                 collisionData.isWallCollision and "Wall" or 
