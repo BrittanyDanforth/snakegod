@@ -162,12 +162,14 @@ function PlayerController:setSpeed(speed)
 end
 
 function PlayerController:hasReviveToken()
-    return self.data.reviveTokens > 0
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    return revivesAvailable > 0
 end
 
 function PlayerController:useReviveToken()
-    if self.data.reviveTokens > 0 then
-        self.data.reviveTokens = self.data.reviveTokens - 1
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    if revivesAvailable > 0 then
+        self.player:SetAttribute("RevivesAvailable", revivesAvailable - 1)
         return true
     end
     return false
@@ -248,11 +250,8 @@ function PlayerController:requestReviveFromClient()
             end
         end)
         
-        -- Send prompt to client
-        promptRevive:FireClient(self.player, {
-            show = true,
-            hasToken = self:hasReviveToken()
-        })
+        -- Send prompt to client (ReviveUI expects no parameters)
+        promptRevive:FireClient(self.player)
         
         -- Cleanup on cancel
         onCancel(function()
@@ -265,14 +264,8 @@ function PlayerController:requestReviveFromClient()
 end
 
 function PlayerController:hideReviveUI()
-    local remotes = ReplicatedStorage:WaitForChild("Remotes")
-    local promptRevive = remotes:FindFirstChild("PromptRevive")
-    
-    if promptRevive then
-        promptRevive:FireClient(self.player, {
-            show = false
-        })
-    end
+    -- ReviveUI hides itself when it gets a response
+    -- No need to send another event
 end
 
 function PlayerController:playDeathEffects(collisionData)

@@ -12,6 +12,7 @@ local RunService = game:GetService("RunService")
 local ServerModules = ServerStorage:WaitForChild("ServerModules")
 local PlayerController = require(ServerModules.PlayerController)
 local CollisionModule = require(ServerModules.CollisionModule)
+local DeathOrbHandler = require(ServerModules.DeathOrbHandler)
 
 -- Shared configuration  
 local Config = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Config"))
@@ -22,9 +23,13 @@ local playerControllers = {}
 -- Collision system
 local collisionSystem = nil
 
+-- Death orb system
+local deathOrbHandler = nil
+
 -- Track existing snakes from SnakeSystemIntegration
 local snakeSystemIntegration = nil
 local existingSnakes = {} -- Track snakes created by the old system
+local activeReviveSessions = {} -- Track active revive sessions
 
 -- Wait for SnakeSystemIntegration to load
 local function waitForSnakeSystem()
@@ -47,6 +52,9 @@ local function initializeSystems()
     -- Initialize collision system
     collisionSystem = CollisionModule.new(playerControllers)
     collisionSystem:start()
+    
+    -- Initialize death orb handler
+    deathOrbHandler = DeathOrbHandler.new()
     
     -- Disable the old InitializeCollisionHandler if it exists
     local collisionHandler = workspace:FindFirstChild("SnakeCollisionHandlerV1")
@@ -119,6 +127,21 @@ local function onPlayerAdded(player)
                                 return
                             end
                             
+                            -- Check if revive prompt is active
+                            if player:GetAttribute("RevivePromptActive") or player:GetAttribute("AwaitingReviveResponse") then
+                                warn("[MainServer] Revive prompt active, ignoring collision for", player.Name)
+                                return
+                            end
+                            
+                            -- Check for active revive session
+                            if activeReviveSessions[player] then
+                                warn("[MainServer] Active revive session found, ignoring collision for", player.Name)
+                                return
+                            end
+                            
+                            -- Mark active revive session
+                            activeReviveSessions[player] = true
+                            
                             warn("[MainServer] FATAL COLLISION for", player.Name, "Type:", 
                                 collisionData.isHeadCollision and "Head" or 
                                 collisionData.isWallCollision and "Wall" or 
@@ -133,6 +156,12 @@ local function onPlayerAdded(player)
                             
                             -- Change to Dying state immediately
                             controller.fsm:changeState("Dying", collisionData)
+                            
+                            -- Clear revive session after death processing
+                            task.spawn(function()
+                                task.wait(10) -- Give enough time for revive prompt
+                                activeReviveSessions[player] = nil
+                            end)
                             
                             -- Then kill the player to trigger existing systems
                             local character = player.Character
@@ -159,12 +188,48 @@ local function onPlayerAdded(player)
                     end)
     end
     
+    -- Monitor revive state for orb cleanup
+    player:GetAttributeChangedSignal("JustRevived"):Connect(function()
+        if player:GetAttribute("JustRevived") then
+            -- Player is reviving, clean up death orbs
+            local character = player.Character
+            if character then
+                local rootPart = character:FindFirstChild("HumanoidRootPart")
+                if rootPart and deathOrbHandler then
+                    deathOrbHandler:cleanupOrbsNearPosition(rootPart.Position)
+                end
+            end
+        end
+    end)
+    
     -- Monitor character spawning
     player.CharacterAdded:Connect(function(character)
         warn("[MainServer] Character added for", player.Name)
         
         -- Reset controller state
         controller.snakeObject = nil
+        
+        -- Set up death handler for orb spawning
+        local humanoid = character:WaitForChild("Humanoid")
+        humanoid.Died:Connect(function()
+            -- Get snake length for orb calculation
+            local snakeLength = 55 -- default
+            if player:FindFirstChild("leaderstats") then
+                local lengthValue = player.leaderstats:FindFirstChild("Length")
+                if lengthValue then
+                    snakeLength = lengthValue.Value or 55
+                end
+            end
+            
+            -- Get death position
+            local rootPart = character:FindFirstChild("HumanoidRootPart")
+            local deathPosition = rootPart and rootPart.Position or Vector3.new(0, 5, 0)
+            
+            -- Spawn death orbs
+            if deathOrbHandler then
+                deathOrbHandler:spawnDeathOrbsForPlayer(player, snakeLength, deathPosition)
+            end
+        end)
         
         -- Wait a bit for SnakeSystemIntegration to create the snake
         task.wait(1)
@@ -200,8 +265,12 @@ end
 
 -- Handle player leaving
 local function onPlayerRemoving(player)
-    warn("[MainServer] Player leaving:", player.Name)
+    warn("[MainServer] Player removing:", player.Name)
     
+    -- Clean up revive sessions
+    activeReviveSessions[player] = nil
+    
+    -- Clean up controller
     local controller = playerControllers[player]
     if controller then
         -- Destroy controller (handles all cleanup)
@@ -226,30 +295,9 @@ local function setupRemoteHandlers()
             
             local controller = playerControllers[player]
             if controller then
-                -- Reset state for respawn
-                warn("[MainServer] Handling respawn for", player.Name)
-                controller.collisionState.canCollide = false
-                
-                -- Wait for new snake to be created
-                task.spawn(function()
-                    task.wait(1.5) -- Give time for snake creation
-                    local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
-                    if snakeModel and snakeModel:IsA("Model") then
-                        local head = snakeModel:FindFirstChild("Segment0_Head")
-                        if head then
-                            controller.snakeObject = snakeModel
-                            existingSnakes[player] = snakeModel
-                            
-                            -- Transition to Alive state
-                            controller.fsm:changeState("Alive")
-                            
-                            -- Apply spawn invincibility
-                            controller:setInvincible(3)
-                            
-                            warn("[MainServer] Respawn complete - state set to Alive")
-                        end
-                    end
-                end)
+                -- Transition to Spawning state
+                warn("[MainServer] Transitioning to Spawning state for", player.Name)
+                controller.fsm:changeState("Spawning")
             end
         end)
     end

@@ -25,12 +25,29 @@ function DyingState:OnEnter(collisionData)
     -- Log the death
     warn("[DyingState] Player", self.controller.player.Name, "entered dying state")
     
-    -- Don't return a promise - let the existing death system handle everything
-    -- The existing SnakeSystemIntegration will handle:
-    -- - Showing ReviveUI
-    -- - Spawning orbs
-    -- - Death effects
-    -- - Respawning
+    -- Return a promise that determines the next state
+    return Promise.new(function(resolve, reject, onCancel)
+        -- Check if player has revives
+        if self.controller:hasReviveToken() then
+            -- Request revive from client
+            self.controller:requestReviveFromClient():andThen(function(result)
+                if result == "Reviving" then
+                    -- Player chose to revive, transition to RevivingState
+                    resolve("Reviving")
+                else
+                    -- Player declined revive
+                    resolve("Spectating")
+                end
+            end):catch(function(err)
+                warn("[DyingState] Error requesting revive:", err)
+                resolve("Spectating")
+            end)
+        else
+            -- No revives available, go straight to spectating
+            warn("[DyingState] No revives available for", self.controller.player.Name)
+            resolve("Spectating")
+        end
+    end)
 end
 
 function DyingState:OnExecute(dt)
@@ -46,37 +63,8 @@ function DyingState:OnExit()
 end
 
 function DyingState:_spawnDeathOrbs()
-    -- Spawn orbs at death location
-    local head = self.controller:getSnakeHead()
-    if not head then return end
-    
-    local OrbUtils = ReplicatedStorage:FindFirstChild("OrbUtils")
-    if not OrbUtils then return end
-    
-    local OrbUtilsModule = require(OrbUtils)
-    
-    -- Calculate orbs to spawn based on length
-    local orbCount = math.min(
-        math.floor(self.controller:getLength() * 0.7),
-        self.controller.config.maxDeathOrbs or 50
-    )
-    
-    -- Spawn orbs asynchronously
-    task.spawn(function()
-        for i = 1, orbCount do
-            if self.controller.isDestroyed then break end
-            
-            local offset = Vector3.new(
-                math.random(-10, 10),
-                0,
-                math.random(-10, 10)
-            )
-            
-            -- OrbUtilsModule.spawnOrb(head.Position + offset, 1)
-            -- Orb spawning is handled by the existing SnakeSystemIntegration
-            task.wait(0.03) -- Small delay between orbs
-        end
-    end)
+    -- Death orbs are now handled by MainServer's DeathOrbHandler
+    -- This function is kept for compatibility but does nothing
 end
 
 function DyingState:_freezeCamera()

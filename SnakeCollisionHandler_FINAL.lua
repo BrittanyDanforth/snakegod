@@ -2,6 +2,12 @@
 -- Fixes: Death orbs spawn properly, ReviveUI shows correctly
 -- Maintains V8.2 structure while fixing critical issues
 
+-- CRITICAL: Check if we should disable this handler
+if _G.DISABLE_OLD_COLLISION_HANDLER then
+    warn("🛑 SnakeCollisionHandler_FINAL disabled by global flag - using new modular system")
+    return
+end
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -89,6 +95,7 @@ local deadPlayers = {}
 local deathTimestamps = {}
 local reviveSessions = {} -- FIX 3: Track revive sessions
 local processingPlayers = {} -- NEW: Track players currently being processed
+local activeReviveSessions = {} -- Track active revive sessions to prevent duplicates
 
 -- === COLLISION STATE TRACKING (NEW) ===
 local collisionStates = {} -- Track collision states per player
@@ -490,6 +497,15 @@ local function spawnDeathOrb(position, value)
 		if DEBUG_COLLISIONS then
 			print(string.format("[ORB] Spawned death orb at %s with value %d", tostring(spawnPos), value))
 		end
+		
+		-- Add automatic cleanup after 60 seconds to prevent orb accumulation
+		task.spawn(function()
+			task.wait(60)
+			if orb and orb.Parent then
+				orb:Destroy()
+			end
+		end)
+		
 		return orb
 	else
 		warn("[ORB] Failed to spawn orb:", orb)
@@ -914,6 +930,21 @@ task.spawn(function()
 
 			if death.type == "player" then
 				local player = death.target
+				
+				-- Prevent processing if player is respawning
+				if player:GetAttribute("IsRespawning") then
+					print("⚠️ Player is respawning, ignoring death for", player.Name)
+					resetProcessing()
+					return
+				end
+
+				-- Prevent duplicate death processing
+				if player:GetAttribute("RevivePromptActive") or player:GetAttribute("AwaitingReviveResponse") then
+					print("⚠️ Revive prompt already active for", player.Name, "- ignoring duplicate death")
+					resetProcessing()
+					return
+				end
+				
 				local character = player.Character
 				if character then
 					local humanoid = character:FindFirstChild("Humanoid")
@@ -1024,8 +1055,18 @@ task.spawn(function()
 					local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
 					print("🔍 Revive check - HasRevive:", hasRevive, "RevivesAvailable:", revivesAvailable)
 
+					-- CRITICAL: Check if we already have an active revive session
+					if activeReviveSessions[player] then
+						print("⚠️ Already have active revive session for", player.Name, "- ignoring duplicate death")
+						resetProcessing()
+						return
+					end
+
 					-- Set revive attributes SUPER EARLY if available
 					if hasRevive or revivesAvailable > 0 then
+						-- Mark that we have an active revive session
+						activeReviveSessions[player] = true
+						
 						-- Set RevivePromptActive IMMEDIATELY to block SlitherIOMenu
 						player:SetAttribute("RevivePromptActive", true)
 						player:SetAttribute("AwaitingReviveResponse", true)
@@ -1260,14 +1301,19 @@ task.spawn(function()
 								responseReceived = true
 								print("📨 Received revive response from", player.Name, ":", response)
 
+								-- Disconnect immediately to prevent duplicates
 								if responseConnection then
 									responseConnection:Disconnect()
+									responseConnection = nil
 								end
 
 								-- Clear session
 								if reviveSessions[player] then
 									reviveSessions[player] = nil
 								end
+								
+								-- Clear active revive session
+								activeReviveSessions[player] = nil
 
 								-- Clear attributes
 								player:SetAttribute("AwaitingReviveResponse", false)
@@ -1295,6 +1341,9 @@ task.spawn(function()
 
 									player:SetAttribute("RevivePosition", tostring(deathPosition))
 									player:SetAttribute("ReviveSnakeLength", snakeLength)
+									
+									-- Clean up death orbs near the death position
+									cleanupDeathOrbsNearPosition(deathPosition, 100)
 
 									-- Clear dead state
 									resetPlayerCollisionState(player)
@@ -1307,6 +1356,9 @@ task.spawn(function()
 										visualSnakeModel:Destroy()
 									end
 
+									-- CRITICAL: Set a flag to prevent death processing during respawn
+									player:SetAttribute("IsRespawning", true)
+
 									-- Respawn the player
 									player:LoadCharacter()
 
@@ -1314,6 +1366,7 @@ task.spawn(function()
 									task.spawn(function()
 										task.wait(0.1)
 										player:SetAttribute("CameraLocked", false)
+										player:SetAttribute("IsRespawning", false)
 										task.wait(1.9)
 										player:SetAttribute("RevivingNow", false)
 										player:SetAttribute("NoReviveEffects", false)
@@ -1376,6 +1429,7 @@ task.spawn(function()
 								end
 
 								reviveSessions[player] = nil
+								activeReviveSessions[player] = nil
 
 								-- Clear attributes
 								player:SetAttribute("AwaitingReviveResponse", false)
@@ -2425,6 +2479,28 @@ debugCommand.Changed:Connect(function()
 		debugCommand.Value = ""
 	end
 end)
+
+-- === DEATH ORB CLEANUP FUNCTION ===
+local function cleanupDeathOrbsNearPosition(position, radius)
+	radius = radius or 50
+	local orbsFolder = workspace:FindFirstChild("Orbs")
+	if not orbsFolder then return end
+	
+	local cleaned = 0
+	for _, obj in ipairs(orbsFolder:GetChildren()) do
+		if obj.Name == "DeathOrb" and obj:IsA("BasePart") then
+			local distance = (obj.Position - position).Magnitude
+			if distance <= radius then
+				obj:Destroy()
+				cleaned = cleaned + 1
+			end
+		end
+	end
+	
+	if cleaned > 0 then
+		print("🧹 Cleaned up", cleaned, "death orbs near revive position")
+	end
+end
 
 print("⚡ SnakeCollisionHandler V10 BULLETPROOF EDITION")
 print("✅ FIXED: Death orbs now spawn properly using task.defer")
