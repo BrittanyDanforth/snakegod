@@ -246,32 +246,38 @@ function CollisionModule:_updateCaches()
         end
     end
     
-    -- Find AI snakes in AISnakes folder
-    local aiSnakeFolder = workspace:FindFirstChild("AISnakes")
-    if aiSnakeFolder then
-        for _, aiSnake in pairs(aiSnakeFolder:GetChildren()) do
-            if aiSnake:IsA("Model") then
-                local head = aiSnake:FindFirstChild("Head")
-                if head and head:IsA("BasePart") then
-                    -- AI snakes have different structure
-                    local segments = {}
-                    local bodyFolder = aiSnake:FindFirstChild("Body")
-                    if bodyFolder then
-                        for _, segment in pairs(bodyFolder:GetChildren()) do
-                            if segment:IsA("BasePart") then
-                                table.insert(segments, segment)
-                            end
+    -- Find AI snakes (they're directly in workspace with names like "AISnakeModel_")
+    for _, child in pairs(workspace:GetChildren()) do
+        if child:IsA("Model") and child.Name:match("^AISnakeModel_") then
+            -- This is an AI snake
+            local head = child:FindFirstChild("Segment0_Head")
+            if head and head:IsA("BasePart") then
+                -- AI snakes have segments named "AISegment1", "AISegment2", etc.
+                local segments = {}
+                
+                -- First add the head as segment 0
+                table.insert(segments, head)
+                
+                -- Then find all body segments
+                for _, part in pairs(child:GetChildren()) do
+                    if part:IsA("BasePart") and part.Name:match("^AISegment%d+") then
+                        local segmentNumber = tonumber(part.Name:match("AISegment(%d+)"))
+                        if segmentNumber then
+                            segments[segmentNumber + 1] = part -- +1 because head is at index 1
                         end
                     end
-                    
-                    table.insert(self.snakeCache, {
-                        Head = head,
-                        Model = aiSnake,
-                        Segments = segments,
-                        IsAI = true,
-                        Player = nil
-                    })
                 end
+                
+                -- Also check if it's tagged as AISnake
+                local isAI = CollectionService:HasTag(child, "AISnake")
+                
+                table.insert(self.snakeCache, {
+                    Head = head,
+                    Model = child,
+                    Segments = segments,
+                    IsAI = true,
+                    Player = nil
+                })
             end
         end
     end
