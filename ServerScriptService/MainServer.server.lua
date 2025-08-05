@@ -76,14 +76,15 @@ local function onPlayerAdded(player)
     
     -- Listen for snake creation from SnakeSystemIntegration
     local function checkForSnake()
-        -- Method 1: Check SnakeFolder
-        local snakeFolder = workspace:FindFirstChild("SnakeFolder")
-        if snakeFolder then
-            local playerSnake = snakeFolder:FindFirstChild(player.Name)
-            if playerSnake then
-                warn("[MainServer] Found snake in SnakeFolder for", player.Name)
-                controller.snakeObject = playerSnake
-                existingSnakes[player] = playerSnake
+        -- Snakes are created as Snake_[PlayerName] directly in workspace
+        local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
+        if snakeModel and snakeModel:IsA("Model") then
+            -- Verify it has the head segment
+            local head = snakeModel:FindFirstChild("Segment0_Head")
+            if head then
+                warn("[MainServer] Found snake for", player.Name, "with head:", head.Name)
+                controller.snakeObject = snakeModel
+                existingSnakes[player] = snakeModel
                 
                 -- Set initial state to Alive when snake is created
                 if controller.fsm:getCurrentState() ~= "Alive" then
@@ -91,19 +92,6 @@ local function onPlayerAdded(player)
                 end
                 return true
             end
-        end
-        
-        -- Method 2: Check for Snake_[PlayerName] pattern
-        local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
-        if snakeModel and snakeModel:IsA("Model") then
-            warn("[MainServer] Found snake via Snake_ pattern for", player.Name)
-            controller.snakeObject = snakeModel
-            existingSnakes[player] = snakeModel
-            
-            if controller.fsm:getCurrentState() ~= "Alive" then
-                controller.fsm:changeState("Alive")
-            end
-            return true
         end
         
         return false
@@ -242,12 +230,12 @@ local function setupRemoteHandlers()
                 -- Wait for snake to be created
                 task.spawn(function()
                     task.wait(1)
-                    local snakeFolder = workspace:FindFirstChild("SnakeFolder")
-                    if snakeFolder then
-                        local playerSnake = snakeFolder:FindFirstChild(player.Name)
-                        if playerSnake then
-                            controller.snakeObject = playerSnake
-                            existingSnakes[player] = playerSnake
+                    local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
+                    if snakeModel and snakeModel:IsA("Model") then
+                        local head = snakeModel:FindFirstChild("Segment0_Head")
+                        if head then
+                            controller.snakeObject = snakeModel
+                            existingSnakes[player] = snakeModel
                             controller.fsm:changeState("Alive")
                             warn("[MainServer] Player respawned and set to Alive state")
                         end
