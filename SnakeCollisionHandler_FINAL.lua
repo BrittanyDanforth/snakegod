@@ -485,9 +485,27 @@ CollisionCache = {
 }
 
 -- === IMPROVED ORB SPAWNING (FIXED) ===
-local function spawnDeathOrb(position, value)
+local function spawnDeathOrb(position, value, color)
 	local spawnPos = Vector3.new(position.X, ORB_SPAWN_HEIGHT, position.Z)
 
+	-- Try to use the same method as AI snakes for consistency
+	if OrbUtils and OrbUtils.spawnOrb then
+		-- Match AI snake's approach: position, size, color
+		local size = math.min(2.5, 1.5 + (value * 0.02)) -- Scale size based on value
+		local success, orb = pcall(function()
+			return OrbUtils.spawnOrb(spawnPos, size, color)
+		end)
+		
+		if success and orb then
+			performanceStats.orbsSpawned = performanceStats.orbsSpawned + 1
+			if DEBUG_COLLISIONS then
+				print(string.format("[ORB] Spawned death orb at %s with size %.1f", tostring(spawnPos), size))
+			end
+			return orb
+		end
+	end
+	
+	-- Fallback to spawnOrbAt if spawnOrb isn't available
 	local success, orb = pcall(function()
 		return OrbUtils.spawnOrbAt(spawnPos, value)
 	end)
@@ -508,6 +526,16 @@ end
 -- === FIX 4: Improved death orb spawning function ===
 local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 	print("💎 Spawning death orbs for", player.Name, "with", #segmentPositions, "segment positions")
+
+	-- Get snake color for orbs
+	local snakeColor = Color3.fromRGB(255, 255, 0) -- Default yellow
+	local snakeInstance = _G.PlayerSnakes and _G.PlayerSnakes[player]
+	if snakeInstance and snakeInstance.segments and snakeInstance.segments[1] then
+		local firstSegment = snakeInstance.segments[1]
+		if firstSegment and firstSegment.Color then
+			snakeColor = firstSegment.Color
+		end
+	end
 
 	-- Calculate orb distribution based on actual segments
 	local totalOrbs = math.clamp(math.floor(snakeLength * 0.4), 3, MAX_ORBS_PER_SNAKE)
@@ -545,7 +573,7 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 						(math.random() - 0.5) * spread
 					)
 
-					spawnDeathOrb(pos + offset, orbValue)
+					spawnDeathOrb(pos + offset, orbValue, snakeColor)
 					spawnedOrbs = spawnedOrbs + 1
 
 					-- Small delay every few orbs
@@ -571,7 +599,7 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 						0,
 						(math.random() - 0.5) * spread
 					)
-					spawnDeathOrb(pos + offset, orbValue)
+					spawnDeathOrb(pos + offset, orbValue, snakeColor)
 					spawnedOrbs = spawnedOrbs + 1
 				end
 			end
@@ -600,7 +628,7 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 					math.sin(angle) * distance
 				)
 
-				spawnDeathOrb(basePos + offset, orbValue)
+				spawnDeathOrb(basePos + offset, orbValue, snakeColor)
 				spawnedOrbs = spawnedOrbs + 1
 
 				if spawnedOrbs % 8 == 0 then
@@ -897,6 +925,21 @@ local function queuePlayerDeath(player)
 
 	-- Mark as dead IMMEDIATELY to prevent duplicate collisions
 	deadPlayers[player] = true
+	setCollisionState(player, false, true, true)
+	
+	-- Immediately make the player's snake non-collidable to prevent killing AI snakes during death
+	task.spawn(function()
+		local snakeInstance = _G.PlayerSnakes and _G.PlayerSnakes[player]
+		if snakeInstance and snakeInstance.segments then
+			for _, segment in ipairs(snakeInstance.segments) do
+				if segment and segment.Parent then
+					segment.CanCollide = false
+					segment.CanTouch = false
+					segment.CanQuery = false
+				end
+			end
+		end
+	end)
 
 	table.insert(deathQueue, {
 		type = "player",
@@ -1471,39 +1514,13 @@ task.spawn(function()
 					resetProcessing()
 				end
 			elseif death.type == "ai" then
-				-- AI death processing remains the same
+				-- AI death processing - let the AI snake handle its own death orbs
 				local head = death.target
 				if AISnakeModule._activeSnakes then
 					for _, snake in AISnakeModule._activeSnakes do
 						if snake.HeadParts and snake.HeadParts.head == head then
-							if snake.Segments then
-								local segments = snake.Segments
-								local totalLength = #segments
-
-								local totalOrbs = math.clamp(math.floor(totalLength * 0.4), 3, 30)
-								local baseValue = math.max(1, math.floor(totalLength * 0.3 / totalOrbs))
-
-								local spawnedOrbs = 0
-								local skipInterval = math.max(1, math.floor(totalLength / totalOrbs))
-
-								for i = 1, totalLength, skipInterval do
-									if spawnedOrbs >= totalOrbs then break end
-
-									local seg = segments[i]
-									if seg and seg.Parent and seg.Position then
-										local pos = seg.Position
-										local offset = Vector3.new(
-											(math.random() - 0.5) * 2,
-											0,
-											(math.random() - 0.5) * 2
-										)
-
-										spawnDeathOrb(pos + offset, baseValue)
-										spawnedOrbs = spawnedOrbs + 1
-									end
-								end
-							end
-
+							-- The AI snake's Destroy method will spawn orbs properly
+							-- This ensures consistent orb spawning whether killed by player collision or head-to-head
 							if snake.Destroy then
 								snake:Destroy()
 							end
@@ -2092,6 +2109,17 @@ RunService.Stepped:Connect(function(_, deltaTime)
 
 			for _, headData in ipairs(playerHeads) do
 				local player = headData.player
+
+				-- Check if player is dead or being processed for death
+				if deadPlayers[player] or processingPlayers[player] then
+					continue -- Skip dead players completely
+				end
+
+				-- Check collision state
+				local state = getCollisionState(player)
+				if not state.canCollide or state.isDead or state.isProcessing then
+					continue
+				end
 
 				if not isPlayerInvincible(player) then
 					local segmentData = getPlayerSegments(player)
