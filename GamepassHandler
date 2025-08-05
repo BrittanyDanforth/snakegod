@@ -555,7 +555,7 @@ end)
 -- NEW: Direct communication for revive effects
 -- This replaces the unreliable JustRevived attribute checking
 local playerRevivedEffectRemote = remotes:WaitForChild("PlayerRevivedEffect")
-playerRevivedEffectRemote.OnServerEvent:Connect(function(player)
+playerRevivedEffectRemote.OnClientEvent:Connect(function()
 	-- This code now ONLY runs when the server explicitly tells it to after a revive.
 	-- It is no longer tied to the chaotic CharacterAdded event.
 	
