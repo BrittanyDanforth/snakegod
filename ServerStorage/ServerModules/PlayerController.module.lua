@@ -209,12 +209,43 @@ function PlayerController:setSnakeObject(snakeObject)
 end
 
 function PlayerController:getSnakeHead()
-    -- Since we know snakes are Snake_[PlayerName] with Segment0_Head, let's be direct
+    -- First try to use stored snake object/model
+    if self.snakeObject then
+        if self.snakeObject:IsA("Model") then
+            -- Direct model reference
+            local head = self.snakeObject:FindFirstChild("Segment0_Head")
+            if head and head:IsA("BasePart") then
+                return head
+            end
+        elseif self.snakeObject.model then
+            -- Snake object with model property
+            local head = self.snakeObject.model:FindFirstChild("Segment0_Head") or
+                         self.snakeObject.model:FindFirstChild("Head")
+            if head and head:IsA("BasePart") then
+                return head
+            end
+        end
+    end
+    
+    -- Search workspace directly
     local snakeModel = workspace:FindFirstChild("Snake_" .. self.player.Name)
     if snakeModel and snakeModel:IsA("Model") then
         local head = snakeModel:FindFirstChild("Segment0_Head")
         if head and head:IsA("BasePart") then
             return head
+        end
+    end
+    
+    -- Also check SnakeFolder
+    local snakeFolder = workspace:FindFirstChild("SnakeFolder")
+    if snakeFolder then
+        local playerSnake = snakeFolder:FindFirstChild(self.player.Name) or 
+                           snakeFolder:FindFirstChild("Snake_" .. self.player.Name)
+        if playerSnake and playerSnake:IsA("Model") then
+            local head = playerSnake:FindFirstChild("Segment0_Head")
+            if head and head:IsA("BasePart") then
+                return head
+            end
         end
     end
     

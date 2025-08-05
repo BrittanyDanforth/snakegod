@@ -213,9 +213,21 @@ function CollisionModule:_updateCaches()
     -- Update snake cache - find all snakes
     self.snakeCache = {}
     
-    -- Find player snakes - they're named Snake_[PlayerName] directly in workspace
+    -- Find player snakes - they can be in workspace or in SnakeFolder
     for _, player in pairs(Players:GetPlayers()) do
-        local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
+        local snakeModel = nil
+        
+        -- First check workspace directly (older system)
+        snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
+        
+        -- If not found, check SnakeFolder (newer system)
+        if not snakeModel then
+            local snakeFolder = workspace:FindFirstChild("SnakeFolder")
+            if snakeFolder then
+                snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
+            end
+        end
+        
         if snakeModel and snakeModel:IsA("Model") then
             -- Player snakes from OptimizedSnakeSystemV9 have head as Segment0_Head
             local head = snakeModel:FindFirstChild("Segment0_Head")

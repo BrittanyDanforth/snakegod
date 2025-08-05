@@ -74,9 +74,9 @@ local function onPlayerAdded(player)
     local controller = PlayerController.new(player, Config)
     playerControllers[player] = controller
     
-    -- Listen for snake creation from SnakeSystemIntegration
+        -- Listen for snake creation from SnakeSystemIntegration
     local function checkForSnake()
-        -- Snakes are created as Snake_[PlayerName] directly in workspace
+        -- First check if snake exists directly in workspace (older system)
         local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
         if snakeModel and snakeModel:IsA("Model") then
             -- Verify it has the head segment
@@ -84,11 +84,12 @@ local function onPlayerAdded(player)
             if head then
                 warn("[MainServer] Found snake for", player.Name, "with head:", head.Name)
                 controller.snakeObject = snakeModel
+                controller.snakeModel = snakeModel  -- Set both for compatibility
                 existingSnakes[player] = snakeModel
-                
+
                 -- Set initial state to Alive when snake is created
                 controller.fsm:changeState("Alive")
-                
+
                 -- Apply spawn invincibility
                 controller:setInvincible(3)
                 warn("[MainServer] State set to Alive with 3 second spawn protection")
@@ -96,6 +97,25 @@ local function onPlayerAdded(player)
             end
         end
         
+        -- Also check in SnakeFolder if it exists (newer system)
+        local snakeFolder = workspace:FindFirstChild("SnakeFolder")
+        if snakeFolder then
+            local playerSnake = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
+            if playerSnake and playerSnake:IsA("Model") then
+                local head = playerSnake:FindFirstChild("Segment0_Head")
+                if head then
+                    warn("[MainServer] Found snake in SnakeFolder for", player.Name)
+                    controller.snakeObject = playerSnake
+                    controller.snakeModel = playerSnake  -- Set both for compatibility
+                    existingSnakes[player] = playerSnake
+                    
+                    controller.fsm:changeState("Alive")
+                    controller:setInvincible(3)
+                    return true
+                end
+            end
+        end
+
         return false
     end
     
