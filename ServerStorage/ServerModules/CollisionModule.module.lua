@@ -89,6 +89,26 @@ function CollisionModule:update(dt)
 end
 
 function CollisionModule:_checkPlayerCollisions(controller)
+    local player = controller.player
+    local character = player.Character
+    if not character then return end
+    
+    -- CRITICAL: Skip collision checks if player is in revive-related states
+    if player:GetAttribute("RevivePromptActive") or 
+       player:GetAttribute("AwaitingReviveResponse") or
+       player:GetAttribute("IsReviving") or
+       player:GetAttribute("IsRespawning") then
+        return
+    end
+    
+    -- Skip if FSM is in dying or reviving state
+    if controller.fsm and controller.fsm.currentState then
+        local currentState = controller.fsm.currentState.name
+        if currentState == "Dying" or currentState == "Reviving" then
+            return
+        end
+    end
+    
     local head = controller:getSnakeHead()
     if not head then 
         warn("[CollisionModule] No head found for", controller.player.Name)

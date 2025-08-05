@@ -25,6 +25,7 @@ local collisionSystem = nil
 -- Track existing snakes from SnakeSystemIntegration
 local snakeSystemIntegration = nil
 local existingSnakes = {} -- Track snakes created by the old system
+local activeReviveSessions = {} -- Track active revive sessions
 
 -- Wait for SnakeSystemIntegration to load
 local function waitForSnakeSystem()
@@ -125,6 +126,15 @@ local function onPlayerAdded(player)
                                 return
                             end
                             
+                            -- Check for active revive session
+                            if activeReviveSessions[player] then
+                                warn("[MainServer] Active revive session found, ignoring collision for", player.Name)
+                                return
+                            end
+                            
+                            -- Mark active revive session
+                            activeReviveSessions[player] = true
+                            
                             warn("[MainServer] FATAL COLLISION for", player.Name, "Type:", 
                                 collisionData.isHeadCollision and "Head" or 
                                 collisionData.isWallCollision and "Wall" or 
@@ -139,6 +149,12 @@ local function onPlayerAdded(player)
                             
                             -- Change to Dying state immediately
                             controller.fsm:changeState("Dying", collisionData)
+                            
+                            -- Clear revive session after death processing
+                            task.spawn(function()
+                                task.wait(10) -- Give enough time for revive prompt
+                                activeReviveSessions[player] = nil
+                            end)
                             
                             -- Then kill the player to trigger existing systems
                             local character = player.Character
@@ -206,8 +222,12 @@ end
 
 -- Handle player leaving
 local function onPlayerRemoving(player)
-    warn("[MainServer] Player leaving:", player.Name)
+    warn("[MainServer] Player removing:", player.Name)
     
+    -- Clean up revive sessions
+    activeReviveSessions[player] = nil
+    
+    -- Clean up controller
     local controller = playerControllers[player]
     if controller then
         -- Destroy controller (handles all cleanup)
