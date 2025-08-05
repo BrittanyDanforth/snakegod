@@ -91,6 +91,12 @@ function DyingState:OnEnter(collisionData)
         if self.controller:hasReviveToken() then
             warn("[DyingState] Player has revive tokens available")
             
+            -- Check if we're already prompting to prevent duplicates
+            if self.controller.player:GetAttribute("RevivePromptActive") then
+                warn("[DyingState] Revive prompt already active, skipping duplicate")
+                return resolve("Spectating")
+            end
+            
             -- Get remotes
             local remotes = ReplicatedStorage:WaitForChild("Remotes")
             local promptRevive = remotes:FindFirstChild("PromptRevive")

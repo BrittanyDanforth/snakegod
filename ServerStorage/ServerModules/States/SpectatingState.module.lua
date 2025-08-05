@@ -18,23 +18,29 @@ function SpectatingState.new(controller)
 end
 
 function SpectatingState:OnEnter()
-    -- Set spectating attributes
-    self.controller.player:SetAttribute("IsSpectating", true)
-    self.controller.player:SetAttribute("IsDead", true)
+    warn("[SpectatingState] Player", self.controller.player.Name, "entered spectating state")
     
-    -- Ensure snake is cleaned up
-    if self.controller.snakeObject then
-        if self.controller.snakeObject.destroy then
-            self.controller.snakeObject:destroy()
-        end
-        self.controller.snakeObject = nil
+    -- Check if player is somehow in revive process (shouldn't happen but safety check)
+    if self.controller.player:GetAttribute("IsReviving") or 
+       self.controller.player:GetAttribute("RevivingNow") or
+       self.controller.player:GetAttribute("JustRevived") then
+        warn("[SpectatingState] WARNING: Player has revive attributes in spectating state, clearing them")
+        self.controller.player:SetAttribute("IsReviving", false)
+        self.controller.player:SetAttribute("RevivingNow", false)
+        self.controller.player:SetAttribute("JustRevived", false)
+        self.controller.player:SetAttribute("RevivePromptActive", false)
+        self.controller.player:SetAttribute("AwaitingReviveResponse", false)
     end
     
-    -- Switch to spectator camera
-    self:_setupSpectatorCamera()
-    
-    -- Send death screen command to client
+    -- This state is entered when player is truly dead (no revives or declined)
+    -- Now we tell the client to show the death screen
     self:_sendDeathScreenCommand()
+    
+    -- Disable controls
+    self.controller.collisionState.canCollide = false
+    
+    -- Make player spectate (implementation depends on your spectating system)
+    self:_enterSpectatorMode()
     
     -- Notify state change
     self.controller:notifyStateChange("Spectating")

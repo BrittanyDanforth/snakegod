@@ -1601,11 +1601,30 @@ local showDeathScreenRemote = remotes:WaitForChild("ShowDeathScreen", 10)
 
 if showDeathScreenRemote then
 	showDeathScreenRemote.OnClientEvent:Connect(function(deathData)
-		-- Clean up any lingering attributes
+		-- Clean up any revive-related attributes
 		cleanupReviveAttributes()
 		
-		-- Update stats if provided
+		-- Double-check that player is actually dead and not reviving
+		if LocalPlayer:GetAttribute("RevivePromptActive") or 
+		   LocalPlayer:GetAttribute("IsReviving") or
+		   LocalPlayer:GetAttribute("RevivingNow") or
+		   LocalPlayer:GetAttribute("JustRevived") then
+			warn("SlitherIOMenu: Ignoring death screen request - player is in revive process")
+			return
+		end
+		
+		-- Also check if we have a living character
+		if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+			local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+			if humanoid.Health > 0 then
+				warn("SlitherIOMenu: Ignoring death screen request - player is alive")
+				return
+			end
+		end
+		
+		-- Update stats from server data
 		if deathData and deathData.stats then
+			-- Update playerStats with server-provided data
 			pcall(function()
 				if deathData.stats.score and playerStats.highScore < deathData.stats.score then
 					playerStats.highScore = deathData.stats.score
@@ -1617,7 +1636,7 @@ if showDeathScreenRemote then
 			end)
 		end
 		
-		-- Show the main menu
+		-- Show death menu
 		createMenu(function()
 			requestRespawn()
 		end)

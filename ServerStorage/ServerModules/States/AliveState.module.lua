@@ -14,17 +14,37 @@ function AliveState.new(controller)
 end
 
 function AliveState:OnEnter()
-    -- Enable player controls
+    warn("[FSM] AliveState entered for", self.controller.player.Name)
     self.controller.collisionState.canCollide = true
+    self.controller.data.isAlive = true
+    self.controller.data.deathTime = nil
     
-    -- Notify systems that player is alive
-    self.controller:notifyStateChange("Alive")
+    -- Clear ALL revive-related attributes to prevent UI issues
+    self.controller.player:SetAttribute("IsReviving", false)
+    self.controller.player:SetAttribute("RevivePromptActive", false)
+    self.controller.player:SetAttribute("AwaitingReviveResponse", false)
+    self.controller.player:SetAttribute("JustRevived", false)
+    self.controller.player:SetAttribute("RevivingNow", false)
+    self.controller.player:SetAttribute("ReviveDeclined", false)
+    self.controller.player:SetAttribute("ReviveTimerExpired", false)
     
-    -- Reset any death-related attributes
-    if self.controller.player then
-        self.controller.player:SetAttribute("IsDead", false)
-        self.controller.player:SetAttribute("IsReviving", false)
+    -- Spawn protection
+    if self.spawnProtectionDuration > 0 then
+        warn("[AliveState] Spawn protection active for", self.spawnProtectionDuration, "seconds")
+        self.controller.collisionState.hasSpawnProtection = true
+        
+        -- Remove spawn protection after duration
+        task.spawn(function()
+            task.wait(self.spawnProtectionDuration)
+            if self.controller and not self.controller.isDestroyed then
+                self.controller.collisionState.hasSpawnProtection = false
+                warn("[AliveState] Spawn protection ended for", self.controller.player.Name)
+            end
+        end)
     end
+    
+    -- Notify state change
+    self.controller:notifyStateChange("Alive")
 end
 
 function AliveState:OnExecute(dt)

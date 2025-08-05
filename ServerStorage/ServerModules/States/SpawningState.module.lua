@@ -66,7 +66,34 @@ function SpawningState:OnEnter(previousState)
         self.controller.player:LoadCharacter()
         
         -- Wait for character and snake to be created
-        task.wait(1.5)
+        local maxWaitTime = 5
+        local startTime = os.clock()
+        local snakeCreated = false
+        
+        while (os.clock() - startTime) < maxWaitTime do
+            task.wait(0.1)
+            
+            -- Check if snake has been created by looking for the snake head in workspace
+            local snakeModel = workspace:FindFirstChild("Snake_" .. self.controller.player.Name)
+            if snakeModel and snakeModel:FindFirstChild("Segment0_Head") then
+                warn("[SpawningState] Snake created successfully for revive")
+                snakeCreated = true
+                
+                -- Give a bit more time for everything to initialize
+                task.wait(0.5)
+                break
+            end
+        end
+        
+        if not snakeCreated then
+            warn("[SpawningState] WARNING: Snake creation timed out for revive!")
+        end
+        
+        -- Clear revive attributes after successful spawn
+        self.controller.player:SetAttribute("JustRevived", false)
+        self.controller.player:SetAttribute("RevivingNow", false)
+        self.controller.player:SetAttribute("RevivePromptActive", false)
+        self.controller.player:SetAttribute("AwaitingReviveResponse", false)
         
         -- The snake should now be created by SnakeSystemIntegration
         -- Just transition to Alive state
