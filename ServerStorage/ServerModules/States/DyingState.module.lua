@@ -115,7 +115,8 @@ function DyingState:_spawnDeathOrbs()
                 math.random(-10, 10)
             )
             
-            OrbUtilsModule.spawnOrb(head.Position + offset, 1)
+            -- OrbUtilsModule.spawnOrb(head.Position + offset, 1)
+            -- Orb spawning is handled by the existing SnakeSystemIntegration
             task.wait(0.03) -- Small delay between orbs
         end
     end)
