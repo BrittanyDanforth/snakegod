@@ -1827,6 +1827,11 @@ function AISnake.new(startPosition, preservedPersonalityType)
 
 		-- Gradually move forward to create proper segment spacing
 		for step = 1, 20 do
+			-- Check if snake is still alive
+			if not self.RootPart or not self.RootPart.Parent then
+				break
+			end
+			
 			-- Move forward slightly
 			local moveDistance = self.SegmentSpacing * 0.1
 			local newPos = self.Position + self.Direction * moveDistance
@@ -2467,11 +2472,15 @@ function AISnake:updateMovement(dt)
 		self.Position = newPosition
 	end
 
-	self.RootPart.Position = self.Position
+	if self.RootPart then
+		self.RootPart.Position = self.Position
+	end
 
 	local headOffset = self.Direction * 1.5
 	local newHeadPos = self.Position + headOffset
-	self.HeadParts.head.CFrame = CFramelookAt(newHeadPos, newHeadPos + self.Direction)
+	if self.HeadParts and self.HeadParts.head then
+		self.HeadParts.head.CFrame = CFramelookAt(newHeadPos, newHeadPos + self.Direction)
+	end
 
 	-- Update eyes position (match OptimizedSnakeSystem)
 	if self.HeadParts.leftEye and self.HeadParts.rightEye then
