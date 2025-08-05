@@ -51,14 +51,6 @@ if not disableDeathEffectsRemote then
 	disableDeathEffectsRemote.Parent = ReplicatedStorage
 end
 
--- Create remote for revive effect (for server-to-client communication)
-local playerRevivedEffectRemote = remotes:FindFirstChild("PlayerRevivedEffect")
-if not playerRevivedEffectRemote then
-	playerRevivedEffectRemote = Instance.new("RemoteEvent")
-	playerRevivedEffectRemote.Name = "PlayerRevivedEffect"
-	playerRevivedEffectRemote.Parent = remotes
-end
-
 -- === PERFORMANCE CONSTANTS (unchanged) ===
 local SEGMENT_CHUNK_SIZE = 96
 local COLLISION_GRID_SIZE = 120
@@ -485,27 +477,9 @@ CollisionCache = {
 }
 
 -- === IMPROVED ORB SPAWNING (FIXED) ===
-local function spawnDeathOrb(position, value, color)
+local function spawnDeathOrb(position, value)
 	local spawnPos = Vector3.new(position.X, ORB_SPAWN_HEIGHT, position.Z)
 
-	-- Try to use the same method as AI snakes for consistency
-	if OrbUtils and OrbUtils.spawnOrb then
-		-- Match AI snake's approach: position, size, color
-		local size = math.min(2.5, 1.5 + (value * 0.02)) -- Scale size based on value
-		local success, orb = pcall(function()
-			return OrbUtils.spawnOrb(spawnPos, size, color)
-		end)
-		
-		if success and orb then
-			performanceStats.orbsSpawned = performanceStats.orbsSpawned + 1
-			if DEBUG_COLLISIONS then
-				print(string.format("[ORB] Spawned death orb at %s with size %.1f", tostring(spawnPos), size))
-			end
-			return orb
-		end
-	end
-	
-	-- Fallback to spawnOrbAt if spawnOrb isn't available
 	local success, orb = pcall(function()
 		return OrbUtils.spawnOrbAt(spawnPos, value)
 	end)
@@ -527,16 +501,6 @@ end
 local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 	print("💎 Spawning death orbs for", player.Name, "with", #segmentPositions, "segment positions")
 
-	-- Get snake color for orbs
-	local snakeColor = Color3.fromRGB(255, 255, 0) -- Default yellow
-	local snakeInstance = _G.PlayerSnakes and _G.PlayerSnakes[player]
-	if snakeInstance and snakeInstance.segments and snakeInstance.segments[1] then
-		local firstSegment = snakeInstance.segments[1]
-		if firstSegment and firstSegment.Color then
-			snakeColor = firstSegment.Color
-		end
-	end
-
 	-- Calculate orb distribution based on actual segments
 	local totalOrbs = math.clamp(math.floor(snakeLength * 0.4), 3, MAX_ORBS_PER_SNAKE)
 	local orbValue = math.max(1, math.floor(snakeLength * 0.3 / totalOrbs))
@@ -556,11 +520,11 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 		-- IMPROVED: Better distribution algorithm
 		-- Instead of using step, we'll skip segments to get better coverage
 		local skipInterval = math.max(1, math.floor(#segmentPositions / totalOrbs))
-		
+
 		-- Start from the head and work our way down
 		for i = 1, #segmentPositions do
 			if spawnedOrbs >= totalOrbs then break end
-			
+
 			-- Only spawn on every skipInterval segment
 			if (i - 1) % skipInterval == 0 or i == #segmentPositions then
 				local pos = segmentPositions[i]
@@ -573,7 +537,7 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 						(math.random() - 0.5) * spread
 					)
 
-					spawnDeathOrb(pos + offset, orbValue, snakeColor)
+					spawnDeathOrb(pos + offset, orbValue)
 					spawnedOrbs = spawnedOrbs + 1
 
 					-- Small delay every few orbs
@@ -588,7 +552,7 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 		if spawnedOrbs < totalOrbs and #segmentPositions > totalOrbs then
 			local remainingOrbs = totalOrbs - spawnedOrbs
 			local gapSize = math.floor(#segmentPositions / remainingOrbs)
-			
+
 			for i = 1, remainingOrbs do
 				local idx = math.min(i * gapSize + math.floor(skipInterval / 2), #segmentPositions)
 				local pos = segmentPositions[idx]
@@ -599,7 +563,7 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 						0,
 						(math.random() - 0.5) * spread
 					)
-					spawnDeathOrb(pos + offset, orbValue, snakeColor)
+					spawnDeathOrb(pos + offset, orbValue)
 					spawnedOrbs = spawnedOrbs + 1
 				end
 			end
@@ -628,7 +592,7 @@ local function spawnDeathOrbsForPlayer(player, segmentPositions, snakeLength)
 					math.sin(angle) * distance
 				)
 
-				spawnDeathOrb(basePos + offset, orbValue, snakeColor)
+				spawnDeathOrb(basePos + offset, orbValue)
 				spawnedOrbs = spawnedOrbs + 1
 
 				if spawnedOrbs % 8 == 0 then
@@ -788,7 +752,7 @@ local function queuePlayerDeath(player)
 	state.isProcessing = true
 	state.canCollide = false
 	processingPlayers[player] = true
-	
+
 	-- CHECK REVIVE IMMEDIATELY and set attribute to prevent menu flash
 	local hasRevive = player:GetAttribute("HasRevive")
 	local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
@@ -816,64 +780,40 @@ local function queuePlayerDeath(player)
 		pcall(function()
 			disableDeathEffectsRemote:FireClient(player)
 		end)
-		
+
 		-- AGGRESSIVE: Clean up any effects that might spawn on death
 		task.spawn(function()
-			-- Check 10 times instead of 5 to catch any delayed effects
-			for i = 1, 10 do
+			-- Check multiple times to catch any delayed effects
+			for i = 1, 5 do
 				task.wait(0.1)
-				
+
 				-- Clean up around the player's position
-				if player.Character then
-					-- NEW: Check for ForceField objects specifically
-					local head = player.Character:FindFirstChild("Head")
-					if head then
-						local forcefield = head:FindFirstChildOfClass("ForceField")
-						if forcefield then
-							forcefield:Destroy()
-						end
-					end
-					
-					local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
-					if rootPart then
-						local forcefield = rootPart:FindFirstChildOfClass("ForceField")
-						if forcefield then
-							forcefield:Destroy()
-						end
-						
-						-- Check character for any ForceField
-						for _, child in ipairs(player.Character:GetChildren()) do
-							if child:IsA("ForceField") then
-								child:Destroy()
-							end
-						end
-						
-						local rootPos = rootPart.Position
-						local nearbyParts = workspace:GetPartBoundsInBox(
-							CFrame.new(rootPos),
-							Vector3.new(10, 10, 10)
-						)
-						
-						for _, part in ipairs(nearbyParts) do
-							if part.Parent ~= player.Character then
-								-- Destroy any small grey orbs or effects
-								if part:IsA("Part") and part.Size.Magnitude < 2 then
-									-- Check for grey colors
-									local h, s, v = part.Color:ToHSV()
-									if s < 0.2 and v > 0.3 and v < 0.8 then -- Grey color range
-										part:Destroy()
-									end
-									-- Also check for default Part color (medium stone grey)
-									if part.BrickColor == BrickColor.new("Medium stone grey") then
-										part:Destroy()
-									end
-								end
-								
-								-- Destroy any VFX markers or effect parts
-								if part.Name == "OrbVFXMarker" or part.Name:lower():match("effect") or 
-								   part.Name:lower():match("vfx") or part.Name:lower():match("particle") then
+				if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+					local rootPos = player.Character.HumanoidRootPart.Position
+					local nearbyParts = workspace:GetPartBoundsInBox(
+						CFrame.new(rootPos),
+						Vector3.new(10, 10, 10)
+					)
+
+					for _, part in ipairs(nearbyParts) do
+						if part.Parent ~= player.Character then
+							-- Destroy any small grey orbs or effects
+							if part:IsA("Part") and part.Size.Magnitude < 2 then
+								-- Check for grey colors
+								local h, s, v = part.Color:ToHSV()
+								if s < 0.2 and v > 0.3 and v < 0.8 then -- Grey color range
 									part:Destroy()
 								end
+								-- Also check for default Part color (medium stone grey)
+								if part.BrickColor == BrickColor.new("Medium stone grey") then
+									part:Destroy()
+								end
+							end
+
+							-- Destroy any VFX markers or effect parts
+							if part.Name == "OrbVFXMarker" or part.Name:lower():match("effect") or 
+								part.Name:lower():match("vfx") or part.Name:lower():match("particle") then
+								part:Destroy()
 							end
 						end
 					end
@@ -925,21 +865,6 @@ local function queuePlayerDeath(player)
 
 	-- Mark as dead IMMEDIATELY to prevent duplicate collisions
 	deadPlayers[player] = true
-	setCollisionState(player, false, true, true)
-	
-	-- Immediately make the player's snake non-collidable to prevent killing AI snakes during death
-	task.spawn(function()
-		local snakeInstance = _G.PlayerSnakes and _G.PlayerSnakes[player]
-		if snakeInstance and snakeInstance.segments then
-			for _, segment in ipairs(snakeInstance.segments) do
-				if segment and segment.Parent then
-					segment.CanCollide = false
-					segment.CanTouch = false
-					segment.CanQuery = false
-				end
-			end
-		end
-	end)
 
 	table.insert(deathQueue, {
 		type = "player",
@@ -1012,13 +937,13 @@ task.spawn(function()
 						print("🔍 Collecting segments from visual model")
 						-- Get all segments including head (Segment0_Head)
 						local segments = {}
-						
+
 						-- First add the head
 						local head = visualSnakeModel:FindFirstChild("Segment0_Head")
 						if head and head:IsA("BasePart") then
 							table.insert(segments, head)
 						end
-						
+
 						-- Then add all body segments
 						for _, child in ipairs(visualSnakeModel:GetChildren()) do
 							if child:IsA("BasePart") and child.Name:match("^Segment%d+$") and child.Name ~= "Segment0_Head" then
@@ -1030,19 +955,19 @@ task.spawn(function()
 						table.sort(segments, function(a, b)
 							local aNum = 0
 							local bNum = 0
-							
+
 							if a.Name == "Segment0_Head" then
 								aNum = 0
 							else
 								aNum = tonumber(a.Name:match("Segment(%d+)")) or 999
 							end
-							
+
 							if b.Name == "Segment0_Head" then
 								bNum = 0
 							else
 								bNum = tonumber(b.Name:match("Segment(%d+)")) or 999
 							end
-							
+
 							return aNum < bNum
 						end)
 
@@ -1104,7 +1029,7 @@ task.spawn(function()
 						-- Set RevivePromptActive IMMEDIATELY to block SlitherIOMenu
 						player:SetAttribute("RevivePromptActive", true)
 						player:SetAttribute("AwaitingReviveResponse", true)
-						
+
 						-- Fire client RIGHT NOW without any delay
 						pcall(function()
 							promptReviveRemote:FireClient(player)
@@ -1113,7 +1038,7 @@ task.spawn(function()
 
 					-- Now freeze snake and set health
 					print("❄️ Freezing snake for", player.Name)
-					
+
 					-- IMPORTANT: Spawn orbs BEFORE destroying the snake!
 					if #segmentPositions > 0 then
 						print("💎 Spawning orbs immediately with", #segmentPositions, "positions")
@@ -1158,17 +1083,17 @@ task.spawn(function()
 								part.CanCollide = false
 								part.CanTouch = false
 								part.CanQuery = false
-								
+
 								-- Special handling for eyes which might be grey/white
 								if part.Name:lower():match("eye") then
 									part:Destroy() -- Just destroy eyes immediately
 								end
-								
+
 								-- Destroy any effects on the segments
 								for _, child in ipairs(part:GetChildren()) do
 									if child:IsA("PointLight") or child:IsA("SpotLight") or 
-									   child:IsA("ParticleEmitter") or child:IsA("Beam") or
-									   child:IsA("Decal") or child:IsA("Texture") then
+										child:IsA("ParticleEmitter") or child:IsA("Beam") or
+										child:IsA("Decal") or child:IsA("Texture") then
 										child:Destroy()
 									end
 								end
@@ -1176,13 +1101,13 @@ task.spawn(function()
 								part:Destroy() -- Destroy beams immediately
 							end
 						end
-						
+
 						-- Also check for any attachment holder parts
 						local beamHolder = visualSnakeModel:FindFirstChild("BeamHolder")
 						if beamHolder then
 							beamHolder:Destroy()
 						end
-						
+
 						-- Schedule destruction of the visual model
 						task.defer(function()
 							task.wait(0.5)
@@ -1203,7 +1128,7 @@ task.spawn(function()
 
 						-- Move underground
 						rootPart.CFrame = rootPart.CFrame * CFrame.new(0, -10, 0)
-						
+
 						-- EXTRA: Make the rootPart invisible too in case it's showing
 						rootPart.Transparency = 1
 
@@ -1212,18 +1137,18 @@ task.spawn(function()
 							if part:IsA("BasePart") then
 								-- Check if this might be an effect orb (usually small spheres)
 								local shouldDestroy = false
-								
+
 								-- Check name patterns
 								if part.Name:lower():match("orb") or part.Name:lower():match("effect") or 
 									part.Name:lower():match("particle") or part.Name:lower():match("sphere") then
 									shouldDestroy = true
 								end
-								
+
 								-- Only check Shape on regular Parts (not MeshParts)
 								if not shouldDestroy and part:IsA("Part") and part.Shape == Enum.PartType.Ball and part.Size.Magnitude < 5 then
 									shouldDestroy = true
 								end
-								
+
 								if shouldDestroy then
 									part:Destroy()
 								else
@@ -1251,7 +1176,7 @@ task.spawn(function()
 
 						-- Also check workspace for any stray effect parts
 						task.defer(function()
-							local searchRadius = 50 -- Expanded search radius
+							local searchRadius = 30 -- Increased search radius
 							local nearbyParts = workspace:GetPartBoundsInBox(
 								rootPart.CFrame,
 								Vector3.new(searchRadius, searchRadius, searchRadius)
@@ -1261,15 +1186,15 @@ task.spawn(function()
 								if part:IsA("BasePart") and part.Parent ~= character then
 									-- Remove any suspicious orb-like parts
 									local shouldDestroy = false
-									
+
 									-- Check name patterns (more aggressive)
 									local lowerName = part.Name:lower()
 									if lowerName:match("effect") or lowerName:match("orb") or 
-									   lowerName:match("particle") or lowerName:match("sphere") or
-									   lowerName:match("vfx") or lowerName:match("fx") then
+										lowerName:match("particle") or lowerName:match("sphere") or
+										lowerName:match("vfx") or lowerName:match("fx") then
 										shouldDestroy = true
 									end
-									
+
 									-- Check if it's a ball Part (more aggressive checks)
 									if not shouldDestroy and part:IsA("Part") then
 										-- Any small ball is suspicious
@@ -1278,24 +1203,24 @@ task.spawn(function()
 										end
 										-- Any grey/gray colored ball
 										if part.Shape == Enum.PartType.Ball and 
-										   (part.BrickColor.Name:lower():match("grey") or 
-										    part.BrickColor.Name:lower():match("gray") or
-										    part.Color:ToHSV() < 0.2) then -- Low saturation = grey
+											(part.BrickColor.Name:lower():match("grey") or 
+												part.BrickColor.Name:lower():match("gray") or
+												part.Color:ToHSV() < 0.2) then -- Low saturation = grey
 											shouldDestroy = true
 										end
 									end
-									
+
 									-- Check for unanchored small parts that might be effects
 									if not shouldDestroy and not part.Anchored and part.Size.Magnitude < 2 then
 										shouldDestroy = true
 									end
-									
+
 									if shouldDestroy then
 										part:Destroy()
 									end
 								end
 							end
-							
+
 							-- EXTRA: Check for any OrbVFXMarker parts specifically
 							for _, obj in ipairs(workspace:GetDescendants()) do
 								if obj:IsA("BasePart") and obj.Name == "OrbVFXMarker" then
@@ -1370,10 +1295,6 @@ task.spawn(function()
 
 									player:SetAttribute("RevivePosition", tostring(deathPosition))
 									player:SetAttribute("ReviveSnakeLength", snakeLength)
-									
-														-- DIRECT COMMUNICATION: Fire to client for visual effects
-					-- This replaces the unreliable JustRevived attribute check
-					playerRevivedEffectRemote:FireClient(player)
 
 									-- Clear dead state
 									resetPlayerCollisionState(player)
@@ -1400,9 +1321,13 @@ task.spawn(function()
 								else
 									-- Player declined revive
 									print("❌ Player declined revive")
-									
-									-- Use master reset function to ensure EVERYTHING is cleared
-									resetPlayerCollisionState(player)
+
+									-- Clear all revive-related attributes
+									player:SetAttribute("JustRevived", false)
+									player:SetAttribute("RevivingNow", false)
+									player:SetAttribute("RevivePosition", nil)
+									player:SetAttribute("DeathPosition", nil)
+									player:SetAttribute("NoReviveEffects", false)
 
 									-- Mark as truly dead
 									deadPlayers[player] = true
@@ -1451,9 +1376,15 @@ task.spawn(function()
 								end
 
 								reviveSessions[player] = nil
-								
-								-- Use master reset function to clean all state
-								resetPlayerCollisionState(player)
+
+								-- Clear attributes
+								player:SetAttribute("AwaitingReviveResponse", false)
+								player:SetAttribute("RevivePromptActive", false)
+								player:SetAttribute("JustRevived", false)
+								player:SetAttribute("RevivingNow", false)
+								player:SetAttribute("RevivePosition", nil)
+								player:SetAttribute("DeathPosition", nil)
+								player:SetAttribute("NoReviveEffects", false)
 
 								-- Reset state
 								local state = getCollisionState(player)
@@ -1514,13 +1445,39 @@ task.spawn(function()
 					resetProcessing()
 				end
 			elseif death.type == "ai" then
-				-- AI death processing - let the AI snake handle its own death orbs
+				-- AI death processing remains the same
 				local head = death.target
 				if AISnakeModule._activeSnakes then
 					for _, snake in AISnakeModule._activeSnakes do
 						if snake.HeadParts and snake.HeadParts.head == head then
-							-- The AI snake's Destroy method will spawn orbs properly
-							-- This ensures consistent orb spawning whether killed by player collision or head-to-head
+							if snake.Segments then
+								local segments = snake.Segments
+								local totalLength = #segments
+
+								local totalOrbs = math.clamp(math.floor(totalLength * 0.4), 3, 30)
+								local baseValue = math.max(1, math.floor(totalLength * 0.3 / totalOrbs))
+
+								local spawnedOrbs = 0
+								local skipInterval = math.max(1, math.floor(totalLength / totalOrbs))
+
+								for i = 1, totalLength, skipInterval do
+									if spawnedOrbs >= totalOrbs then break end
+
+									local seg = segments[i]
+									if seg and seg.Parent and seg.Position then
+										local pos = seg.Position
+										local offset = Vector3.new(
+											(math.random() - 0.5) * 2,
+											0,
+											(math.random() - 0.5) * 2
+										)
+
+										spawnDeathOrb(pos + offset, baseValue)
+										spawnedOrbs = spawnedOrbs + 1
+									end
+								end
+							end
+
 							if snake.Destroy then
 								snake:Destroy()
 							end
@@ -2109,17 +2066,6 @@ RunService.Stepped:Connect(function(_, deltaTime)
 
 			for _, headData in ipairs(playerHeads) do
 				local player = headData.player
-
-				-- Check if player is dead or being processed for death
-				if deadPlayers[player] or processingPlayers[player] then
-					continue -- Skip dead players completely
-				end
-
-				-- Check collision state
-				local state = getCollisionState(player)
-				if not state.canCollide or state.isDead or state.isProcessing then
-					continue
-				end
 
 				if not isPlayerInvincible(player) then
 					local segmentData = getPlayerSegments(player)
