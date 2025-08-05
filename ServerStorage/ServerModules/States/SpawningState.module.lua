@@ -68,17 +68,9 @@ function SpawningState:OnEnter(previousState)
         -- Wait for character and snake to be created
         task.wait(1.5)
         
-        -- The snake should now be created by SnakeSystemIntegration
-        -- Safely transition to Alive state
-        local success, err = pcall(function()
-            self.controller.fsm:changeState("Alive")
-        end)
-        
-        if not success then
-            warn("[SpawningState] Failed to transition to Alive state:", err)
-            -- Try spectating as fallback
-            self.controller.fsm:changeState("Spectating")
-        end
+        -- After LoadCharacter, the controller might have been recreated
+        -- Don't try to change states here - MainServer will handle it
+        warn("[SpawningState] LoadCharacter called, MainServer will handle state transition")
         return
     end
     
