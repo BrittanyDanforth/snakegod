@@ -29,33 +29,27 @@ function SpawningState:OnEnter()
         self.controller.snakeObject = nil
     end
     
-    -- Create new snake using adapter
-    local SnakeAdapter = require(script.Parent.Parent.SnakeAdapter)
+    -- Respawn the player using Roblox's character loading
+    -- This will trigger SnakeSystemIntegration to create the snake
+    warn("[SpawningState] Respawning player:", self.controller.player.Name)
     
-    -- Get spawn position (this could be more sophisticated)
-    local spawnPosition = self:_getSpawnPosition()
-    
-    -- Create snake with initial configuration
-    local snakeConfig = {
-        player = self.controller.player,
-        position = spawnPosition,
-        length = self.controller.data.length,
-        speed = self.controller.data.speed,
-        color = self.controller.player:GetAttribute("SnakeColor") or Color3.new(0, 1, 0)
-    }
-    
-    local success, snakeObject = pcall(function()
-        return SnakeAdapter.createSnake(self.controller.player, snakeConfig)
-    end)
-    
-    if not success then
-        warn("Failed to create snake:", snakeObject)
-        self.controller.fsm:changeState("Spectating")
-        return
+    -- Store revive position if player just revived
+    if self.controller.player:GetAttribute("JustRevived") then
+        local lastPosition = self.controller.player:GetAttribute("DeathPosition")
+        if lastPosition then
+            self.controller.player:SetAttribute("RevivePosition", lastPosition)
+        end
     end
     
-    -- Store snake reference
-    self.controller:setSnakeObject(snakeObject)
+    -- Load character (this triggers SnakeSystemIntegration)
+    self.controller.player:LoadCharacter()
+    
+    -- Wait a bit for character to load
+    task.wait(0.5)
+    
+    -- Clear revive flags
+    self.controller.player:SetAttribute("JustRevived", false)
+    self.controller.player:SetAttribute("RevivingNow", false)
     
     -- Setup camera follow
     self:_setupCamera()
