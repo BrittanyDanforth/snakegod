@@ -16,10 +16,25 @@ function SpawningState.new(controller)
     return self
 end
 
-function SpawningState:OnEnter()
+function SpawningState:OnEnter(previousState)
+    -- Check if this is a revive spawn
+    local isReviving = previousState == "Reviving"
+    
     -- Reset player data for respawn
     self.controller.data.lastRespawnTime = os.clock()
     self.controller.collisionState.canCollide = false -- Disable collisions during spawn
+    
+    -- If reviving, set the revival attributes for SnakeSystemIntegration
+    if isReviving then
+        warn("[SpawningState] Handling revive spawn for", self.controller.player.Name)
+        self.controller.player:SetAttribute("JustRevived", true)
+        self.controller.player:SetAttribute("RevivingNow", true)
+        
+        -- The ReviveSnakeLength and RevivePosition should already be set by DyingState
+        local reviveLength = self.controller.player:GetAttribute("ReviveSnakeLength")
+        local revivePos = self.controller.player:GetAttribute("RevivePosition")
+        warn("[SpawningState] Revive length:", reviveLength, "Position:", revivePos)
+    end
     
     -- Clear any existing snake
     if self.controller.snakeObject then
@@ -35,7 +50,22 @@ function SpawningState:OnEnter()
     -- Get spawn position (this could be more sophisticated)
     local spawnPosition = self:_getSpawnPosition()
     
-    -- Create snake with initial configuration
+    -- For revival spawns, we need to trigger LoadCharacter instead
+    if isReviving then
+        warn("[SpawningState] Triggering LoadCharacter for revive")
+        -- LoadCharacter will trigger CharacterAdded, which SnakeSystemIntegration listens to
+        self.controller.player:LoadCharacter()
+        
+        -- Wait for character and snake to be created
+        task.wait(1.5)
+        
+        -- The snake should now be created by SnakeSystemIntegration
+        -- Just transition to Alive state
+        self.controller.fsm:changeState("Alive")
+        return
+    end
+    
+    -- Normal spawn - create snake with initial configuration
     local snakeConfig = {
         player = self.controller.player,
         position = spawnPosition,

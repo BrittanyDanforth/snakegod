@@ -162,12 +162,17 @@ function PlayerController:setSpeed(speed)
 end
 
 function PlayerController:hasReviveToken()
-    return self.data.reviveTokens > 0
+    -- Read from GamepassHandler's attribute
+    return (self.player:GetAttribute("RevivesAvailable") or 0) > 0
 end
 
 function PlayerController:useReviveToken()
-    if self.data.reviveTokens > 0 then
-        self.data.reviveTokens = self.data.reviveTokens - 1
+    -- Decrement GamepassHandler's attribute
+    local currentRevives = self.player:GetAttribute("RevivesAvailable") or 0
+    if currentRevives > 0 then
+        self.player:SetAttribute("RevivesAvailable", currentRevives - 1)
+        -- Also update internal data for consistency
+        self.data.reviveTokens = currentRevives - 1
         return true
     end
     return false
