@@ -62,11 +62,14 @@ function FSM:changeState(newStateName, ...)
             
             -- Handle promise resolution
             result:andThen(function(nextState)
+                warn("[FSM] Promise resolved, transitioning to:", nextState)
                 if typeof(nextState) == "string" and self.states[nextState] then
                     self:changeState(nextState)
+                else
+                    warn("[FSM] Invalid next state:", nextState)
                 end
             end):catch(function(err)
-                warn("State promise error:", err)
+                warn("[FSM] State promise error:", err)
                 -- Optionally transition to a default state on error
                 if self.states["Spectating"] then
                     self:changeState("Spectating")

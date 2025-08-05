@@ -18,10 +18,13 @@ function RevivingState.new(controller)
 end
 
 function RevivingState:OnEnter()
+    warn("[RevivingState] Entered reviving state for", self.controller.player.Name)
+    
     -- This returns a Promise that resolves to the next state
     return Promise.new(function(resolve, reject, onCancel)
         -- Validate we can revive
         if not self.controller:hasReviveToken() then
+            warn("[RevivingState] No revive tokens, going to spectating")
             return resolve("Spectating")
         end
         

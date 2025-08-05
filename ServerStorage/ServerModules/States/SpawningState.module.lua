@@ -17,6 +17,8 @@ function SpawningState.new(controller)
 end
 
 function SpawningState:OnEnter(previousState)
+    warn("[SpawningState] Entered spawning state for", self.controller.player.Name, "from state:", previousState)
+    
     -- Check if this is a revive spawn
     local isReviving = previousState == "Reviving"
     
@@ -34,6 +36,8 @@ function SpawningState:OnEnter(previousState)
         local reviveLength = self.controller.player:GetAttribute("ReviveSnakeLength")
         local revivePos = self.controller.player:GetAttribute("RevivePosition")
         warn("[SpawningState] Revive length:", reviveLength, "Position:", revivePos)
+    else
+        warn("[SpawningState] Normal spawn (not reviving)")
     end
     
     -- Clear any existing snake
