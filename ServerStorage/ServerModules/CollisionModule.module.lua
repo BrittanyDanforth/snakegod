@@ -17,7 +17,7 @@ local COLLISION_CONFIG = {
     BODY_DISTANCE = 4,    -- Increased from 2.8 for better detection
     ORB_COLLECTION_RADIUS = 6,
     SELF_COLLISION_IGNORE_SEGMENTS = 10,
-    FRAME_SKIP = 2, -- Check collisions more frequently (was 3)
+    FRAME_SKIP = 1, -- Check every frame for immediate response
     MAX_CHECKS_PER_FRAME = 50
 }
 

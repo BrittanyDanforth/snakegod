@@ -23,7 +23,9 @@ local remoteEvents = {
     "SetSpectatorCamera",     -- For spectator camera control
     "RespawnSnake",          -- For respawning player
     "PlayerRevivedEffect",   -- For revive VFX
-    "PlayerDeathEffect"      -- For death VFX
+    "PlayerDeathEffect",     -- For death VFX
+    "StopSnakeMovement",     -- For stopping client-side snake control
+    "ResumeSnakeMovement"    -- For resuming snake movement after revive
 }
 
 -- Create each RemoteEvent if it doesn't exist

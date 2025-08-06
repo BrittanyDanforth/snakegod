@@ -6,6 +6,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 -- 🔧 NETWORK-OPTIMIZED CONFIG SYSTEM
 local Config = {}
@@ -57,6 +58,31 @@ validateConfig()
 -- Player setup
 local player = Players.LocalPlayer
 local mouse = player:GetMouse()
+
+-- Movement control state
+local movementEnabled = true
+local heartbeatConnection = nil
+
+-- Setup remote event handlers for death/revive
+local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+if remotes then
+    local stopMovementRemote = remotes:FindFirstChild("StopSnakeMovement")
+    local resumeMovementRemote = remotes:FindFirstChild("ResumeSnakeMovement")
+    
+    if stopMovementRemote then
+        stopMovementRemote.OnClientEvent:Connect(function()
+            print("🛑 Stopping snake movement - player died")
+            movementEnabled = false
+        end)
+    end
+    
+    if resumeMovementRemote then
+        resumeMovementRemote.OnClientEvent:Connect(function()
+            print("▶️ Resuming snake movement - player revived")
+            movementEnabled = true
+        end)
+    end
+end
 
 -- 📱 MOBILE SUPPORT
 -- Mobile detection and controls are handled through MobileHUD script
@@ -292,6 +318,9 @@ end
 local function initializeForCharacter(character)
 	cleanupSnake()
 	print(" Initializing new snake for character: " .. character.Name)
+	
+	-- Reset movement enabled when spawning
+	movementEnabled = true
 
 	local humanoid = character:WaitForChild("Humanoid")
 	local rootPart = character:WaitForChild("HumanoidRootPart")
@@ -566,6 +595,11 @@ local function initializeForCharacter(character)
 	heartbeatConnection = RunService.Heartbeat:Connect(function(dt)
 		if not rootPart or not rootPart.Parent then
 			cleanupSnake()
+			return
+		end
+		
+		-- Check if movement is enabled (disabled during death)
+		if not movementEnabled then
 			return
 		end
 

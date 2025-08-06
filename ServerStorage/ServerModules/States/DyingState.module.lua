@@ -72,6 +72,20 @@ function DyingState:OnEnter(collisionData)
             humanoid.PlatformStand = true
         end
         
+        -- Stop snake movement by disconnecting its update loop
+        local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[self.controller.player]
+        if snakeSystem and snakeSystem.updateConnection then
+            warn("[DyingState] Stopping snake movement for", self.controller.player.Name)
+            snakeSystem.updateConnection:Disconnect()
+            snakeSystem.updateConnection = nil
+        end
+        
+        -- Tell client to stop snake movement
+        local stopMovementRemote = remotes:FindFirstChild("StopSnakeMovement")
+        if stopMovementRemote then
+            stopMovementRemote:FireClient(self.controller.player)
+        end
+        
         -- Make snake invisible/non-collidable
         if self.controller.snakeObject then
             if self.controller.snakeObject:IsA("Model") then
