@@ -1697,6 +1697,17 @@ function AISnake:_checkCollisionsOptimized()
 	local nearbyEntities = SpatialGrid.QueryRadius(myHeadPos, checkRadius)
 	
 	for _, entity in ipairs(nearbyEntities) do
+		-- Skip non-snake entities (like orbs)
+		if entity.type == "ORB" then
+			continue
+		end
+		
+		-- Only process snake-related entities
+		if entity.type ~= "AI_HEAD" and entity.type ~= "AI_SEGMENT" and 
+		   entity.type ~= "PLAYER_HEAD" and entity.type ~= "PLAYER_SEGMENT" then
+			continue
+		end
+		
 		local otherSnake = entity.owner
 		
 		-- Ensure it's a snake and not ourselves
@@ -1749,10 +1760,15 @@ function AISnake:_checkOrbPickupOptimized()
 	local pickupRadius = 10 -- Only check orbs within 10 studs
 	
 	-- Query nearby orbs using SpatialGrid
-	local nearbyOrbs = SpatialGrid.QueryRadius(headPos, pickupRadius, "Orb")
+	local nearbyEntities = SpatialGrid.QueryRadius(headPos, pickupRadius)
 	
-	for _, orbData in ipairs(nearbyOrbs) do
-		local orb = orbData.object
+	for _, entity in ipairs(nearbyEntities) do
+		-- Only process orb entities
+		if entity.type ~= "ORB" then
+			continue
+		end
+		
+		local orb = entity.part  -- In SpatialGrid, the part is stored as 'part', not 'object'
 		if orb and orb.Parent and orb:GetAttribute("IsOrb") then
 			local distance = (headPos - orb.Position).Magnitude
 			
