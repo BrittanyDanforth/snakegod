@@ -129,60 +129,51 @@ local function setupPlayer(player)
     local function checkForSnake()
         -- Get current controller
         local currentController = playerControllers[player]
-        if not currentController then
-            -- warn("[MainServer] No controller found in checkForSnake")
-            return false
+        if not currentController then return end
+        
+        -- Check for snake in multiple locations
+        local snakeModel = nil
+        
+        -- Check character
+        if player.Character then
+            snakeModel = player.Character:FindFirstChild("Snake_" .. player.Name)
         end
         
-        -- Try to find the snake
-        local snake = workspace:FindFirstChild("Snake_" .. player.Name)
-        if snake and snake:FindFirstChild("Segment0_Head") then
-            -- Store snake reference and find segment count
-            currentController.snakeObject = snake
-            currentController.snakeModel = snake  -- Store as snakeModel too
-            
-            -- Count segments
-            local segmentCount = 0
-            for i = 0, 1000 do
-                if snake:FindFirstChild("Segment" .. i) or snake:FindFirstChild("Segment" .. i .. "_Head") then
-                    segmentCount = segmentCount + 1
-                else
-                    break
-                end
+        -- Check workspace Snakes folder
+        if not snakeModel then
+            local snakesFolder = workspace:FindFirstChild("Snakes")
+            if snakesFolder then
+                snakeModel = snakesFolder:FindFirstChild("Snake_" .. player.Name)
             end
+        end
+        
+        -- Check global PlayerSnakes table
+        if not snakeModel and _G.PlayerSnakes and _G.PlayerSnakes[player] then
+            local globalSnake = _G.PlayerSnakes[player]
+            if globalSnake.model then
+                snakeModel = globalSnake.model
+            end
+        end
+        
+        if snakeModel then
+            -- Store snake object reference
+            currentController.snakeObject = snakeModel
+            currentController.snakeModel = snakeModel
             
-            currentController.segmentCount = segmentCount
-            
-            -- Only log if successful
-            if currentController.fsm:getCurrentState() ~= "Alive" then
-                warn("[MainServer] Found snake for", player.Name, "with head:", snake.Segment0_Head.Name)
+            -- Find the head
+            local head = snakeModel:FindFirstChild("Segment0_Head")
+            if head then
+                print("[MainServer] Found snake for", player.Name, "with head:", head.Name)
                 
-                -- Snake now exists, change to Alive state
+                -- Player is ready, set to Alive state
                 currentController.fsm:changeState("Alive")
                 
-                -- Apply spawn protection
-                currentController.collisionState.canCollide = false
-                task.wait(3) -- 3 second spawn protection
-                if currentController and not currentController.isDestroyed then
-                    currentController.collisionState.canCollide = true
-                    -- warn("[MainServer] State set to Alive with 3 second spawn protection")
-                end
-                
-                return true
+                -- Stop tracking this snake
+                existingSnakes[player] = true
             else
-                -- Snake exists and we're already alive
-                if currentController.snakeModel ~= snake then
-                    -- Update reference if snake model changed
-                    currentController.snakeModel = snake
-                    currentController.snakeObject = snake
-                    currentController.segmentCount = segmentCount
-                end
-                
-                return true
+                warn("[MainServer] Snake found but no head for", player.Name)
             end
         end
-        
-        return false
     end
     
     -- Check periodically for snake creation
@@ -247,8 +238,13 @@ local function setupPlayer(player)
         -- Also set up monitoring for snake creation
         local checkCount = 0
         task.spawn(function()
-            while not currentController.snakeObject and checkCount < 10 do
+            while checkCount < 10 do
                 task.wait(0.5)
+                -- Make sure player and controller still exist
+                local controller = playerControllers[player]
+                if not controller or controller.isDestroyed or controller.snakeObject then
+                    break
+                end
                 checkForSnake()
                 checkCount = checkCount + 1
             end

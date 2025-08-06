@@ -192,51 +192,44 @@ function PlayerController:setSnakeObject(snakeObject)
 end
 
 function PlayerController:getSnakeHead()
-    -- First try to use stored snake object/model
+    -- First try to get from character
+    if self.player.Character then
+        -- Look for snake model in character
+        local snakeModel = self.player.Character:FindFirstChild("Snake_" .. self.player.Name)
+        if snakeModel then
+            local head = snakeModel:FindFirstChild("Segment0_Head")
+            if head and head:IsA("BasePart") then
+                return head
+            end
+        end
+    end
+    
+    -- Try workspace Snakes folder
+    local snakesFolder = workspace:FindFirstChild("Snakes")
+    if snakesFolder then
+        local snakeModel = snakesFolder:FindFirstChild("Snake_" .. self.player.Name)
+        if snakeModel then
+            local head = snakeModel:FindFirstChild("Segment0_Head")
+            if head and head:IsA("BasePart") then
+                return head
+            end
+        end
+    end
+    
+    -- Try stored snake object
     if self.snakeObject then
         if self.snakeObject:IsA("Model") then
-            -- Direct model reference
             local head = self.snakeObject:FindFirstChild("Segment0_Head")
             if head and head:IsA("BasePart") then
                 return head
             end
         elseif self.snakeObject.model then
-            -- Snake object with model property
-            local head = self.snakeObject.model:FindFirstChild("Segment0_Head") or
-                         self.snakeObject.model:FindFirstChild("Head")
+            local head = self.snakeObject.model:FindFirstChild("Segment0_Head")
             if head and head:IsA("BasePart") then
                 return head
             end
-        end
-    end
-    
-    -- Search workspace directly
-    local snakeModel = workspace:FindFirstChild("Snake_" .. self.player.Name)
-    if snakeModel and snakeModel:IsA("Model") then
-        local head = snakeModel:FindFirstChild("Segment0_Head")
-        if head and head:IsA("BasePart") then
-            return head
-        end
-    end
-    
-    -- Also check SnakeFolder
-    local snakeFolder = workspace:FindFirstChild("SnakeFolder")
-    if snakeFolder then
-        local playerSnake = snakeFolder:FindFirstChild(self.player.Name) or 
-                           snakeFolder:FindFirstChild("Snake_" .. self.player.Name)
-        if playerSnake and playerSnake:IsA("Model") then
-            local head = playerSnake:FindFirstChild("Segment0_Head")
-            if head and head:IsA("BasePart") then
-                return head
-            end
-        end
-    end
-    
-    -- Fallback to character if no snake
-    if self.player.Character then
-        local humanoidRootPart = self.player.Character:FindFirstChild("HumanoidRootPart")
-        if humanoidRootPart then
-            return humanoidRootPart
+        elseif self.snakeObject.head then
+            return self.snakeObject.head
         end
     end
     
