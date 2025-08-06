@@ -754,63 +754,36 @@ function DyingState:_disableMagnetEffect()
     local character = player.Character
     if not character then return end
     
-    -- Clear magnet attribute
+    -- Clear magnet attributes - this should stop the magnet effect
     player:SetAttribute("MagnetRange", 0)
     player:SetAttribute("HasMagnet", false)
     
-    -- Find and disable any magnet effects in the character
-    for _, desc in ipairs(character:GetDescendants()) do
-        -- Look for magnet-related particles or effects
-        if desc:IsA("ParticleEmitter") then
-            local name = desc.Name:lower()
-            if name:find("magnet") or name:find("attract") or name:find("pull") then
-                desc.Enabled = false
-                desc:Destroy()
-            elseif desc.Color and tostring(desc.Color):find("128, 0, 128") then -- Purple color
-                desc.Enabled = false
-                desc:Destroy()
-            end
-        elseif desc:IsA("Beam") and desc.Name:lower():find("magnet") then
-            desc.Enabled = false
-            desc:Destroy()
-        end
-    end
-    
-    -- Also check the snake model
-    local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[player]
-    if snakeSystem and snakeSystem.model then
-        for _, desc in ipairs(snakeSystem.model:GetDescendants()) do
-            if desc:IsA("ParticleEmitter") then
+    -- Find and destroy any magnet-related effects in the character
+    local function cleanEffects(parent)
+        for _, desc in ipairs(parent:GetDescendants()) do
+            if desc:IsA("ParticleEmitter") or desc:IsA("Beam") then
                 local name = desc.Name:lower()
-                if name:find("magnet") or name:find("attract") or name:find("pull") then
+                -- Destroy any magnet/orb attraction effects
+                if name:find("magnet") or name:find("attract") or name:find("pull") or name:find("orb") then
                     desc.Enabled = false
                     desc:Destroy()
                 end
-            elseif desc:IsA("Attachment") then
-                -- Check attachments for magnet effects
-                for _, child in ipairs(desc:GetChildren()) do
-                    if child:IsA("ParticleEmitter") and (child.Name:lower():find("magnet") or child.Color) then
-                        child.Enabled = false
-                        child:Destroy()
-                    end
-                end
+            elseif desc:IsA("Attachment") and desc.Name:lower():find("magnet") then
+                desc:Destroy()
             end
         end
     end
     
-    -- Send message to client to disable magnet visuals
-    local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-    if remotes then
-        local disableMagnetRemote = remotes:FindFirstChild("DisableMagnetEffect")
-        if not disableMagnetRemote then
-            disableMagnetRemote = Instance.new("RemoteEvent")
-            disableMagnetRemote.Name = "DisableMagnetEffect"
-            disableMagnetRemote.Parent = remotes
-        end
-        disableMagnetRemote:FireClient(player)
+    -- Clean effects from character
+    cleanEffects(character)
+    
+    -- Also clean from snake model if it exists
+    local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[player]
+    if snakeSystem and snakeSystem.model then
+        cleanEffects(snakeSystem.model)
     end
     
-    warn("[DyingState] Disabled magnet effects for", player.Name)
+    warn("[DyingState] Cleared magnet effects for", player.Name)
 end
 
 return DyingState
