@@ -1787,6 +1787,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	local headAttachment = Instance.new("Attachment")
 	headAttachment.Name = "Attachment0"
 	headAttachment.Parent = attachmentPart
+	headAttachment.WorldPosition = self.Position -- Fix: Set position immediately
 	self.Attachments[0] = headAttachment
 
 	-- Store head as segment 0 for consistency with OptimizedSnakeSystem
@@ -1831,6 +1832,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		local attachment = Instance.new("Attachment")
 		attachment.Name = "Attachment" .. i
 		attachment.Parent = attachmentPart
+		attachment.WorldPosition = pos -- Fix: Set position immediately to prevent beam stretching
 		self.Attachments[i] = attachment
 	end
 
