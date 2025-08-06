@@ -2517,6 +2517,95 @@ function AISnake:updateMovement(dt)
 	local headPos = self.HeadParts.head.Position
 	local pickupRadius = 8 -- Increased for better upgrade orb pickup (they're bigger)
 
+	-- CHECK FOR COLLISIONS WITH OTHER SNAKES
+	-- Check collision with player snakes
+	local Players = game:GetService("Players")
+	local myHead = self.HeadParts.head
+	local myHeadPos = myHead.Position
+	
+	-- Check collision with player snakes
+	for _, player in pairs(Players:GetPlayers()) do
+		local snakeModel = nil
+		
+		-- First check workspace directly
+		snakeModel = Workspace:FindFirstChild("Snake_" .. player.Name)
+		
+		-- If not found, check SnakeFolder
+		if not snakeModel then
+			local snakeFolder = Workspace:FindFirstChild("SnakeFolder")
+			if snakeFolder then
+				snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
+			end
+		end
+		
+		if snakeModel and snakeModel:IsA("Model") then
+			-- Check head-to-head collision
+			local playerHead = snakeModel:FindFirstChild("Segment0_Head")
+			if playerHead and playerHead:IsA("BasePart") then
+				local distance = (playerHead.Position - myHeadPos).Magnitude
+				if distance <= 10 then -- Head collision radius
+					-- AI snake dies in head-to-head collision
+					warn("AI Snake died from head-to-head collision with", player.Name)
+					self:Destroy()
+					return
+				end
+			end
+			
+			-- Check collision with player body segments
+			local segmentNum = 1
+			while true do
+				local segment = snakeModel:FindFirstChild("Segment" .. segmentNum)
+				if segment and segment:IsA("BasePart") then
+					-- Skip first few segments to prevent unfair deaths
+					if segmentNum > 3 then
+						local distance = (segment.Position - myHeadPos).Magnitude
+						if distance <= 5 then -- Body collision radius
+							-- AI snake dies when hitting player body
+							warn("AI Snake died from hitting", player.Name, "'s body")
+							self:Destroy()
+							return
+						end
+					end
+					segmentNum = segmentNum + 1
+				else
+					break
+				end
+			end
+		end
+	end
+	
+	-- Check collision with other AI snakes
+	for _, otherSnake in ipairs(AISnake._activeSnakes) do
+		if otherSnake ~= self and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
+			local otherHead = otherSnake.HeadParts.head
+			if otherHead.Parent then
+				local distance = (otherHead.Position - myHeadPos).Magnitude
+				if distance <= 10 then -- Head-to-head collision
+					-- Both AI snakes die in head-to-head collision
+					warn("AI Snakes died from head-to-head collision")
+					self:Destroy()
+					otherSnake:Destroy()
+					return
+				end
+			end
+			
+			-- Check collision with other AI snake body
+			if otherSnake.Segments then
+				for i = 4, #otherSnake.Segments do -- Skip first few segments
+					local segment = otherSnake.Segments[i]
+					if segment and segment.Parent then
+						local distance = (segment.Position - myHeadPos).Magnitude
+						if distance <= 5 then -- Body collision
+							warn("AI Snake died from hitting another AI snake's body")
+							self:Destroy()
+							return
+						end
+					end
+				end
+			end
+		end
+	end
+
 	local orbsToCheck = {}
 
 	-- Add orbs from workspace

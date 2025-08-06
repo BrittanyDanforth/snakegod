@@ -224,7 +224,7 @@ local function onPlayerAdded(player)
                                 local isDeathOrb = orb:GetAttribute("IsDeathOrb") or false
                                 
                                 -- Debug log only - OrbSpawner handles actual collection
-                                print("[MainServer] Orb collision detected:", player.Name, "Value:", orbValue, "IsDeathOrb:", isDeathOrb)
+                                -- print("[MainServer] Orb collision detected:", player.Name, "Value:", orbValue, "IsDeathOrb:", isDeathOrb)
                             end
                         end
                     end)
