@@ -429,6 +429,90 @@ local function createOrbCollectVFX(pos, color)
 	Debris:AddItem(part, 1)
 end
 
+-- Enhanced VFX for death orbs
+local function createDeathOrbCollectVFX(position, color, value)
+	-- Create the standard orb collection effect
+	createOrbCollectVFX(position, color)
+	
+	-- Add extra effects for death orbs
+	local attachment = Instance.new("Attachment")
+	attachment.Position = position
+	attachment.Parent = workspace.Terrain
+	
+	-- Create a burst effect that scales with value
+	local burst = Instance.new("ParticleEmitter")
+	burst.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	burst.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 200, 0)),
+		ColorSequenceKeypoint.new(0.5, color),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255))
+	}
+	burst.Lifetime = NumberRange.new(0.5, 1)
+	burst.Rate = 0
+	burst.Speed = NumberRange.new(5, 10)
+	burst.SpreadAngle = Vector2.new(360, 360)
+	burst.VelocityInheritance = 0
+	burst.EmissionDirection = Enum.NormalId.Top
+	burst.Size = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.5, 0.5),
+		NumberSequenceKeypoint.new(1, 0)
+	}
+	burst.Transparency = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(1, 1)
+	}
+	burst.Parent = attachment
+	
+	-- Emit particles based on value
+	burst:Emit(20 + value * 2)
+	
+	-- Create a shockwave effect
+	local shockwave = Instance.new("Part")
+	shockwave.Name = "DeathOrbShockwave"
+	shockwave.Anchored = true
+	shockwave.CanCollide = false
+	shockwave.Transparency = 0.5
+	shockwave.Material = Enum.Material.ForceField
+	shockwave.Color = color
+	shockwave.Size = Vector3.new(1, 0.1, 1)
+	shockwave.Shape = Enum.PartType.Cylinder
+	shockwave.CFrame = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
+	shockwave.Parent = workspace
+	
+	-- Animate the shockwave
+	local TweenService = game:GetService("TweenService")
+	local shockwaveTween = TweenService:Create(shockwave, 
+		TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{
+			Size = Vector3.new(10 + value, 0.1, 10 + value),
+			Transparency = 1
+		}
+	)
+	shockwaveTween:Play()
+	
+	-- Clean up
+	Debris:AddItem(attachment, 2)
+	Debris:AddItem(shockwave, 1)
+	
+	-- Play a special sound if we have a sound service
+	local soundPart = Instance.new("Part")
+	soundPart.Anchored = true
+	soundPart.CanCollide = false
+	soundPart.Transparency = 1
+	soundPart.Position = position
+	soundPart.Parent = workspace
+	
+	local sound = Instance.new("Sound")
+	sound.SoundId = "rbxassetid://9125713501" -- Magical collect sound
+	sound.Volume = 0.3 + math.min(value * 0.05, 0.5)
+	sound.Pitch = 1 + math.random() * 0.2 - 0.1
+	sound.Parent = soundPart
+	sound:Play()
+	
+	Debris:AddItem(soundPart, 2)
+end
+
 ---------------------------------------------------------------------
 -- Safe orb creation (no attachments/constraints) - Now starts hidden
 ---------------------------------------------------------------------
@@ -504,6 +588,8 @@ local function spawnDeathOrbs(pos, count)
 			-- Ensure they're at snake height
 			local yPos = math.max(4, pos.Y)
 			orb.Position = Vector3.new(orb.Position.X, yPos, orb.Position.Z)
+			orb:SetAttribute("IsDeathOrb", true) -- Mark as death orb
+			orb:SetAttribute("OrbValue", 2) -- Set value for VFX
 		end
 
 		table.insert(orbs, orb)
@@ -648,20 +734,34 @@ local function atomicCollectOrb(orb, collType, collObj)
 	local orbName = orb.Name
 	local valObj = orb:FindFirstChild("Value")
 	local orbValue = (valObj and valObj.Value) or 10
+	
+	-- Check if this is a death orb
+	local isDeathOrb = orb:GetAttribute("IsDeathOrb") or false
+	if isDeathOrb then
+		-- Override value from attribute if it's a death orb
+		orbValue = orb:GetAttribute("OrbValue") or orbValue
+	end
 
 	-- Remove orb immediately to prevent multiple collections
 	orb.Parent = nil
 
 	-- Defer VFX and processing to prevent frame lag
 	task.defer(function()
-		createOrbCollectVFX(orbPos, orbColor)
+		-- Enhanced VFX for death orbs
+		if isDeathOrb then
+			-- Create a more dramatic effect for death orbs
+			createDeathOrbCollectVFX(orbPos, orbColor, orbValue)
+		else
+			createOrbCollectVFX(orbPos, orbColor)
+		end
 
 		if collType == "player" then
 			local p = collObj
 			-- Fire remote event if exists
 			if OrbCollectedEvent and p and p:IsA("Player") then
 				pcall(function()
-					OrbCollectedEvent:FireClient(p, orbPos, orbName)
+					-- Include death orb status in the event
+					OrbCollectedEvent:FireClient(p, orbPos, orbName, isDeathOrb, orbValue)
 				end)
 			end
 

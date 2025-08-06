@@ -473,10 +473,12 @@ function DyingState:_spawnDeathOrbs(segmentPositions)
     -- Spawn death orbs along the snake body
     warn("[DyingState] Spawning death orbs")
     
-    -- Reduce orb count for better performance
-    local maxOrbs = 30 -- Reduced from 50 for performance
+    -- Dynamic orb count based on snake length
+    local baseOrbCount = 20
+    local lengthBonus = math.floor(self.currentLength / 100) * 5
+    local maxOrbs = math.min(baseOrbCount + lengthBonus, 50) -- Scale with length but cap at 50
     local orbCount = math.min(math.floor(self.currentLength * 0.3), maxOrbs)
-    local orbValue = math.max(1, math.floor(self.currentLength * 0.4 / orbCount)) -- Higher value per orb
+    local orbValue = math.max(1, math.floor(self.currentLength * 0.4 / orbCount))
     
     -- If we have segment positions, spawn orbs along the body
     if segmentPositions and #segmentPositions > 0 then
@@ -492,14 +494,20 @@ function DyingState:_spawnDeathOrbs(segmentPositions)
             if (i - 1) % skipInterval == 0 or i == #segmentPositions then
                 local pos = segmentPositions[i]
                 if pos then
-                    local spread = 1.2 -- Slightly more spread
+                    -- Create a more organic spread pattern
+                    local spread = 2.5 -- Increased spread for more visual appeal
+                    local heightVariation = 1.5 -- Add vertical variation
                     local offset = Vector3.new(
-                        (math.random() - 0.5) * spread,
-                        math.random() * 0.5, -- Slight upward bias
-                        (math.random() - 0.5) * spread
+                        (math.random() - 0.5) * spread * (1 + math.random() * 0.5),
+                        math.random() * heightVariation, -- More vertical spread
+                        (math.random() - 0.5) * spread * (1 + math.random() * 0.5)
                     )
                     
-                    table.insert(orbsToSpawn, {position = pos + offset, value = orbValue})
+                    -- Vary orb values slightly for visual interest
+                    local valueVariation = math.random(0.8, 1.2)
+                    local finalValue = math.max(1, math.floor(orbValue * valueVariation))
+                    
+                    table.insert(orbsToSpawn, {position = pos + offset, value = finalValue})
                     spawnedOrbs = spawnedOrbs + 1
                 end
             end
@@ -552,37 +560,55 @@ function DyingState:_createDeathOrb(position, value)
     orb.Name = "Orb" -- Use "Orb" name so AI snakes recognize it
     orb.Shape = Enum.PartType.Ball
     orb.Material = Enum.Material.Neon
-    orb.Size = Vector3.new(2.5, 2.5, 2.5)
+    
+    -- Scale size based on value for visual feedback
+    local baseSize = 2.5
+    local sizeMultiplier = 1 + (math.min(value, 10) - 1) * 0.1 -- Size increases with value up to 3.5
+    local finalSize = baseSize * sizeMultiplier
+    orb.Size = Vector3.new(finalSize, finalSize, finalSize)
+    
     orb.TopSurface = Enum.SurfaceType.Smooth
     orb.BottomSurface = Enum.SurfaceType.Smooth
     orb.CanCollide = false
     orb.Anchored = true
     orb.Position = position
-    orb.Color = Color3.fromRGB(255, 200, 0) -- Start golden
+    
+    -- Start with a warm golden color that stands out
+    local hueStart = math.random() * 0.15 + 0.05 -- Golden to orange range
+    orb.Color = Color3.fromHSV(hueStart, 1, 1)
     
     -- Set attributes for the orb system
     orb:SetAttribute("OrbValue", value)
     orb:SetAttribute("IsDeathOrb", true)
     orb:SetAttribute("OrbType", "normal") -- Use "normal" so AI can eat them
     
-    -- Add glow
+    -- Add glow that scales with value
     local glow = Instance.new("PointLight")
-    glow.Brightness = 2.5
-    glow.Range = 12
+    glow.Brightness = 2 + value * 0.1
+    glow.Range = 10 + value * 0.5
     glow.Color = orb.Color
     glow.Parent = orb
     
-    -- Parent to Orbs folder
+    -- Parent to Orbs folder BEFORE adding attachments/particles
     orb.Parent = orbsFolder
     
-    -- Rainbow effect
+    -- Rainbow effect with death orb specific colors
     task.spawn(function()
-        local hue = math.random()
+        local hue = hueStart
+        local hueDirection = 1
         while orb and orb.Parent do
-            hue = (hue + 0.01) % 1
+            -- Oscillate between warm colors (red-orange-yellow)
+            hue = hue + 0.015 * hueDirection
+            if hue > 0.2 or hue < 0 then
+                hueDirection = -hueDirection
+                hue = math.clamp(hue, 0, 0.2)
+            end
+            
             local color = Color3.fromHSV(hue, 1, 1)
             orb.Color = color
-            glow.Color = color
+            if glow and glow.Parent then
+                glow.Color = color
+            end
             task.wait(0.05)
         end
     end)
@@ -590,13 +616,14 @@ function DyingState:_createDeathOrb(position, value)
     -- Smooth floating animation (like real orbs)
     task.spawn(function()
         local startY = position.Y
-        local time = 0
-        local rotSpeed = math.random() * 2 - 1 -- Random rotation speed
+        local time = math.random() * math.pi * 2 -- Random start phase
+        local rotSpeed = (math.random() * 2 - 1) * 2 -- Faster rotation
+        local floatSpeed = math.random() * 0.5 + 1.5 -- Vary float speed
         
         while orb and orb.Parent do
             time = time + 0.03
-            -- Gentle floating motion
-            local floatOffset = math.sin(time * 2) * 0.5
+            -- Gentle floating motion with varied height
+            local floatOffset = math.sin(time * floatSpeed) * 0.8
             -- Slow rotation
             local rotation = time * rotSpeed
             
@@ -606,25 +633,28 @@ function DyingState:_createDeathOrb(position, value)
         end
     end)
     
-    -- Add particle effect for extra visual appeal
+    -- Add particle effect AFTER parenting to avoid attachment warning
+    local attachment = Instance.new("Attachment")
+    attachment.Parent = orb
+    
     local particle = Instance.new("ParticleEmitter")
     particle.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-    particle.Rate = 20
+    particle.Rate = 15 + value * 2 -- More particles for higher value orbs
     particle.Lifetime = NumberRange.new(0.5, 1)
     particle.SpreadAngle = Vector2.new(360, 360)
-    particle.Speed = NumberRange.new(1)
+    particle.Speed = NumberRange.new(1, 2)
     particle.VelocityInheritance = 0
     particle.Color = ColorSequence.new(Color3.fromRGB(255, 200, 0))
     particle.Size = NumberSequence.new{
-        NumberSequenceKeypoint.new(0, 0.5),
-        NumberSequenceKeypoint.new(0.5, 0.3),
+        NumberSequenceKeypoint.new(0, 0.3 * sizeMultiplier),
+        NumberSequenceKeypoint.new(0.5, 0.2 * sizeMultiplier),
         NumberSequenceKeypoint.new(1, 0)
     }
     particle.Transparency = NumberSequence.new{
-        NumberSequenceKeypoint.new(0, 0.5),
+        NumberSequenceKeypoint.new(0, 0.3),
         NumberSequenceKeypoint.new(1, 1)
     }
-    particle.Parent = orb
+    particle.Parent = attachment
     
     -- Clean up after 90 seconds
     Debris:AddItem(orb, 90)
