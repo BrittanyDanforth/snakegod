@@ -217,7 +217,7 @@ local function onPlayerAdded(player)
                         elseif eventName == "onOrbCollision" then
                             -- Let existing orb system handle collection
                             -- The OrbSpawner system has all the logic
-                            local orb = collisionData.orb
+                            local orb = collisionData  -- The orb is passed directly
                             if orb and orb.Parent then
                                 -- Get orb value
                                 local orbValue = orb:GetAttribute("OrbValue") or 1
