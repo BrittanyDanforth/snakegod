@@ -3439,47 +3439,43 @@ function AISnake:getSegmentColor(index)
 	end
 end
 
--- REPLACEMENT for the entire 'calculateGrowthFactor' function
+-- Calculate growth factor exactly like OptimizedSnakeSystem
 function AISnake:calculateGrowthFactor()
 	local length = self.CurrentLength
 
-	-- This is a logarithmic growth curve. It grows quickly at first,
-	-- then the growth slows down, which feels more natural.
-	-- The numbers can be tweaked to change how fast it gets thick.
-	local growth = 1 + (math.log10(math.max(1, length / 15))) * 0.8
-	
-	-- Clamp the growth to a maximum multiplier to prevent it from getting too huge
-	return math.min(growth, MAX_SIZE_MULTIPLIER)
+	if length <= 50 then
+		return 1.0
+	elseif length <= 200 then
+		return 1.0 + (length - 50) / 150 * 0.5 -- Up to 1.5x
+	elseif length <= 1000 then
+		return 1.5 + (length - 200) / 800 * 1.0 -- Up to 2.5x
+	elseif length <= 5000 then
+		return 2.5 + (length - 1000) / 4000 * 0.5 -- Up to 3.0x
+	else
+		return 3.0 + math.min((length - 5000) / 10000 * 0.5, 0.5) -- Max 3.5x
+	end
 end
 
--- REPLACEMENT for the entire 'getSegmentSize' function
+-- Smooth size transition function from OptimizedSnakeSystem
 function AISnake:getSegmentSize(index, baseSize)
-	-- The 'baseSize' here is now the overall thickness of the entire snake,
-	-- calculated by (BASE_SIZE * self.growthFactor).
-	
+	local sizeMult = 1
+	local visibleSegmentCount = self.CurrentLength
+
 	if index == 0 then
-		-- The head is always slightly bigger than the body.
-		return baseSize * HEAD_SIZE_MULTIPLIER
+		-- Head with subtle size increase
+		return baseSize * HEAD_SIZE_MULTIPLIER * sizeMult
 	elseif index <= HEAD_BLEND_SEGMENTS then
-		-- Smoothly transition from the bigger head to the normal body size.
+		-- Smooth transition from head to body
 		local blendFactor = index / HEAD_BLEND_SEGMENTS
 		local headSize = baseSize * HEAD_SIZE_MULTIPLIER
-		return headSize + (baseSize - headSize) * (blendFactor ^ 0.5)
+		local bodySize = baseSize * (1 - 0.05 * blendFactor) -- Subtle initial taper
+		return (headSize + (bodySize - headSize) * (blendFactor ^ 0.5)) * sizeMult
 	else
-		-- For the rest of the body, we apply a VERY SUBTLE taper
-		-- only to the last few segments.
-		local totalSegments = self.actualSegmentCount or self.CurrentLength
-		local segmentsFromTail = totalSegments - index
-		local taperSegments = 15 -- Only the last 15 segments will get smaller.
-		
-		if segmentsFromTail < taperSegments then
-			-- We are near the tail. Make it slightly smaller.
-			local taperFactor = segmentsFromTail / taperSegments
-			return baseSize * (taperFactor ^ 0.3) -- The ^0.3 makes the taper curve smoothly
-		else
-			-- We are in the main body. All segments are the same, full thickness.
-			return baseSize
-		end
+		-- Body with gradual taper
+		local taperFactor = 1 - (index / self.CurrentLength) * 0.2
+		-- Apply exponential smoothing to taper
+		taperFactor = 1 - (1 - taperFactor) ^ 1.5
+		return baseSize * taperFactor * sizeMult
 	end
 end
 
