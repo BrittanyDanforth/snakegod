@@ -1907,85 +1907,70 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			return
 		end
 		
-		-- Add professional full-body spawn protection with countdown timer
+		-- Add clean countdown timer UI for spawn protection (no ForceField)
 		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
-			-- 1. CREATE A FULL-BODY, CUSTOM-TEXTURED FORCEFIELD
-			-- This will cover every segment of the snake for a true shield effect.
-			local protectionField = Instance.new("ForceField")
-			protectionField.Visible = true
-			
-			-- IMPORTANT: Parent it to the MODEL, not the head, to cover all parts.
-			protectionField.Parent = self.Model
-
-			-- 2. CREATE THE COUNTDOWN TIMER GUI
+			-- 1. CREATE A BillboardGui TO HOLD THE COUNTDOWN TEXT
+			-- A BillboardGui always faces the player's camera.
 			local billboardGui = Instance.new("BillboardGui")
-			billboardGui.Name = "InvincibleTimer"
-			billboardGui.Adornee = self.HeadParts.head -- Attach it to the snake's head
-			billboardGui.Size = UDim2.new(8, 0, 2.5, 0)   -- Size of the GUI in studs
-			billboardGui.StudsOffset = Vector3.new(0, 5, 0) -- Hover above the head
-			billboardGui.AlwaysOnTop = false -- Don't always show on top
+			billboardGui.Name = "InvincibilityTimer"
+			billboardGui.Adornee = self.HeadParts.head -- Attach it directly to the snake's head
+			billboardGui.Size = UDim2.new(8, 0, 2.5, 0)      -- Set size in studs
+			billboardGui.StudsOffset = Vector3.new(0, 5, 0) -- Make it float 5 studs above the head
+			billboardGui.AlwaysOnTop = true
 			billboardGui.LightInfluence = 0
-			billboardGui.Parent = self.HeadParts.head
-			
-			-- Create background for better visibility
+			billboardGui.Parent = self.HeadParts.head -- Parent to the head
+
+			-- Create a background frame for the text
 			local bgFrame = Instance.new("Frame")
 			bgFrame.Size = UDim2.new(1, 0, 1, 0)
 			bgFrame.BackgroundColor3 = Color3.new(0, 0, 0)
-			bgFrame.BackgroundTransparency = 0.3
+			bgFrame.BackgroundTransparency = 0.4
 			bgFrame.BorderSizePixel = 0
 			bgFrame.Parent = billboardGui
 			
-			-- Add corner rounding
 			local uiCorner = Instance.new("UICorner")
 			uiCorner.CornerRadius = UDim.new(0.2, 0)
 			uiCorner.Parent = bgFrame
-			
+
+			-- Create the text label itself
 			local textLabel = Instance.new("TextLabel")
 			textLabel.Size = UDim2.new(1, 0, 1, 0)
 			textLabel.BackgroundTransparency = 1
-			textLabel.Font = Enum.Font.SourceSansBold
-			textLabel.TextColor3 = Color3.fromRGB(170, 255, 255) -- Light cyan color
+			textLabel.Font = Enum.Font.GothamSemibold
+			textLabel.TextColor3 = Color3.fromRGB(170, 255, 255)
 			textLabel.TextScaled = true
-			textLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
 			textLabel.TextStrokeTransparency = 0
+			textLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
 			textLabel.Parent = bgFrame
-			
-			-- 3. RUN THE COUNTDOWN AND CLEANUP LOGIC
+
+			-- 2. RUN THE COUNTDOWN AND ANIMATION LOGIC
 			task.spawn(function()
-				local protectionDuration = 10 -- Total duration in seconds
+				local protectionDuration = 10 -- Your AI protection time in seconds
 				local TweenService = game:GetService("TweenService")
 				
-				-- Initial flash effect
-				local flashTween = TweenService:Create(bgFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
-					BackgroundTransparency = 0.7
-				})
-				flashTween:Play()
-				
-				-- The countdown loop (show for last 5 seconds)
-				task.wait(protectionDuration - 5) -- Wait until 5 seconds remaining
-				
-				for i = 5, 1, -1 do
-					if not textLabel.Parent then break end -- Stop if snake is destroyed
+				-- Start the countdown (we'll show the last 3 seconds)
+				task.wait(protectionDuration - 3)
+
+				for i = 3, 1, -1 do
+					if not textLabel or not textLabel.Parent then break end -- Stop if snake was destroyed
+					textLabel.Text = "INVINCIBLE: " .. i
 					
-					-- Update text with icon
-					if i > 3 then
-						textLabel.Text = "🛡️ PROTECTED: " .. i
-						textLabel.TextColor3 = Color3.fromRGB(170, 255, 255)
-					elseif i > 1 then
-						textLabel.Text = "⚠️ EXPIRING: " .. i
-						textLabel.TextColor3 = Color3.fromRGB(255, 255, 170)
+					-- Pulse animation with color change
+					if i == 3 then
+						textLabel.TextColor3 = Color3.fromRGB(170, 255, 255) -- Cyan
+					elseif i == 2 then
+						textLabel.TextColor3 = Color3.fromRGB(255, 255, 170) -- Yellow
 					else
-						textLabel.Text = "⚠️ VULNERABLE: " .. i
-						textLabel.TextColor3 = Color3.fromRGB(255, 170, 170)
+						textLabel.TextColor3 = Color3.fromRGB(255, 170, 170) -- Red
 					end
 					
-					-- Pulse effect on each second
-					local pulseTween = TweenService:Create(textLabel, TweenInfo.new(0.2, Enum.EasingStyle.Bounce), {
+					-- Pulse effect
+					local pulseTween = TweenService:Create(textLabel, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
 						TextTransparency = 0.3
 					})
 					pulseTween:Play()
 					pulseTween.Completed:Connect(function()
-						if textLabel.Parent then
+						if textLabel and textLabel.Parent then
 							textLabel.TextTransparency = 0
 						end
 					end)
@@ -1993,8 +1978,8 @@ function AISnake.new(startPosition, preservedPersonalityType)
 					task.wait(1)
 				end
 				
-				-- Fade out the GUI
-				if billboardGui.Parent then
+				-- Fade out the UI
+				if billboardGui and billboardGui.Parent then
 					local fadeOut = TweenService:Create(bgFrame, TweenInfo.new(0.5), {
 						BackgroundTransparency = 1
 					})
@@ -2004,40 +1989,8 @@ function AISnake.new(startPosition, preservedPersonalityType)
 					})
 					fadeOut:Play()
 					textFade:Play()
-				end
-				
-				-- Remove the ForceField with a flash effect
-				if protectionField and protectionField.Parent then
-					-- Create a flash effect when protection ends
-					local flash = Instance.new("Part")
-					flash.Name = "ProtectionEndFlash"
-					flash.Shape = Enum.PartType.Ball
-					flash.Material = Enum.Material.ForceField
-					flash.Size = Vector3.new(15, 15, 15)
-					flash.Color = Color3.fromRGB(170, 255, 255)
-					flash.Transparency = 0.7
-					flash.Anchored = true
-					flash.CanCollide = false
-					flash.CanQuery = false
-					flash.CFrame = self.HeadParts.head.CFrame
-					flash.Parent = workspace
 					
-					-- Animate the flash
-					local flashTween = TweenService:Create(flash, TweenInfo.new(0.5, Enum.EasingStyle.Quad), {
-						Size = Vector3.new(30, 30, 30),
-						Transparency = 1
-					})
-					flashTween:Play()
-					game:GetService("Debris"):AddItem(flash, 0.6)
-					
-					-- Destroy the forcefield
-					protectionField:Destroy()
-				end
-
-				-- Clean up the GUI after fade
-				task.wait(0.5)
-				if billboardGui.Parent then
-					billboardGui:Destroy()
+					game:GetService("Debris"):AddItem(billboardGui, 0.6)
 				end
 			end)
 		end
