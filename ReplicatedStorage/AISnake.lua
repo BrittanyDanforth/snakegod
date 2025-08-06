@@ -1698,12 +1698,6 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	for _, obj in ipairs(self.Model:GetChildren()) do
 		obj:Destroy()
 	end
-	
-	-- Parent model to workspace immediately
-	self.Model.Parent = workspace
-	
-	-- Debug print
-	print("🐍 Creating AI Snake model:", self.Model.Name)
 
 	game:GetService("CollectionService"):AddTag(self.Model, "AISnake")
 
@@ -1896,6 +1890,10 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	-- Initialize model attributes for client LOD
 	self.Model:SetAttribute("CurrentLength", self.CurrentLength)
 	self.Model:SetAttribute("HeadPosition", self.Position)
+
+	-- Parent model to workspace now that it's fully constructed
+	self.Model.Parent = workspace
+	print("🐍 Creating AI Snake model:", self.Model.Name)
 
 	-- Spawn sequence to prevent gaps
 	task.defer(function()
