@@ -50,12 +50,22 @@ function PlayerController.new(player, config)
     self.config = config or {}
     self.isDestroyed = false
     
+    -- Ensure config has required nested tables
+    if not self.config.Snake then
+        warn("[PlayerController] Config.Snake is missing, using defaults")
+        self.config.Snake = {
+            baseLength = 3,
+            baseSpeed = 16,
+            boostSpeed = 32
+        }
+    end
+    
     -- Single Source of Truth data
     self.data = {
         score = 0,
         orbsCollected = 0,
-        length = config.Snake.baseLength,
-        speed = config.Snake.baseSpeed,
+        length = self.config.Snake.baseLength or 3,
+        speed = self.config.Snake.baseSpeed or 16,
         killCount = 0,
         deathCount = 0,
         reviveTokens = 1,

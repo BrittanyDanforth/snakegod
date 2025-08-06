@@ -16,6 +16,43 @@ local CollisionModule = require(ServerModules.CollisionModule)
 -- Shared configuration  
 local Config = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Config"))
 
+-- Create necessary remotes
+local function createRemotes()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        remotes = Instance.new("Folder")
+        remotes.Name = "Remotes"
+        remotes.Parent = ReplicatedStorage
+    end
+    
+    -- Create revive-related remotes
+    if not remotes:FindFirstChild("PromptRevive") then
+        local promptRevive = Instance.new("RemoteEvent")
+        promptRevive.Name = "PromptRevive"
+        promptRevive.Parent = remotes
+    end
+    
+    if not remotes:FindFirstChild("ReviveResponse") then
+        local reviveResponse = Instance.new("RemoteEvent")
+        reviveResponse.Name = "ReviveResponse"
+        reviveResponse.Parent = remotes
+    end
+    
+    if not remotes:FindFirstChild("ControlDeathUI") then
+        local controlDeathUI = Instance.new("RemoteEvent")
+        controlDeathUI.Name = "ControlDeathUI"
+        controlDeathUI.Parent = remotes
+    end
+    
+    if not remotes:FindFirstChild("ShowDeathScreen") then
+        local showDeathScreen = Instance.new("RemoteEvent")
+        showDeathScreen.Name = "ShowDeathScreen"
+        showDeathScreen.Parent = remotes
+    end
+    
+    warn("[MainServer] Created/verified remote events")
+end
+
 -- Player controller storage
 local playerControllers = {}
 -- Expose for debugging
@@ -43,27 +80,15 @@ end
 local function initializeSystems()
     warn("[MainServer] Initializing game systems...")
     
+    -- Create necessary remotes first
+    createRemotes()
+    
     -- Wait for existing systems
     waitForSnakeSystem()
     
-    -- Initialize collision system
+    -- Create collision system
     collisionSystem = CollisionModule.new(playerControllers)
     collisionSystem:start()
-    
-    -- Disable the old InitializeCollisionHandler if it exists
-    local collisionHandler = workspace:FindFirstChild("SnakeCollisionHandlerV1")
-    if not collisionHandler then
-        collisionHandler = workspace:FindFirstChild("SnakeCollisionHandler_FINAL")
-    end
-    if not collisionHandler then
-        -- Try to find it in ServerScriptService
-        collisionHandler = game.ServerScriptService:FindFirstChild("SnakeCollisionHandler_FINAL")
-    end
-    
-    if collisionHandler and collisionHandler:IsA("Script") then
-        collisionHandler.Disabled = true
-        warn("[MainServer] Disabled InitializeCollisionHandler")
-    end
     
     warn("[MainServer] Systems initialized successfully")
 end
@@ -179,35 +204,12 @@ local function onPlayerAdded(player)
                                 return
                             end
                             
-                            warn("[MainServer] FATAL COLLISION for", player.Name, "Type:", 
-                                collisionData.isHeadCollision and "Head" or 
-                                collisionData.isWallCollision and "Wall" or 
-                                collisionData.isBodyCollision and "Body" or "Unknown")
+                            warn("[MainServer] Processing fatal collision for", player.Name)
+                            warn("[MainServer] Current state:", currentState)
+                            warn("[MainServer] Collision data:", collisionData)
                             
-                            -- Get killer info
-                            if collisionData.killerPlayer then
-                                warn("[MainServer] Killed by player:", collisionData.killerPlayer.Name)
-                            elseif collisionData.isAI then
-                                warn("[MainServer] Killed by AI Snake")
-                            end
-                            
-                            -- Store killer info first
-                            if collisionData.killerPlayer then
-                                player:SetAttribute("KilledBy", collisionData.killerPlayer.Name)
-                            elseif collisionData.isAI then
-                                player:SetAttribute("KilledBy", "AI Snake")
-                            else
-                                player:SetAttribute("KilledBy", "Wall")
-                            end
-                            
-                            -- Change to Dying state - this will handle revive prompt
-                            controller.fsm:changeState("Dying", collisionData)
-                            
-                            -- DO NOT kill the humanoid here - let DyingState handle it
-                            -- The DyingState will either:
-                            -- 1. Show revive prompt and wait for response
-                            -- 2. Transition to Spectating if no revives
-                            -- After that, we can kill the humanoid
+                            -- Let the controller handle the collision
+                            -- The FSM will transition to Dying state
                         elseif eventName == "onOrbCollision" then
                             -- Let existing orb system handle collection
                             -- The OrbSpawner system has all the logic

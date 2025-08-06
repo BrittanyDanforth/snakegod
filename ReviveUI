@@ -15,6 +15,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 -- Wait for remotes
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local promptReviveRemote = remotes:WaitForChild("PromptRevive")
+local reviveResponseRemote = remotes:WaitForChild("ReviveResponse")
 
 -- UI Configuration
 local UI_CONFIG = {
@@ -239,14 +240,19 @@ end
 -- Centralized function to send response to server
 local function handleResponse(response)
 	if isShowing then
-		promptReviveRemote:FireServer(response)
+		reviveResponseRemote:FireServer(response)
 		closeRevivePrompt()
 	end
 end
 
 -- Handle revive prompt from server
-promptReviveRemote.OnClientEvent:Connect(function()
+promptReviveRemote.OnClientEvent:Connect(function(data)
+	-- Check if we should ignore this prompt
 	if isShowing then return end
+	
+	-- Trust the server - if it's sending a revive prompt, player is dying
+	-- Don't check humanoid health as it might not be synced yet
+	
 	isShowing = true
 	isPurchasing = false
 
@@ -263,7 +269,8 @@ promptReviveRemote.OnClientEvent:Connect(function()
 	lengthInfo.Text = "Your length: " .. tostring(actualDeathLength)
 	reviveInfo.Text = "Revive at " .. tostring(reviveLength) .. " length!"
 
-	local revivesAvailable = player:GetAttribute("RevivesAvailable") or 0
+	-- Use the revivesLeft from data if available
+	local revivesAvailable = (data and data.revivesLeft) or player:GetAttribute("RevivesAvailable") or 0
 	reviveCount.Text = "Revives remaining: " .. tostring(revivesAvailable)
 
 	if revivesAvailable > 0 then
