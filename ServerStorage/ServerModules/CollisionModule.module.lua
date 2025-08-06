@@ -13,11 +13,11 @@ CollisionModule.__index = CollisionModule
 
 -- Constants for collision detection
 local COLLISION_CONFIG = {
-    HEAD_RADIUS = 3.5,
-    BODY_DISTANCE = 2.8,
-    ORB_COLLECTION_RADIUS = 5,
+    HEAD_RADIUS = 5,      -- Increased from 3.5 for better detection
+    BODY_DISTANCE = 4,    -- Increased from 2.8 for better detection
+    ORB_COLLECTION_RADIUS = 6,
     SELF_COLLISION_IGNORE_SEGMENTS = 10,
-    FRAME_SKIP = 3, -- Check collisions every N frames for performance
+    FRAME_SKIP = 2, -- Check collisions more frequently (was 3)
     MAX_CHECKS_PER_FRAME = 50
 }
 
@@ -81,6 +81,11 @@ function CollisionModule:update(dt)
         local currentState = controller.fsm:getCurrentState()
         local canCollide = controller:canCollide()
         
+        -- Debug: Log state info periodically
+        if self.frameCount % 120 == 0 then  -- Every 4 seconds
+            warn("[CollisionModule] Player:", player.Name, "State:", currentState, "CanCollide:", canCollide)
+        end
+        
         if currentState == "Alive" and canCollide then
             self:_checkPlayerCollisions(controller)
             checksThisFrame = checksThisFrame + 1
@@ -93,6 +98,11 @@ function CollisionModule:_checkPlayerCollisions(controller)
     if not head then 
         warn("[CollisionModule] No head found for", controller.player.Name)
         return 
+    end
+    
+    -- Debug: Log that we're checking collisions
+    if self.frameCount % 60 == 0 then  -- Log every 2 seconds
+        warn("[CollisionModule] Checking collisions for", controller.player.Name, "- Found", #self.snakeCache, "snakes in cache")
     end
     
     -- Check for orb collection
@@ -127,20 +137,29 @@ function CollisionModule:_checkFatalCollisions(controller, head)
         end
         
         -- Check head-to-head collision
-        if snakeData.Head and (snakeData.Head.Position - head.Position).Magnitude <= COLLISION_CONFIG.HEAD_RADIUS then
-            local collisionData = {
-                isFatal = true,
-                hitPart = snakeData.Head,
-                hitPosition = head.Position,
-                preventOrbs = false,
-                isHeadCollision = true,
-                killerPlayer = snakeData.Player,
-                isAI = snakeData.IsAI
-            }
+        if snakeData.Head then
+            local distance = (snakeData.Head.Position - head.Position).Magnitude
             
-            warn("[CollisionModule] HEAD COLLISION DETECTED between", controller.player.Name, "and", snakeData.IsAI and "AI Snake" or snakeData.Player.Name)
-            controller.events.onFatalHit:Fire(collisionData)
-            return
+            -- Debug: Log close encounters
+            if distance <= COLLISION_CONFIG.HEAD_RADIUS * 2 then
+                warn("[CollisionModule] CLOSE ENCOUNTER:", controller.player.Name, "distance", distance, "to", snakeData.IsAI and "AI Snake" or (snakeData.Player and snakeData.Player.Name or "Unknown"))
+            end
+            
+            if distance <= COLLISION_CONFIG.HEAD_RADIUS then
+                local collisionData = {
+                    isFatal = true,
+                    hitPart = snakeData.Head,
+                    hitPosition = head.Position,
+                    preventOrbs = false,
+                    isHeadCollision = true,
+                    killerPlayer = snakeData.Player,
+                    isAI = snakeData.IsAI
+                }
+                
+                warn("[CollisionModule] HEAD COLLISION DETECTED between", controller.player.Name, "and", snakeData.IsAI and "AI Snake" or snakeData.Player.Name)
+                controller.events.onFatalHit:Fire(collisionData)
+                return
+            end
         end
         
         -- Check collision with snake body segments
@@ -259,6 +278,13 @@ function CollisionModule:_updateCaches()
                     IsAI = false,
                     Player = player
                 })
+            else
+                warn("[CollisionModule] No head found for player snake:", player.Name)
+            end
+        else
+            -- Debug: Log why snake wasn't found
+            if not snakeModel then
+                warn("[CollisionModule] No snake model found for player:", player.Name)
             end
         end
     end
@@ -269,24 +295,27 @@ function CollisionModule:_updateCaches()
             -- This is an AI snake
             local head = child:FindFirstChild("Segment0_Head")
             if head and head:IsA("BasePart") then
-                -- AI snakes have segments named "AISegment1", "AISegment2", etc.
                 local segments = {}
                 
-                -- First add the head as segment 0
+                -- First add the head
                 table.insert(segments, head)
                 
-                -- Then find all body segments
-                for _, part in pairs(child:GetChildren()) do
-                    if part:IsA("BasePart") and part.Name:match("^AISegment%d+") then
-                        local segmentNumber = tonumber(part.Name:match("AISegment(%d+)"))
-                        if segmentNumber then
-                            segments[segmentNumber + 1] = part -- +1 because head is at index 1
-                        end
+                -- AI snakes use the same naming as player snakes now: Segment1, Segment2, etc.
+                local i = 1
+                while true do
+                    local segment = child:FindFirstChild("Segment" .. i) or child:FindFirstChild("AISegment" .. i)
+                    if segment and segment:IsA("BasePart") then
+                        table.insert(segments, segment)
+                        i = i + 1
+                    else
+                        break
                     end
                 end
                 
                 -- Also check if it's tagged as AISnake
                 local isAI = CollectionService:HasTag(child, "AISnake")
+                
+                warn("[CollisionModule] Found AI snake:", child.Name, "with", #segments, "segments")
                 
                 table.insert(self.snakeCache, {
                     Head = head,
