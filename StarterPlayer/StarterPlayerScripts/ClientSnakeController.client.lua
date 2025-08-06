@@ -49,14 +49,60 @@ local function setupSnake(character)
     local configJson = character:GetAttribute("SnakeConfig")
     if configJson then
         local HttpService = game:GetService("HttpService")
-        snakeConfig = HttpService:JSONDecode(configJson)
-        print("[Client] Using server-provided snake config")
+        local decodedConfig = HttpService:JSONDecode(configJson)
+        
+        -- Validate and fix color properties
+        snakeConfig = {
+            InitialLength = decodedConfig.InitialLength or 85,
+            HeadColor = decodedConfig.HeadColor and Color3.new(decodedConfig.HeadColor.R or decodedConfig.HeadColor[1], decodedConfig.HeadColor.G or decodedConfig.HeadColor[2], decodedConfig.HeadColor.B or decodedConfig.HeadColor[3]) or Color3.fromRGB(76, 217, 100),
+            BodyColors = {},
+            HeadMaterial = decodedConfig.HeadMaterial or Enum.Material.Neon,
+            BodyMaterial = decodedConfig.BodyMaterial or Enum.Material.Neon,
+            SegmentSize = decodedConfig.SegmentSize or Vector3.new(4, 4, 4),
+            HeadSize = decodedConfig.HeadSize or Vector3.new(4.5, 4.5, 4.5),
+            SegmentSpacing = decodedConfig.SegmentSpacing or 3.2,
+            MaxSegments = decodedConfig.MaxSegments or 50000
+        }
+        
+        -- Convert body colors
+        if decodedConfig.BodyColors then
+            for i, colorData in ipairs(decodedConfig.BodyColors) do
+                if type(colorData) == "table" then
+                    snakeConfig.BodyColors[i] = Color3.new(colorData.R or colorData[1], colorData.G or colorData[2], colorData.B or colorData[3])
+                else
+                    snakeConfig.BodyColors[i] = Color3.fromRGB(60, 180, 80) -- Default green
+                end
+            end
+        else
+            -- Default body colors
+            snakeConfig.BodyColors = {
+                Color3.fromRGB(60, 180, 80),
+                Color3.fromRGB(80, 200, 100),
+                Color3.fromRGB(100, 220, 120),
+                Color3.fromRGB(80, 200, 100),
+                Color3.fromRGB(60, 180, 80),
+            }
+        end
+        
+        print("[Client] Using server-provided snake config with validated colors")
     else
         -- Default config if server hasn't set one yet
         snakeConfig = {
-            InitialLength = 10,
-            BodyColors = {Color3.fromHex("#00FF00"), Color3.fromHex("#00DD00")},
-            HeadColor = Color3.fromHex("#00FF00")
+            InitialLength = 85,
+            BodyColors = {
+                Color3.fromRGB(60, 180, 80),
+                Color3.fromRGB(80, 200, 100),
+                Color3.fromRGB(100, 220, 120),
+                Color3.fromRGB(80, 200, 100),
+                Color3.fromRGB(60, 180, 80),
+            },
+            HeadColor = Color3.fromRGB(76, 217, 100),
+            HeadMaterial = Enum.Material.Neon,
+            BodyMaterial = Enum.Material.Neon,
+            SegmentSize = Vector3.new(4, 4, 4),
+            HeadSize = Vector3.new(4.5, 4.5, 4.5),
+            SegmentSpacing = 3.2,
+            MaxSegments = 50000
         }
         warn("[Client] Timeout waiting for server config, using default")
     end
