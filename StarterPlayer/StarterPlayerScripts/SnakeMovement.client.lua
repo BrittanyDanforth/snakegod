@@ -738,36 +738,38 @@ local function initializeForCharacter(character)
 			end
 		end
 
-		-- SLITHER.IO STYLE SMOOTH TURNING
-		-- Dynamic turn rate based on angle difference for more responsive control
-		local angleDiff = math.acos(math.clamp(State.currentDirection:Dot(State.targetDirection), -1, 1))
-		local baseTurnRate = Config.TurnSpeed * dt
-		
-		-- Increase turn rate for sharper turns (more responsive)
-		local dynamicTurnRate = baseTurnRate * (1 + angleDiff * 0.5)
-		
-		-- Apply boost turn bonus for tighter control when boosting
+		-- SLITHER.IO STYLE SMOOTH TURNING (WITH MAXIMUM TURN RATE)
+		local turnSpeed = Config.TurnSpeed
 		if State.boosting then
-			dynamicTurnRate = dynamicTurnRate * 1.2
+			turnSpeed = turnSpeed * 0.8 -- Slightly reduce turn speed while boosting, like in slither.io
+		end
+
+		-- This is the maximum angle (in radians) the snake can turn per second.
+		local maxTurnAnglePerSecond = math.rad(turnSpeed * 40) -- The '40' is a multiplier you can tune.
+
+		-- Calculate how much we can turn this frame.
+		local maxTurnThisFrame = maxTurnAnglePerSecond * dt
+
+		-- Get the angle between the current direction and the target direction.
+		local angleToTarget = math.acos(math.clamp(State.currentDirection:Dot(State.targetDirection), -1, 1))
+
+		-- If we need to turn more than our max allowed turn for this frame, clamp it.
+		local turnAngle = math.min(angleToTarget, maxTurnThisFrame)
+
+		if angleToTarget > 0.01 then -- Only turn if we need to
+			-- Determine the direction of the turn (left or right).
+			local cross = State.currentDirection:Cross(State.targetDirection)
+			local turnAxis = cross.Y > 0 and Vector3.new(0, 1, 0) or Vector3.new(0, -1, 0)
+			
+			-- Rotate the current direction by the clamped turn angle.
+			local newDirectionCFrame = CFrame.fromAxisAngle(turnAxis, turnAngle)
+			State.currentDirection = (CFrame.new(Vector3.new(), State.currentDirection) * newDirectionCFrame).LookVector.Unit
 		end
 		
 		-- Reduce turn rate when near walls to prevent shaking
 		if State.wallStuckTime > 0 then
-			dynamicTurnRate = dynamicTurnRate * 0.3
-		end
-		
-		-- Clamp turn rate for stability
-		dynamicTurnRate = math.min(dynamicTurnRate, 0.15) -- Max 15% turn per frame
-		
-		-- PROPER DIRECTION INTERPOLATION - Never let it become invalid
-		if State.targetDirection.Magnitude > 0.001 and State.currentDirection.Magnitude > 0.001 then
-			-- Spherical interpolation for smoother rotation
-			local newDirection = State.currentDirection:Lerp(State.targetDirection, dynamicTurnRate)
-			
-			-- Always normalize after lerp
-			if newDirection.Magnitude > 0.001 then
-				State.currentDirection = newDirection.Unit
-			end
+			-- Apply additional reduction to max turn angle when stuck
+			maxTurnThisFrame = maxTurnThisFrame * 0.3
 		end
 
 		-- BUTTERY smooth speed changes
