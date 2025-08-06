@@ -148,6 +148,9 @@ Snake.__index = Snake
 
 function Snake.new(character, config)
 	local self = setmetatable({}, Snake)
+	
+	-- Initialize frameCount immediately to prevent any nil errors
+	self.frameCount = 0
 
 	self.character = character
 	self.rootPart = character:WaitForChild("HumanoidRootPart")
@@ -204,12 +207,10 @@ function Snake.new(character, config)
 	self.pendingGrowth = 0
 	self.growthWaveOffset = 0
 	
-	-- Frame counter for update throttling
-	self.frameCount = 0
-	
-	-- Verify frameCount is set (safety check)
-	if not self.frameCount then
-		warn("⚠️ OptimizedSnakeSystemV9: frameCount failed to initialize, setting to 0")
+	-- Frame counter for update throttling (already initialized at constructor start)
+	-- Double-check frameCount initialization
+	if not self.frameCount or type(self.frameCount) ~= "number" then
+		warn("⚠️ OptimizedSnakeSystemV9: frameCount was corrupted, resetting to 0")
 		self.frameCount = 0
 	end
 
@@ -795,10 +796,10 @@ function Snake:startUpdateLoop()
 		end
 
 		-- Ensure frameCount is always a valid number (extra safety)
-		if not self.frameCount then
+		if not self.frameCount or type(self.frameCount) ~= "number" then
 			self.frameCount = 0
 		end
-		self.frameCount = self.frameCount + 1
+		self.frameCount = (self.frameCount or 0) + 1
 
 		-- 🎯 SMART UPDATE THROTTLING
 		-- Every frame: Critical movement
@@ -806,17 +807,17 @@ function Snake:startUpdateLoop()
 		self:updateUnifiedBody()
 		
 		-- Every 3rd frame: Visual effects
-		if self.frameCount % GLOW_UPDATE_RATE == 0 then
+		if self.frameCount and self.frameCount % GLOW_UPDATE_RATE == 0 then
 			self:updateVisualEffects()
 		end
 		
 		-- Every 5th frame: LOD and visibility
-		if self.frameCount % LOD_UPDATE_RATE == 0 then
+		if self.frameCount and self.frameCount % LOD_UPDATE_RATE == 0 then
 			self:checkVisibility()
 		end
 		
 		-- Every 5th frame: Particle updates
-		if self.frameCount % PARTICLE_UPDATE_RATE == 0 then
+		if self.frameCount and self.frameCount % PARTICLE_UPDATE_RATE == 0 then
 			self:updateParticles()
 		end
 
@@ -844,18 +845,18 @@ function Snake:startUpdateLoop()
 		end
 
 		-- Update growth factor
-		if self.frameCount % GROWTH_CHECK_INTERVAL == 0 then
+		if self.frameCount and self.frameCount % GROWTH_CHECK_INTERVAL == 0 then
 			self.growthFactor = self:calculateGrowthFactor()
 		end
 
 		-- ENHANCED: Update visibility checks
 		local cameraPos = self.camera and self.camera.CFrame.Position or self.rootPart.Position
-		if self.frameCount % VISIBILITY_CHECK_INTERVAL == 0 then
+		if self.frameCount and self.frameCount % VISIBILITY_CHECK_INTERVAL == 0 then
 			self:updateSegmentVisibility(cameraPos)
 		end
 
 		-- ENHANCED: Sync beams with segment visibility
-		if self.frameCount % BEAM_SYNC_INTERVAL == 0 then
+		if self.frameCount and self.frameCount % BEAM_SYNC_INTERVAL == 0 then
 			self:syncBeamVisibility()
 		end
 
@@ -887,7 +888,7 @@ function Snake:startUpdateLoop()
 		end
 
 		-- Network updates (optimized rate)
-		if self.frameCount % NETWORK_UPDATE_RATE == 0 then
+		if self.frameCount and self.frameCount % NETWORK_UPDATE_RATE == 0 then
 			self:sendNetworkUpdate()
 		end
 	end)
