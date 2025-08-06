@@ -951,7 +951,7 @@ function Snake:updateUnifiedBody()
 	local requiredSegments = math.min(math.ceil(self.actualLength / 2), MAX_SEGMENTS)
 	
 	-- Apply segment budget
-	local segmentsToUpdate = math.min(requiredSegments, segmentBudget, self.visibleSegmentCount)
+	local segmentsToUpdate = math.min(requiredSegments, segmentBudget)
 
 	-- Add new segments if grown with smooth animation
 	if requiredSegments > self.visibleSegmentCount then
