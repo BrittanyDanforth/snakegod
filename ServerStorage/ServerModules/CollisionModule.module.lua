@@ -11,6 +11,9 @@ local Players = game:GetService("Players")
 local CollisionModule = {}
 CollisionModule.__index = CollisionModule
 
+-- Debug flag - set to true to enable detailed logging
+local DEBUG_MODE = false
+
 -- Constants for collision detection
 local COLLISION_CONFIG = {
     HEAD_RADIUS = 5,      -- Increased from 3.5 for better detection
@@ -110,9 +113,11 @@ function CollisionModule:_checkOrbCollection(controller, head)
             orbCount = orbCount + 1
             local distance = (orb.Position - head.Position).Magnitude
             if distance <= COLLISION_CONFIG.ORB_COLLECTION_RADIUS then
-                -- Debug logging
-                local isDeathOrb = orb:GetAttribute("IsDeathOrb")
-                print("[CollisionModule] Orb in range:", orb.Name, "Distance:", distance, "IsDeathOrb:", isDeathOrb)
+                -- Debug logging only when enabled
+                if DEBUG_MODE then
+                    local isDeathOrb = orb:GetAttribute("IsDeathOrb")
+                    print("[CollisionModule] Orb in range:", orb.Name, "Distance:", distance, "IsDeathOrb:", isDeathOrb)
+                end
                 
                 -- Fire orb collection event
                 controller.events.onOrbCollision:Fire(orb)
@@ -123,8 +128,8 @@ function CollisionModule:_checkOrbCollection(controller, head)
         end
     end
     
-    -- Debug: log total orbs periodically
-    if self.frameCount % 60 == 0 then  -- Every 2 seconds
+    -- Debug: log total orbs periodically (reduced frequency)
+    if DEBUG_MODE and self.frameCount % 300 == 0 then  -- Every 10 seconds instead of 2
         if orbCount > 0 then
             print("[CollisionModule] Total orbs in folder:", orbCount)
         end

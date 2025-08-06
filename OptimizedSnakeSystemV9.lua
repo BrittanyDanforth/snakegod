@@ -11,6 +11,34 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local UserInputService = game:GetService("UserInputService")
 
+-- LOD System Constants (ENHANCED FOR PERFORMANCE)
+local LOD_UPDATE_RATE = 5 -- Check LOD every N frames
+local LOD_MODES = {
+	HIGH = { segments = 500, particles = true, glow = true, beamDetail = "full" },
+	MEDIUM = { segments = 150, particles = false, glow = "sparse", beamDetail = "merged" },
+	LOW = { segments = 50, particles = false, glow = false, beamDetail = "minimal" }
+}
+
+-- LOD Distance Zones with Hysteresis
+local LOD_ZONES = {
+	HERO = { enter = 0, exit = 270, mode = "HIGH" },      -- 0-250 studs with 20 stud buffer
+	MID = { enter = 250, exit = 770, mode = "MEDIUM" },   -- 250-750 studs with buffer
+	FAR = { enter = 750, exit = 1000, mode = "LOW" }      -- 750+ studs
+}
+
+-- Beam Merging Settings
+local BEAM_MERGE_RATIOS = {
+	full = 1,     -- 1 beam per segment
+	merged = 5,   -- 1 beam per 5 segments
+	minimal = 10  -- 1 beam per 10 segments
+}
+
+-- Performance Settings
+local ENABLE_OVERLAP_BEAMS = true -- Can be toggled for performance
+local COLLISION_SEGMENT_COUNT = 50 -- First N segments have collision
+local GLOW_UPDATE_RATE = 3 -- Update glows every N frames
+local PARTICLE_UPDATE_RATE = 5 -- Update particles every N frames
+
 -- Performance Constants
 local SEGMENT_UPDATE_RATE = 75
 local NETWORK_UPDATE_RATE = 25
@@ -120,6 +148,9 @@ Snake.__index = Snake
 
 function Snake.new(character, config)
 	local self = setmetatable({}, Snake)
+	
+	-- Initialize frameCount immediately to prevent any nil errors
+	self.frameCount = 0
 
 	self.character = character
 	self.rootPart = character:WaitForChild("HumanoidRootPart")
@@ -175,6 +206,13 @@ function Snake.new(character, config)
 	self.lastSegmentAddTime = 0
 	self.pendingGrowth = 0
 	self.growthWaveOffset = 0
+	
+	-- Frame counter for update throttling (already initialized at constructor start)
+	-- Double-check frameCount initialization
+	if not self.frameCount or type(self.frameCount) ~= "number" then
+		warn("⚠️ OptimizedSnakeSystemV9: frameCount was corrupted, resetting to 0")
+		self.frameCount = 0
+	end
 
 	-- Movement history
 	self.positionHistory = {}
@@ -746,28 +784,42 @@ function Snake:toggleRainbowMode(enabled)
 end
 
 function Snake:startUpdateLoop()
-	local frameCount = 0
 	local lastNetworkUpdate = 0
 
 	self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
-		if not self.character.Parent or not self.rootPart.Parent then
-			self:destroy()
+		-- Robust nil checks
+		if not self or not self.character or not self.character.Parent or not self.rootPart or not self.rootPart.Parent then
+			if self and self.destroy then
+				self:destroy()
+			end
 			return
 		end
 
-		frameCount = frameCount + 1
-
-		-- Update position history
-		self:updatePositionHistory()
-
-		-- 🌈 ENHANCED: Update rainbow mode
-		if self.rainbowMode then
-			self.currentHue = (self.currentHue + deltaTime * RAINBOW_SPEED * 0.1) % 1
+		-- Ensure frameCount is always a valid number (extra safety)
+		if not self.frameCount or type(self.frameCount) ~= "number" then
+			self.frameCount = 0
 		end
+		self.frameCount = (self.frameCount or 0) + 1
 
-		-- 🎨 ENHANCED: Update visual animations
-		self.glowPulsePhase = (self.glowPulsePhase + deltaTime * 2) % (math.pi * 2)
-		self.beamAnimationOffset = (self.beamAnimationOffset + deltaTime * BEAM_TEXTURE_SPEED) % 10
+		-- 🎯 SMART UPDATE THROTTLING
+		-- Every frame: Critical movement
+		self:updatePositionHistory()
+		self:updateUnifiedBody()
+		
+		-- Every 3rd frame: Visual effects
+		if self.frameCount and self.frameCount % GLOW_UPDATE_RATE == 0 then
+			self:updateVisualEffects()
+		end
+		
+		-- Every 5th frame: LOD and visibility
+		if self.frameCount and self.frameCount % LOD_UPDATE_RATE == 0 then
+			self:checkVisibility()
+		end
+		
+		-- Every 5th frame: Particle updates
+		if self.frameCount and self.frameCount % PARTICLE_UPDATE_RATE == 0 then
+			self:updateParticles()
+		end
 
 		-- Smooth length interpolation with growth animation tracking
 		if self.actualLength ~= self.targetLength then
@@ -793,18 +845,18 @@ function Snake:startUpdateLoop()
 		end
 
 		-- Update growth factor
-		if frameCount % GROWTH_CHECK_INTERVAL == 0 then
+		if self.frameCount and self.frameCount % GROWTH_CHECK_INTERVAL == 0 then
 			self.growthFactor = self:calculateGrowthFactor()
 		end
 
 		-- ENHANCED: Update visibility checks
 		local cameraPos = self.camera and self.camera.CFrame.Position or self.rootPart.Position
-		if frameCount % VISIBILITY_CHECK_INTERVAL == 0 then
+		if self.frameCount and self.frameCount % VISIBILITY_CHECK_INTERVAL == 0 then
 			self:updateSegmentVisibility(cameraPos)
 		end
 
 		-- ENHANCED: Sync beams with segment visibility
-		if frameCount % BEAM_SYNC_INTERVAL == 0 then
+		if self.frameCount and self.frameCount % BEAM_SYNC_INTERVAL == 0 then
 			self:syncBeamVisibility()
 		end
 
@@ -835,18 +887,40 @@ function Snake:startUpdateLoop()
 			end
 		end
 
-		-- Network updates
-		local now = tick()
-		if self.player == Players.LocalPlayer and now - lastNetworkUpdate > 1/NETWORK_UPDATE_RATE then
-			lastNetworkUpdate = now
+		-- Network updates (optimized rate)
+		if self.frameCount and self.frameCount % NETWORK_UPDATE_RATE == 0 then
 			self:sendNetworkUpdate()
 		end
 	end)
 end
 
 function Snake:updateUnifiedBody()
+	-- DYNAMIC SEGMENT BUDGET (Performance Optimization)
+	local cameraDist = 0
+	if workspace.CurrentCamera then
+		cameraDist = (self.head.Position - workspace.CurrentCamera.CFrame.Position).Magnitude
+	end
+	
+	-- Determine segment budget based on distance
+	local segmentBudget = MAX_SEGMENTS
+	local currentLODMode = "HIGH"
+	
+	if cameraDist > LOD_ZONES.FAR.enter then
+		segmentBudget = LOD_MODES.LOW.segments
+		currentLODMode = "LOW"
+	elseif cameraDist > LOD_ZONES.MID.enter then
+		segmentBudget = LOD_MODES.MEDIUM.segments
+		currentLODMode = "MEDIUM"
+	end
+	
+	-- Store LOD mode for other systems
+	self.currentLODMode = currentLODMode
+	
 	-- Calculate required segments
 	local requiredSegments = math.min(math.ceil(self.actualLength / 2), MAX_SEGMENTS)
+	
+	-- Apply segment budget
+	local segmentsToUpdate = math.min(requiredSegments, segmentBudget, self.visibleSegmentCount)
 
 	-- Add new segments if grown with smooth animation
 	if requiredSegments > self.visibleSegmentCount then
@@ -861,8 +935,8 @@ function Snake:updateUnifiedBody()
 	local currentBaseSize = BASE_SIZE * self.growthFactor
 	local spacing = currentBaseSize * SEGMENT_SPACING
 
-	-- Update all segments including head (segment 0)
-	for i = 0, self.visibleSegmentCount do
+	-- Update all segments including head (segment 0) - LIMITED BY BUDGET
+	for i = 0, segmentsToUpdate do
 		local segment = self.segments[i]
 		if segment and segment.Parent then
 			-- ENHANCED: Only update visible segments for performance
@@ -1002,6 +1076,37 @@ function Snake:updateUnifiedBody()
 			glow.Range = (GLOW_RANGE_BASE + (currentBaseSize - BASE_SIZE) * 2) * glowScale
 		end
 	end
+	
+	-- HIDE SEGMENTS OVER BUDGET (with smooth fade)
+	for i = segmentsToUpdate + 1, self.visibleSegmentCount do
+		local segment = self.segments[i]
+		if segment and segment.Parent then
+			-- Fade out smoothly if transitioning
+			if segment.Transparency < 1 then
+				segment.Transparency = math.min(segment.Transparency + 0.1, 1)
+			end
+			
+			-- Disable collision for hidden segments
+			segment.CanCollide = false
+			segment.CanTouch = false
+			segment.CanQuery = false
+		end
+		
+		-- Disable beams for hidden segments
+		if self.beams[i] then
+			self.beams[i].Enabled = false
+		end
+		if self.overlapBeams and self.overlapBeams[i] then
+			self.overlapBeams[i].Enabled = false
+		end
+		
+		-- Disable glows for hidden segments
+		if self.glows[i] then
+			self.glows[i].Enabled = false
+		end
+	end
+	
+	-- Force visibility check with new system
 end
 
 function Snake:addSegments(count)
@@ -1428,5 +1533,54 @@ function Snake:updateBeamConnections()
 		end
 	end
 end
+
+-- 🎨 Separate visual effects update for throttling
+function Snake:updateVisualEffects()
+	-- Update rainbow mode
+	if self.rainbowMode then
+		self.currentHue = (self.currentHue + 0.01) % 1
+	end
+	
+	-- Update visual animations
+	self.glowPulsePhase = (self.glowPulsePhase + 0.1) % (math.pi * 2)
+	self.beamAnimationOffset = (self.beamAnimationOffset + BEAM_TEXTURE_SPEED * 0.1) % 10
+	
+	-- Update glow effects based on LOD
+	if self.currentLODMode == "HIGH" then
+		-- Full glow updates
+		for i = 0, math.min(50, self.visibleSegmentCount) do
+			local glow = self.glows[i]
+			if glow and glow.Parent then
+				glow.Brightness = GLOW_INTENSITY * (1 + math.sin(self.glowPulsePhase) * 0.1)
+			end
+		end
+	elseif self.currentLODMode == "MEDIUM" then
+		-- Sparse glow updates (every 5th)
+		for i = 0, math.min(50, self.visibleSegmentCount), 5 do
+			local glow = self.glows[i]
+			if glow and glow.Parent then
+				glow.Brightness = GLOW_INTENSITY
+			end
+		end
+	end
+end
+
+-- 🎯 Separate particle update for throttling
+function Snake:updateParticles()
+	-- Only update particles in HIGH LOD mode
+	if self.currentLODMode ~= "HIGH" then
+		return
+	end
+	
+	-- Update boost particles
+	if self.boostParticles and self.boostParticles.Parent then
+		self.boostParticles.Enabled = self.isBoosting
+	end
+	
+	-- Update segment particles (if any)
+	-- Add particle logic here if needed
+end
+
+-- System management functions
 
 return OptimizedSnakeSystemV9

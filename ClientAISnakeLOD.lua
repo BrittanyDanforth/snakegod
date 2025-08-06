@@ -75,10 +75,42 @@ function ClientSnake.new(model)
 	local self = setmetatable({}, ClientSnake)
 
 	self.model = model
-	self.head = model:WaitForChild("Segment0_Head", 5)
+	
+	-- Try to find head with better retry mechanism
+	local head = nil
+	local attempts = 0
+	local maxAttempts = 20 -- Increased from 10
+	
+	-- First check if model exists and is valid
+	if not model or not model.Parent then
+		return nil
+	end
+	
+	while attempts < maxAttempts and not head do
+		head = model:FindFirstChild("Segment0_Head")
+		if not head then
+			-- Also try without underscore (in case naming changed)
+			head = model:FindFirstChild("Segment0Head")
+		end
+		
+		if not head then
+			attempts = attempts + 1
+			task.wait(0.2) -- Shorter wait, more attempts
+		end
+	end
+	
+	self.head = head
 
 	if not self.head then
-		warn("ClientSnake.new: Could not find head for model", model)
+		-- Only warn for first few failures to reduce spam
+		if not ClientSnake._warnCount then
+			ClientSnake._warnCount = 0
+		end
+		
+		if ClientSnake._warnCount < 3 then -- Reduced from 5
+			ClientSnake._warnCount = ClientSnake._warnCount + 1
+			warn("ClientSnake: Could not find head for", model.Name, "after", attempts, "attempts")
+		end
 		return nil
 	end
 
@@ -315,15 +347,43 @@ local lastUpdateTime = 0
 
 function SnakeManager.Track(model)
 	if not trackedSnakes[model] then
-		task.wait() -- Ensure replication
-		local newSnake = ClientSnake.new(model)
-		if newSnake then
-			trackedSnakes[model] = newSnake
-			table.insert(snakeArray, {model = model, snake = newSnake})
-
-			-- Sort by distance for rendering priority
-			SnakeManager.SortSnakes()
-		end
+		-- Wait a bit longer for full replication
+		task.spawn(function()
+			-- Wait for the snake to be marked as ready
+			local maxWaitTime = 5
+			local waitStart = tick()
+			
+			while tick() - waitStart < maxWaitTime do
+				-- Check if ready
+				if model:GetAttribute("AISnakeReady") then
+					break
+				end
+				
+				-- Check if model was destroyed
+				if not model or not model.Parent then
+					return
+				end
+				
+				task.wait(0.1)
+			end
+			
+			-- Give a tiny bit more time for final replication
+			task.wait(0.2)
+			
+			-- Check if model still exists
+			if not model or not model.Parent then
+				return
+			end
+			
+			local newSnake = ClientSnake.new(model)
+			if newSnake then
+				trackedSnakes[model] = newSnake
+				table.insert(snakeArray, {model = model, snake = newSnake})
+				
+				-- Sort by distance for rendering priority
+				SnakeManager.SortSnakes()
+			end
+		end)
 	end
 end
 

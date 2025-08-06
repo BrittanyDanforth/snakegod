@@ -110,7 +110,9 @@ local function createReviveVFX()
         -- Clean up
         task.delay(2, function()
             if attachment and attachment.Parent then
-                attachment:Destroy()
+                pcall(function()
+                    attachment:Destroy()
+                end)
             end
         end)
     end

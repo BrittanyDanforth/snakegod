@@ -55,24 +55,29 @@ local SPATIAL_GRID_UPDATE_RATE = 1.0 -- Increased from 0.5 (update less often)
 local BRAIN_UPDATES_PER_FRAME = 3 -- Update 3 snakes per frame to prevent freezing
 local DEBUG_UPDATE_RATE = 5.0 -- Increased from 2.0 (debug less often)
 local AI_HEIGHT = 5
-local SEGMENT_UPDATE_SKIP = 2 -- Update every other segment for performance
+local SEGMENT_UPDATE_SKIP = 3 -- Increased from 2 for better performance
 local LONG_SNAKE_THRESHOLD = 100 -- Snakes longer than this use more aggressive optimization
 local VERY_LONG_SNAKE_THRESHOLD = 300 -- Even more optimization for very long snakes
 local AI_UPDATE_DISTANCE = 200 -- Only update AI within this distance of players
 local SEGMENT_POOL_MAX = 500 -- Increased pool size for better reuse
 
+-- Performance optimization settings
+local COLLISION_CHECK_INTERVAL = 3 -- Check collisions every N frames
+local ORB_CHECK_INTERVAL = 2 -- Check orbs every N frames
+local SEGMENT_BATCH_SIZE = 20 -- Update segments in batches
+
 -- LOD Constants (ENHANCED for progressive visibility like slither.io)
 local VISIBILITY_CHECK_INTERVAL = 5 -- Check visibility every N frames
 local RENDER_DISTANCE = 1000 -- Maximum render distance
-local LOD_DISTANCE_NEAR = 200 -- Full snake visible
-local LOD_DISTANCE_MID = 400 -- 70% of snake visible
-local LOD_DISTANCE_FAR = 600 -- 40% of snake visible
-local LOD_DISTANCE_MINIMAL = 800 -- 20% of snake visible (head + some body)
-local BEAM_SYNC_INTERVAL = 3 -- Sync beams with parts every N frames
-local FORCE_RENDER_SEGMENTS = 150 -- Always force render first N segments for nearby snakes
-local MIN_VISIBLE_SEGMENTS = 10 -- Minimum segments to show even from far away
-local MAX_VISIBLE_SEGMENTS = 2000 -- Maximum visible segments at once
-local DYNAMIC_SEGMENT_LIMIT = 800 -- Initial physical segment creation limit
+local LOD_DISTANCE_NEAR = 150 -- Reduced from 200
+local LOD_DISTANCE_MID = 300 -- Reduced from 400
+local LOD_DISTANCE_FAR = 500 -- Reduced from 600
+local LOD_DISTANCE_MINIMAL = 700 -- Reduced from 800
+local BEAM_SYNC_INTERVAL = 5 -- Increased from 3 for better performance
+local FORCE_RENDER_SEGMENTS = 100 -- Reduced from 150
+local MIN_VISIBLE_SEGMENTS = 8 -- Reduced from 10
+local MAX_VISIBLE_SEGMENTS = 1500 -- Reduced from 2000
+local DYNAMIC_SEGMENT_LIMIT = 600 -- Reduced from 800
 
 -- Progressive visibility percentages based on distance
 local VISIBILITY_PERCENTAGES = {
@@ -262,7 +267,7 @@ local function getOrCreateSnakeModel(aiId)
 	end
 	local model = Instance.new("Model")
 	model.Name = modelName
-	model.Parent = Workspace
+	-- Don't parent to workspace yet
 	return model
 end
 
@@ -349,11 +354,11 @@ end
 local function createVisualHead(config, parentModel)
 	-- HEAD IS NOW SEGMENT 0 - Part of the unified body
 	local headPart = Instance.new("Part")
-	headPart.Name = "Segment0_Head" -- Match OptimizedSnakeSystem naming
+	headPart.Name = "Segment0_Head" -- Match the naming convention expected by client
+	headPart.Shape = Enum.PartType.Ball -- Using Ball like OptimizedSnakeSystem
 	headPart.Size = Vector3.new(BASE_SIZE * HEAD_SIZE_MULTIPLIER, BASE_SIZE * HEAD_SIZE_MULTIPLIER, BASE_SIZE * HEAD_SIZE_MULTIPLIER)
 	headPart.Material = Enum.Material.Neon -- Consistent with OptimizedSnakeSystem
 	headPart.Color = config.HeadColor
-	headPart.Shape = Enum.PartType.Ball
 	headPart.CanCollide = false
 	headPart.CanTouch = true -- CRITICAL: Enable touch detection for orb collection
 	headPart.CanQuery = true -- Enable for raycasts
@@ -1569,6 +1574,27 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		print("AI Snake limit reached:", MAX_AI_SNAKES)
 		return nil
 	end
+	
+	-- Ensure spawn position is safe (not too close to other snakes)
+	local safePosition = startPosition
+	if safePosition then
+		-- Check distance to other AI snakes
+		for _, otherSnake in ipairs(AISnake._activeSnakes) do
+			if otherSnake and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
+				local otherPos = otherSnake.HeadParts.head.Position
+				local distance = (safePosition - otherPos).Magnitude
+				if distance < 50 then -- Too close, adjust position
+					local offset = Vector3.new(
+						math.random(-100, 100),
+						0,
+						math.random(-100, 100)
+					)
+					safePosition = safePosition + offset
+					break
+				end
+			end
+		end
+	end
 
 	local self = setmetatable({}, AISnake)
 
@@ -1581,11 +1607,17 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	self.Config.BodyColors = colorData.BodyColors
 	self.Config.HeadMaterial = colorData.HeadMaterial
 	self.Config.BodyMaterial = colorData.BodyMaterial
+	
+	-- Ensure InitialLength is set
+	if not self.Config.InitialLength then
+		self.Config.InitialLength = 100 -- Default AI snake length
+		print("⚠️ Setting default InitialLength to 100")
+	end
 
 	-- Update map bounds if needed (in case map was created after script started)
 	updateMapBounds()
 
-	self.Position = startPosition or Vector3new(0, 5, 0)
+	self.Position = safePosition or Vector3new(0, 5, 0)
 	self.Direction = Vector3new(0, 0, 1)
 
 	-- Use AI-specific settings if available
@@ -1626,6 +1658,16 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	self.circleAngle = mathRandom() * 2 * mathPi
 	self.killCount = 0
 	self.lastKillTime = 0
+	
+	-- Performance optimization counters
+	self._collisionCheckFrame = 0
+	self._orbCheckFrame = 0
+	self._visibilityCheckFrame = 0
+	self._segmentUpdateFrame = 0
+	
+	-- Spawn protection (increased to 10 seconds)
+	self._spawnProtectionTime = tick() + 10
+	self._isSpawnProtected = true  -- Flag for easier checking
 
 	-- Use preserved personality or assign random one
 	local pType
@@ -1656,6 +1698,12 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	for _, obj in ipairs(self.Model:GetChildren()) do
 		obj:Destroy()
 	end
+	
+	-- Parent model to workspace immediately
+	self.Model.Parent = workspace
+	
+	-- Debug print
+	print("🐍 Creating AI Snake model:", self.Model.Name)
 
 	game:GetService("CollectionService"):AddTag(self.Model, "AISnake")
 
@@ -1669,11 +1717,33 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	self.RootPart.Parent = self.Model
 
 	self.HeadParts = createVisualHead(self.Config, self.Model)
+	
+	-- Position the head at spawn position
+	if self.HeadParts.head then
+		self.HeadParts.head.Position = self.Position
+		self.HeadParts.head.CFrame = CFrame.new(self.Position)
+		
+		-- Update eye positions
+		if self.HeadParts.leftEye then
+			self.HeadParts.leftEye.CFrame = self.HeadParts.head.CFrame * CFrame.new(-0.4, 0.2, 0.8)
+		end
+		if self.HeadParts.rightEye then
+			self.HeadParts.rightEye.CFrame = self.HeadParts.head.CFrame * CFrame.new(0.4, 0.2, 0.8)
+		end
+		if self.HeadParts.leftPupil and self.HeadParts.leftEye then
+			self.HeadParts.leftPupil.CFrame = self.HeadParts.leftEye.CFrame * CFrame.new(0, 0, 0.15)
+		end
+		if self.HeadParts.rightPupil and self.HeadParts.rightEye then
+			self.HeadParts.rightPupil.CFrame = self.HeadParts.rightEye.CFrame * CFrame.new(0, 0, 0.15)
+		end
+	end
 
 	self.Segments = {}
 
 	-- Use initial length from config
 	self.CurrentLength = self.Config.InitialLength or 10
+	
+	print("🐍 AI Snake initial length:", self.CurrentLength)
 
 	-- Calculate initial growth factor
 	self.growthFactor = self:calculateGrowthFactor()
@@ -1727,6 +1797,11 @@ function AISnake.new(startPosition, preservedPersonalityType)
 
 	-- Store head as segment 0 for consistency with OptimizedSnakeSystem
 	self.Segments[0] = self.HeadParts.head
+	
+	-- Set attributes for client identification
+	self.Model:SetAttribute("IsAISnake", true)
+	self.Model:SetAttribute("AISnakeReady", false) -- Will set to true when ready
+	self.HeadParts.head:SetAttribute("IsSnakeHead", true)
 
 	-- Calculate base size with growth factor
 	local currentBaseSize = BASE_SIZE * self.growthFactor
@@ -1737,6 +1812,8 @@ function AISnake.new(startPosition, preservedPersonalityType)
 
 	-- OPTIMIZED: Create segments dynamically based on length
 	local initialSegmentCount = math.min(self.CurrentLength, DYNAMIC_SEGMENT_LIMIT)
+	
+	print("🔧 Creating", initialSegmentCount, "segments (CurrentLength:", self.CurrentLength, "Limit:", DYNAMIC_SEGMENT_LIMIT, ")")
 
 	-- FIXED: Create segments at proper positions WITHOUT GAPS
 	for i = 1, initialSegmentCount do
@@ -1829,6 +1906,30 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		if self._destroyed or not self.Segments then
 			return
 		end
+		
+		-- Add spawn protection visual effect
+		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
+			local protectionField = Instance.new("ForceField")
+			protectionField.Parent = self.Model
+			
+			-- Remove protection field when spawn protection expires
+			task.spawn(function()
+				task.wait(10) -- Match spawn protection time
+				if protectionField and protectionField.Parent then
+					protectionField:Destroy()
+				end
+			end)
+		end
+		
+		-- Make segments visible gradually
+		for i = 0, self.actualSegmentCount do
+			local segment = i == 0 and self.HeadParts.head or self.Segments[i]
+			if segment and segment.Parent then
+				segment.Transparency = 0
+			end
+		end
+		
+		print("🎯 Made", self.actualSegmentCount + 1, "segments visible")
 
 		-- Gradually move forward to create proper segment spacing
 		for step = 1, 20 do
@@ -1903,17 +2004,41 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		end
 	end)
 
+	-- Wait a frame to ensure everything is initialized
+	self._active = false
+	
+	-- Ensure all segments are created and visible before activating
+	task.spawn(function()
+		task.wait(0.1)
+		
+		-- Double-check segments are visible
+		local visibleCount = 0
+		for i = 1, self.actualSegmentCount do
+			if self.Segments[i] and self.Segments[i].Parent then
+				self.Segments[i].Transparency = 0
+				visibleCount = visibleCount + 1
+			end
+		end
+		
+		-- Make head visible too
+		if self.HeadParts and self.HeadParts.head then
+			self.HeadParts.head.Transparency = 0
+		end
+		
+		print("✅ AI Snake activated with", visibleCount, "visible segments")
+		
+		-- Mark as ready for client
+		self.Model:SetAttribute("AISnakeReady", true)
+		
+		-- Now activate
+		self._active = true
+	end)
+	
+	-- Final activation after everything is set up
 	table.insert(AISnake._activeSnakes, self)
-	self._active = true
-
-	-- Stuck detection
-	self._lastPositions = {}
-	self._stuckCheckTime = 0
-	self._lastStuckCheck = tick()
-
-	-- Spawn protection
-	self._spawnProtection = tick() + 3 -- 3 second spawn protection
-	self._spawnStabilizing = tick() + 0.5 -- Half second to let segments arrange
+	
+	-- Add a small random delay to prevent all snakes from updating at once
+	task.wait(math.random() * 0.5)
 
 	return self
 end
@@ -2097,7 +2222,15 @@ function AISnake:setConfidenceBuff()
 end
 
 function AISnake:Destroy()
-	if not self._active then return end
+	if self._destroyed then return end
+	
+	-- Check if we're still spawn protected
+	if self._isSpawnProtected and tick() < self._spawnProtectionTime then
+		-- Don't allow destruction during spawn protection
+		return
+	end
+	
+	self._destroyed = true
 	self._active = false
 
 	-- Immediately mark as destroyed to prevent any updates
@@ -2119,116 +2252,269 @@ function AISnake:Destroy()
 	end
 	AISnake._orbTargets[self] = nil
 
-	-- Spawn orbs before destroying segments
-	local orbSpawnData = {}
+	-- Spawn death orbs before destroying segments (like players do)
+	local segmentPositions = {}
+
+	-- Collect all segment positions including head
 	if self.HeadParts and self.HeadParts.head and self.HeadParts.head.Parent then
-		local head = self.HeadParts.head
-		table.insert(orbSpawnData, {position = head.Position, size = 3.5, color = head.Color})
+		table.insert(segmentPositions, self.HeadParts.head.Position)
 	end
-
-	local ORB_SPAWN_DENSITY = 5
-	for i = 1, #self.Segments do
-		if i % ORB_SPAWN_DENSITY == 1 then
-			local segment = self.Segments[i]
-			if segment and segment.Parent then
-				table.insert(orbSpawnData, {position = segment.Position, size = 1.8, color = segment.Color})
-			end
-		end
-	end
-
-	-- Spawn orbs asynchronously
-	task.spawn(function()
-		if OrbUtils and OrbUtils.spawnOrb then
-			for i = 1, #orbSpawnData do
-				local data = orbSpawnData[i]
-				pcall(function()
-					OrbUtils.spawnOrb(data.position, data.size, data.color)
-				end)
-			end
-		end
-	end)
-
-	-- IMMEDIATE CLEANUP - Destroy all segments right away
+	
+	-- Add all segment positions
 	for i = 1, #self.Segments do
 		local segment = self.Segments[i]
-		if segment then
-			-- Don't use returnSegment for death, just destroy
-			pcall(function()
-				segment:Destroy()
-			end)
+		if segment and segment.Parent then
+			table.insert(segmentPositions, segment.Position)
 		end
 	end
-	self.Segments = {}
-
-	-- Clean up beams and attachments
-	if self.Beams then
-		for _, beam in pairs(self.Beams) do
-			if beam and beam.Parent then
-				pcall(function()
-					beam:Destroy()
-				end)
-			end
-		end
-		self.Beams = {}
-	end
-
-	if self.Attachments then
-		for _, attachment in pairs(self.Attachments) do
-			if attachment and attachment.Parent then
-				pcall(function()
-					attachment:Destroy()
-				end)
-			end
-		end
-		self.Attachments = {}
-	end
-
-	if self.AttachmentPart and self.AttachmentPart.Parent then
-		pcall(function()
-			self.AttachmentPart:Destroy()
-		end)
-		self.AttachmentPart = nil
-	end
-
-	-- Destroy head parts
-	if self.HeadParts then
-		for name, part in pairs(self.HeadParts) do
-			if typeof(part) == "Instance" and part.Parent then
-				pcall(function()
-					part:Destroy()
-				end)
-			end
-		end
-	end
-
-	-- Destroy model and all its descendants
-	if self.Model and self.Model.Parent then
-		pcall(function()
-			-- First destroy all descendants to ensure nothing is left
-			for _, descendant in ipairs(self.Model:GetDescendants()) do
-				if descendant:IsA("BasePart") then
-					descendant:Destroy()
+	
+	-- Spawn death orbs along the snake body
+	task.spawn(function()
+		local DyingState = require(game.ServerStorage.ServerModules.States.DyingState)
+		
+		-- Calculate orb count based on snake length (similar to player death)
+		local snakeLength = #self.Segments + 1 -- +1 for head
+		local baseOrbCount = 20
+		local lengthBonus = math.floor(snakeLength / 100) * 5
+		local maxOrbs = math.min(baseOrbCount + lengthBonus, 50)
+		local orbCount = math.min(math.floor(snakeLength * 0.3), maxOrbs)
+		local orbValue = math.max(1, math.floor(snakeLength * 0.4 / orbCount))
+		
+		-- Spawn death orbs
+		local spawnedOrbs = 0
+		local skipInterval = math.max(1, math.floor(#segmentPositions / orbCount))
+		
+		for i = 1, #segmentPositions do
+			if spawnedOrbs >= orbCount then break end
+			
+			if (i - 1) % skipInterval == 0 or i == #segmentPositions then
+				local pos = segmentPositions[i]
+				if pos then
+					-- Create a spread pattern like player death orbs
+					local spread = 2.5
+					local heightVariation = 1.5
+					local offset = Vector3.new(
+						(math.random() - 0.5) * spread * (1 + math.random() * 0.5),
+						math.random() * heightVariation,
+						(math.random() - 0.5) * spread * (1 + math.random() * 0.5)
+					)
+					
+					-- Vary orb values slightly
+					local valueVariation = math.random(0.8, 1.2)
+					local finalValue = math.max(1, math.floor(orbValue * valueVariation))
+					
+					-- Create death orb using the same method as players
+					pcall(function()
+						-- We'll create the death orb directly here since we can't use the instance method
+						local orbsFolder = workspace:FindFirstChild("Orbs")
+						if not orbsFolder then
+							orbsFolder = Instance.new("Folder")
+							orbsFolder.Name = "Orbs"
+							orbsFolder.Parent = workspace
+						end
+						
+						-- Create death orb
+						local orb = Instance.new("Part")
+						orb.Name = "Orb"
+						orb.Shape = Enum.PartType.Ball
+						orb.Material = Enum.Material.Neon
+						
+						-- Scale size based on value
+						local baseSize = 2.5
+						local sizeMultiplier = 1 + (math.min(finalValue, 10) - 1) * 0.1
+						local finalSize = baseSize * sizeMultiplier
+						orb.Size = Vector3.new(finalSize, finalSize, finalSize)
+						
+						orb.TopSurface = Enum.SurfaceType.Smooth
+						orb.BottomSurface = Enum.SurfaceType.Smooth
+						orb.CanCollide = false
+						orb.Anchored = true
+						orb.Position = pos + offset
+						
+						-- Rainbow effect
+						local hueStart = math.random()
+						orb.Color = Color3.fromHSV(hueStart, 1, 1)
+						
+						-- Set attributes
+						orb:SetAttribute("OrbValue", finalValue)
+						orb:SetAttribute("IsDeathOrb", true)
+						orb:SetAttribute("OrbType", "normal")
+						
+						-- Add glow
+						local glow = Instance.new("PointLight")
+						glow.Brightness = 2 + finalValue * 0.1
+						glow.Range = 10 + finalValue * 0.5
+						glow.Color = orb.Color
+						glow.Parent = orb
+						
+						-- Parent to folder
+						orb.Parent = orbsFolder
+						
+						-- Rainbow animation
+						task.spawn(function()
+							local hue = hueStart
+							while orb and orb.Parent do
+								hue = (hue + 0.01) % 1
+								local color = Color3.fromHSV(hue, 1, 1)
+								orb.Color = color
+								if glow and glow.Parent then
+									glow.Color = color
+								end
+								task.wait(0.05)
+							end
+						end)
+						
+						-- Floating animation
+						task.spawn(function()
+							local startY = orb.Position.Y
+							local time = math.random() * math.pi * 2
+							local rotSpeed = (math.random() * 2 - 1) * 2
+							local floatSpeed = math.random() * 0.5 + 1.5
+							
+							while orb and orb.Parent do
+								time = time + 0.03
+								local floatOffset = math.sin(time * floatSpeed) * 0.8
+								local rotation = time * rotSpeed
+								
+								orb.CFrame = CFrame.new(orb.Position.X, startY + floatOffset, orb.Position.Z) * CFrame.Angles(0, rotation, 0)
+								
+								task.wait()
+							end
+						end)
+						
+						-- Add particle effect
+						if orb and orb.Parent then
+							local attachment = Instance.new("Attachment")
+							attachment.Parent = orb
+							
+							local particle = Instance.new("ParticleEmitter")
+							particle.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+							particle.Rate = 15 + finalValue * 2
+							particle.Lifetime = NumberRange.new(0.3, 0.6)
+							particle.SpreadAngle = Vector2.new(360, 360)
+							particle.Speed = NumberRange.new(1, 2)
+							particle.VelocityInheritance = 0
+							particle.Color = ColorSequence.new(Color3.fromRGB(255, 200, 0))
+							particle.Size = NumberSequence.new{
+								NumberSequenceKeypoint.new(0, 0.3 * sizeMultiplier),
+								NumberSequenceKeypoint.new(0.5, 0.2 * sizeMultiplier),
+								NumberSequenceKeypoint.new(1, 0)
+							}
+							particle.Transparency = NumberSequence.new{
+								NumberSequenceKeypoint.new(0, 0.3),
+								NumberSequenceKeypoint.new(1, 1)
+							}
+							particle.Parent = attachment
+						end
+						
+						-- Attach orb collection handler
+						if OrbUtils and OrbUtils.attachOrbTouched then
+							OrbUtils.attachOrbTouched(orb)
+						end
+						
+						-- Clean up after 90 seconds
+						game:GetService("Debris"):AddItem(orb, 90)
+						
+						spawnedOrbs = spawnedOrbs + 1
+					end)
+					
+					-- Small delay between orbs to prevent lag
+					if spawnedOrbs % 5 == 0 then
+						task.wait()
+					end
 				end
 			end
-			self.Model:Destroy()
-		end)
-	end
+		end
+		
+		print(string.format("✅ AI Snake spawned %d death orbs", spawnedOrbs))
+	end)
 
-	-- Clear all references
-	self.Model = nil
-	self.HeadParts = nil
-	self.RootPart = nil
-	self.Segments = nil
+	-- Cleanup Parts, Beams, Attachments, Model
+	pcall(function()
+		-- Don't use returnSegment for death, just destroy
+		for i = 1, #self.Segments do
+			local segment = self.Segments[i]
+			if segment then
+				pcall(function()
+					segment:Destroy()
+				end)
+			end
+		end
+		self.Segments = {}
+
+		if self.Beams then
+			for _, beam in pairs(self.Beams) do
+				if beam and beam.Parent then
+					pcall(function()
+						beam:Destroy()
+					end)
+				end
+			end
+			self.Beams = {}
+		end
+
+		if self.Attachments then
+			for _, attachment in pairs(self.Attachments) do
+				if attachment and attachment.Parent then
+					pcall(function()
+						attachment:Destroy()
+					end)
+				end
+			end
+			self.Attachments = {}
+		end
+
+		if self.AttachmentPart and self.AttachmentPart.Parent then
+			pcall(function()
+				self.AttachmentPart:Destroy()
+			end)
+			self.AttachmentPart = nil
+		end
+
+		-- Destroy head parts
+		if self.HeadParts then
+			for name, part in pairs(self.HeadParts) do
+				if typeof(part) == "Instance" and part.Parent then
+					pcall(function()
+						part:Destroy()
+					end)
+				end
+			end
+		end
+
+		-- Destroy model and all its descendants
+		if self.Model and self.Model.Parent then
+			pcall(function()
+				-- First destroy all descendants to ensure nothing is left
+				for _, descendant in ipairs(self.Model:GetDescendants()) do
+					if descendant:IsA("BasePart") then
+						descendant:Destroy()
+					end
+				end
+				self.Model:Destroy()
+			end)
+		end
+
+		-- Clear all references
+		self.Model = nil
+		self.HeadParts = nil
+		self.RootPart = nil
+		self.Segments = nil
+	end)
 end
 
 -- === SMOOTHER MOVEMENT (FIXED) ===
 function AISnake:updateMovement(dt)
-	if self._destroyed then return end
-
-	if not self._active or not self.HeadParts or not self.HeadParts.head or not self.HeadParts.head.Parent then
-		if self._active and not self._destroyed then
-			self:Destroy()
-		end
+	if not self._active or self._destroyed then
+		return
+	end
+	
+	-- Safety check for required components
+	if not self.HeadParts or not self.HeadParts.head or not self.HeadParts.head.Parent then
+		return
+	end
+	
+	if not self.Segments then
 		return
 	end
 
@@ -2517,6 +2803,95 @@ function AISnake:updateMovement(dt)
 	local headPos = self.HeadParts.head.Position
 	local pickupRadius = 8 -- Increased for better upgrade orb pickup (they're bigger)
 
+	-- CHECK FOR COLLISIONS WITH OTHER SNAKES
+	-- Check collision with player snakes
+	local Players = game:GetService("Players")
+	local myHead = self.HeadParts.head
+	local myHeadPos = myHead.Position
+	
+	-- Check collision with player snakes
+	for _, player in pairs(Players:GetPlayers()) do
+		local snakeModel = nil
+		
+		-- First check workspace directly
+		snakeModel = Workspace:FindFirstChild("Snake_" .. player.Name)
+		
+		-- If not found, check SnakeFolder
+		if not snakeModel then
+			local snakeFolder = Workspace:FindFirstChild("SnakeFolder")
+			if snakeFolder then
+				snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
+			end
+		end
+		
+		if snakeModel and snakeModel:IsA("Model") then
+			-- Check head-to-head collision
+			local playerHead = snakeModel:FindFirstChild("Segment0_Head")
+			if playerHead and playerHead:IsA("BasePart") then
+				local distance = (playerHead.Position - myHeadPos).Magnitude
+				if distance <= 10 then -- Head collision radius
+					-- AI snake dies in head-to-head collision
+					warn("AI Snake died from head-to-head collision with", player.Name)
+					self:Destroy()
+					return
+				end
+			end
+			
+			-- Check collision with player body segments
+			local segmentNum = 1
+			while true do
+				local segment = snakeModel:FindFirstChild("Segment" .. segmentNum)
+				if segment and segment:IsA("BasePart") then
+					-- Skip first few segments to prevent unfair deaths
+					if segmentNum > 3 then
+						local distance = (segment.Position - myHeadPos).Magnitude
+						if distance <= 5 then -- Body collision radius
+							-- AI snake dies when hitting player body
+							warn("AI Snake died from hitting", player.Name, "'s body")
+							self:Destroy()
+							return
+						end
+					end
+					segmentNum = segmentNum + 1
+				else
+					break
+				end
+			end
+		end
+	end
+	
+	-- Check collision with other AI snakes
+	for _, otherSnake in ipairs(AISnake._activeSnakes) do
+		if otherSnake ~= self and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
+			local otherHead = otherSnake.HeadParts.head
+			if otherHead.Parent then
+				local distance = (otherHead.Position - myHeadPos).Magnitude
+				if distance <= 10 then -- Head-to-head collision
+					-- Both AI snakes die in head-to-head collision
+					warn("AI Snakes died from head-to-head collision")
+					self:Destroy()
+					otherSnake:Destroy()
+					return
+				end
+			end
+			
+			-- Check collision with other AI snake body
+			if otherSnake.Segments then
+				for i = 4, #otherSnake.Segments do -- Skip first few segments
+					local segment = otherSnake.Segments[i]
+					if segment and segment.Parent then
+						local distance = (segment.Position - myHeadPos).Magnitude
+						if distance <= 5 then -- Body collision
+							warn("AI Snake died from hitting another AI snake's body")
+							self:Destroy()
+							return
+						end
+					end
+				end
+			end
+		end
+	end
+
 	local orbsToCheck = {}
 
 	-- Add orbs from workspace
@@ -2598,16 +2973,12 @@ function AISnake:updateMovement(dt)
 
 	self._segmentUpdateFrame = (self._segmentUpdateFrame or 0) + 1
 
-	self.Model:SetAttribute("CurrentLength", self.CurrentLength)
-	self.Model:SetAttribute("HeadPosition", self.Position)
-
-	local currentBaseSize = BASE_SIZE * self.growthFactor
-
-	local segmentSkip = 1
+	local segmentSkip = SEGMENT_UPDATE_SKIP
+	-- More aggressive optimization for longer snakes
 	if self.CurrentLength > VERY_LONG_SNAKE_THRESHOLD then
-		segmentSkip = 4 -- Skip more for very long snakes
+		segmentSkip = 5
 	elseif self.CurrentLength > LONG_SNAKE_THRESHOLD then
-		segmentSkip = 2 -- Skip every other for long snakes
+		segmentSkip = 4
 	end
 
 	local updateOffset = self._segmentUpdateFrame % segmentSkip
@@ -2620,49 +2991,238 @@ function AISnake:updateMovement(dt)
 		warn("AISnake:updateMovement - CurrentLength is nil for snake", self.Name)
 		return
 	end
+	
+	-- Update segments in batches for better performance
 	local maxSegmentToUpdate = math.min(self.CurrentLength, DYNAMIC_SEGMENT_LIMIT)
+	local batchStartIndex = 1 + updateOffset
+	
+	-- Process segments in batches
+	for batchStart = batchStartIndex, maxSegmentToUpdate, SEGMENT_BATCH_SIZE * segmentSkip do
+		local batchEnd = math.min(batchStart + SEGMENT_BATCH_SIZE * segmentSkip - 1, maxSegmentToUpdate)
+		
+		for i = batchStart, batchEnd, segmentSkip do
+			local segment = self:ensureSegmentExists(i)
+			if segment and segment.Parent then
+				local delay = mathFloor(i * 1.2)
+				local targetData = self:getFromHistory(delay)
+				if targetData then
+					local spacingMultiplier = 0.15 -- Base spacing from CharacterSetup
+					if self.CurrentLength > 1500 then
+						spacingMultiplier = 0.2 -- More spacing to show pattern
+					end
+					local segmentPos = targetData.position - targetData.lookVector * (self.Config.SegmentSpacing * spacingMultiplier)
+					local currentSegmentPos = segment.Position
 
-	for i = 1 + updateOffset, maxSegmentToUpdate, segmentSkip do
-		local segment = self:ensureSegmentExists(i)
-		if segment and segment.Parent then
-			local delay = mathFloor(i * 1.2)
-			local targetData = self:getFromHistory(delay)
-			if targetData then
-				local spacingMultiplier = 0.15 -- Base spacing from CharacterSetup
-				if self.CurrentLength > 1500 then
-					spacingMultiplier = 0.2 -- More spacing to show pattern
-				end
-				local segmentPos = targetData.position - targetData.lookVector * (self.Config.SegmentSpacing * spacingMultiplier)
-				local currentSegmentPos = segment.Position
-
-				if i > 1 then
-					local prevSegment = self.Segments[i - 1]
-					if prevSegment and prevSegment.Parent then
-						local gap = (currentSegmentPos - prevSegment.Position).Magnitude
-						if gap > self.Config.SegmentSpacing * 1.5 then
-							local dir = (prevSegment.Position - currentSegmentPos).Unit
-							segmentPos = prevSegment.Position - dir * self.Config.SegmentSpacing
+					-- Simplified gap prevention
+					if i > 1 and i % 10 == 0 then -- Check gaps less frequently
+						local prevSegment = self.Segments[i - 1]
+						if prevSegment and prevSegment.Parent then
+							local gap = (currentSegmentPos - prevSegment.Position).Magnitude
+							if gap > self.Config.SegmentSpacing * 1.5 then
+								local dir = (prevSegment.Position - currentSegmentPos).Unit
+								segmentPos = prevSegment.Position - dir * self.Config.SegmentSpacing
+							end
 						end
 					end
+
+					-- Use faster position update
+					local newPos = currentSegmentPos:Lerp(segmentPos, followSpeed)
+					segment.Position = newPos
+					
+					-- Update attachment less frequently
+					if self.Attachments and self.Attachments[i] and i % 2 == 0 then
+						self.Attachments[i].WorldPosition = newPos
+					end
 				end
+			end
+		end
+		
+		-- Small yield to prevent frame drops
+		if batchEnd < maxSegmentToUpdate then
+			task.wait()
+		end
+	end
 
-				local newPos = currentSegmentPos:Lerp(segmentPos, followSpeed)
-				segment.CFrame = CFramenew(newPos)
+	-- Update remaining attachment positions for beams (less frequently)
+	if self._segmentUpdateFrame % BEAM_SYNC_INTERVAL == 0 then
+		for i = 1, maxSegmentToUpdate do
+			local segment = self.Segments[i]
+			if segment and segment.Parent and self.Attachments and self.Attachments[i] then
+				self.Attachments[i].WorldPosition = segment.Position
+			end
+		end
+	end
 
-				if self.Attachments and self.Attachments[i] then
-					self.Attachments[i].WorldPosition = newPos
+	-- Set velocity for collision detection
+	self.HeadParts.head.AssemblyLinearVelocity = self.Direction * self.Speed
+
+	-- CHECK FOR COLLISIONS (OPTIMIZED - run less frequently)
+	self._collisionCheckFrame = (self._collisionCheckFrame or 0) + 1
+	if self._collisionCheckFrame >= COLLISION_CHECK_INTERVAL then
+		self._collisionCheckFrame = 0
+		
+		-- Update spawn protection status
+		if self._isSpawnProtected and tick() >= self._spawnProtectionTime then
+			self._isSpawnProtected = false
+			print("🛡️ Spawn protection expired for", self.Name or "AI Snake")
+		end
+		
+		-- Skip collision checks during spawn protection
+		if self._isSpawnProtected then
+			return -- Skip ALL collision checks during spawn protection
+		end
+		
+		-- Check collision with player snakes
+		local Players = game:GetService("Players")
+		local myHead = self.HeadParts.head
+		local myHeadPos = myHead.Position
+		
+		-- Check collision with player snakes
+		for _, player in pairs(Players:GetPlayers()) do
+			local snakeModel = nil
+			
+			-- First check workspace directly
+			snakeModel = Workspace:FindFirstChild("Snake_" .. player.Name)
+			
+			-- If not found, check SnakeFolder
+			if not snakeModel then
+				local snakeFolder = Workspace:FindFirstChild("SnakeFolder")
+				if snakeFolder then
+					snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
+				end
+			end
+			
+			if snakeModel and snakeModel:IsA("Model") then
+				-- Check head-to-head collision
+				local playerHead = snakeModel:FindFirstChild("Segment0_Head")
+				if playerHead and playerHead:IsA("BasePart") then
+					local distance = (playerHead.Position - myHeadPos).Magnitude
+					if distance <= 10 then -- Head collision radius
+						-- AI snake dies in head-to-head collision
+						warn("AI Snake died from head-to-head collision with", player.Name)
+						self:Destroy()
+						return
+					end
+				end
+				
+				-- Check collision with player body segments (optimized)
+				local segmentCheck = math.random(4, 10) -- Random starting point for variety
+				for segmentNum = segmentCheck, segmentCheck + 20, 3 do -- Check every 3rd segment
+					local segment = snakeModel:FindFirstChild("Segment" .. segmentNum)
+					if segment and segment:IsA("BasePart") then
+						local distance = (segment.Position - myHeadPos).Magnitude
+						if distance <= 5 then -- Body collision radius
+							-- AI snake dies when hitting player body
+							warn("AI Snake died from hitting", player.Name, "'s body")
+							self:Destroy()
+							return
+						end
+					else
+						break -- No more segments
+					end
+				end
+			end
+		end
+		
+		-- Check collision with other AI snakes (less frequently)
+		if self._collisionCheckFrame % 2 == 0 then -- Every other collision check
+			for _, otherSnake in ipairs(AISnake._activeSnakes) do
+				if otherSnake ~= self and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
+					-- Skip if other snake is spawn protected
+					if otherSnake._isSpawnProtected then
+						continue
+					end
+					
+					local otherHead = otherSnake.HeadParts.head
+					if otherHead.Parent then
+						local distance = (otherHead.Position - myHeadPos).Magnitude
+						if distance <= 10 then -- Head-to-head collision
+							-- Both AI snakes die in head-to-head collision
+							warn("AI Snakes died from head-to-head collision")
+							self:Destroy()
+							otherSnake:Destroy()
+							return
+						end
+					end
+					
+					-- Check collision with other AI snake body (simplified)
+					if otherSnake.Segments and #otherSnake.Segments > 10 then
+						-- Only check a few segments for performance
+						local checkIndices = {10, 20, 30, 40, 50}
+						for _, i in ipairs(checkIndices) do
+							if i <= #otherSnake.Segments then
+								local segment = otherSnake.Segments[i]
+								if segment and segment.Parent then
+									local distance = (segment.Position - myHeadPos).Magnitude
+									if distance <= 5 then -- Body collision
+										warn("AI Snake died from hitting another AI snake's body")
+										self:Destroy()
+										return
+									end
+								end
+							end
+						end
+					end
 				end
 			end
 		end
 	end
 
-	-- Update attachment positions for skipped segments (to keep beams smooth)
-	if segmentSkip > 1 then
-		for i = 1, maxSegmentToUpdate do
-			if i % segmentSkip ~= updateOffset then
-				local segment = self.Segments[i]
-				if segment and segment.Parent and self.Attachments and self.Attachments[i] then
-					self.Attachments[i].WorldPosition = segment.Position
+	-- CHECK FOR ORB PICKUPS (OPTIMIZED - run less frequently)
+	self._orbCheckFrame = (self._orbCheckFrame or 0) + 1
+	if self._orbCheckFrame >= ORB_CHECK_INTERVAL then
+		self._orbCheckFrame = 0
+		
+		local orbsToCheck = {}
+		
+		-- Only check Orbs folder for better performance
+		local orbFolder = Workspace:FindFirstChild("OrbFolder") or Workspace:FindFirstChild("Orbs")
+		if orbFolder then
+			-- Limit orb checks for performance
+			local maxOrbsToCheck = 30
+			local orbCount = 0
+			
+			for _, orb in ipairs(orbFolder:GetChildren()) do
+				if orb:IsA("BasePart") and orbCount < maxOrbsToCheck then
+					orbCount = orbCount + 1
+					table.insert(orbsToCheck, orb)
+				end
+			end
+		end
+		
+		-- Now check collected orbs
+		for _, orb in ipairs(orbsToCheck) do
+			if orb:IsA("BasePart") and orb.Parent then
+				local dist = (orb.Position - headPos).Magnitude
+				
+				if dist <= pickupRadius then
+					-- Check if orb is already being collected
+					local isBeingCollected = orb:GetAttribute("BeingCollected")
+					if isBeingCollected then
+						continue -- Skip this orb
+					end
+					
+					-- Mark orb as being collected to prevent double collection
+					orb:SetAttribute("BeingCollected", true)
+					
+					-- Handle all orbs the same way
+					local valueObj = orb:FindFirstChild("Value")
+					local orbValue = valueObj and valueObj.Value or 1
+					
+					if orb.Name == "UpgradeOrb" then
+						-- Apply upgrade
+						if SnakeUpgrades then
+							print("🎯 AI Snake collecting upgrade orb!")
+							SnakeUpgrades.GiveUpgrade(self)
+						end
+					else
+						-- Regular orb - grow the snake
+						self:grow(orbValue)
+					end
+					
+					-- Destroy the orb
+					orb:Destroy()
+					break -- Only pick up one orb per check
 				end
 			end
 		end
@@ -2678,17 +3238,64 @@ local brainUpdateCounter = 0
 
 AISnake._movementConnection = RunService.Heartbeat:Connect(function(dt)
 	local snakesToUpdate = {}
-	for i = 1, #AISnake._activeSnakes do
-		local snake = AISnake._activeSnakes[i]
-		if snake and snake._active then
-			table.insert(snakesToUpdate, snake)
+	
+	-- Get all player positions for distance checks
+	local playerPositions = {}
+	for _, player in pairs(Players:GetPlayers()) do
+		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			table.insert(playerPositions, player.Character.HumanoidRootPart.Position)
+		end
+	end
+	
+	-- If there are no players, update all snakes. Otherwise, use optimization.
+	if #playerPositions == 0 then
+		-- No players in game, update all active snakes
+		for i = 1, #AISnake._activeSnakes do
+			local snake = AISnake._activeSnakes[i]
+			if snake and snake._active then
+				table.insert(snakesToUpdate, snake)
+			end
+		end
+		-- Debug message (remove later)
+		if #snakesToUpdate > 0 and brainUpdateCounter % 600 == 0 then -- Every 20 seconds
+			print("🤖 Updating", #snakesToUpdate, "AI snakes (no players present)")
+		end
+	else
+		-- Players are present, use the distance-based optimization
+		for i = 1, #AISnake._activeSnakes do
+			local snake = AISnake._activeSnakes[i]
+			if snake and snake._active then
+				-- Check distance to nearest player
+				local nearPlayer = false
+				if snake.HeadParts and snake.HeadParts.head then
+					local snakePos = snake.HeadParts.head.Position
+					for _, playerPos in ipairs(playerPositions) do
+						if (snakePos - playerPos).Magnitude < AI_UPDATE_DISTANCE then
+							nearPlayer = true
+							break
+						end
+					end
+				end
+				
+				-- Only update snakes near players
+				if nearPlayer then
+					table.insert(snakesToUpdate, snake)
+				else
+					-- Still do minimal updates for far snakes
+					if i % 5 == 0 then -- Update 1 in 5 far snakes per frame
+						table.insert(snakesToUpdate, snake)
+					end
+				end
+			end
 		end
 	end
 
 	brainUpdateCounter = brainUpdateCounter + 1
 	if brainUpdateCounter >= 30 then
 		brainUpdateCounter = 0
-		for i = 1, #snakesToUpdate do
+		-- Update brains less frequently for performance
+		local maxBrainUpdates = math.min(#snakesToUpdate, 5) -- Update max 5 brains per cycle
+		for i = 1, maxBrainUpdates do
 			local snake = snakesToUpdate[i]
 			if snake and snake._active then
 				snake:updateBrain()
@@ -2723,6 +3330,7 @@ AISnake._brainConnection = RunService.Stepped:Connect(function(time, deltaTime)
 				removed = removed + 1
 			end
 		end
+		-- Only print if we actually removed something
 		if removed > 0 then
 			print("🧹 Cleaned up", removed, "invalid AI snakes from active list")
 		end
@@ -2887,6 +3495,11 @@ end
 
 -- Dynamically create segments if they don't exist yet
 function AISnake:ensureSegmentExists(index)
+	-- Safety checks
+	if not self.Segments then
+		return nil
+	end
+	
 	if index > DYNAMIC_SEGMENT_LIMIT or index > self.CurrentLength then
 		return nil
 	end

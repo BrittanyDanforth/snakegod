@@ -62,12 +62,7 @@ deathEffectRemote.OnClientEvent:Connect(function(deadPlayer, deathPosition)
     -- Clean up after particles finish
     Debris:AddItem(effectPart, 2)
     
-    -- Optional: Add a sound effect if available
-    local deathSound = Instance.new("Sound")
-    deathSound.SoundId = "rbxasset://sounds/impact_water_low.mp3" -- Using a built-in sound
-    deathSound.Volume = 0.5
-    deathSound.Parent = effectPart
-    deathSound:Play()
+    -- Death sound removed - no audio on death
 end)
 
 print("[DeathEffectHandler] Death effect handler initialized")
