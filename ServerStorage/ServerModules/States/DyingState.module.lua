@@ -751,31 +751,50 @@ end
 
 function DyingState:_disableMagnetEffect()
     local player = self.controller.player
+    local character = player.Character
     
-    -- Reset magnet attributes to disable the magnet effect
-    player:SetAttribute("MagnetRange", 0)  -- Set to 0 to fully disable
+    -- Reset all effect-related attributes
+    player:SetAttribute("MagnetRange", 0)
     player:SetAttribute("MagnetActive", false)
-    player:SetAttribute("ActiveMagnet", false)  -- From boost system
-    player:SetAttribute("TempMagnetRange", 1)  -- Reset temp multiplier
+    player:SetAttribute("ActiveMagnet", false)
+    player:SetAttribute("TempMagnetRange", 1)
+    player:SetAttribute("SpawnGhostMode", false)  -- Clear ghost mode too
     
-    -- Fire a remote event to tell any client scripts to clean up magnet visuals
-    local remotes = ReplicatedStorage:WaitForChild("Remotes", 2)
-    if remotes then
-        -- Use the existing ToggleMagnet remote to turn it off
-        local toggleMagnetRemote = remotes:FindFirstChild("ToggleMagnet")
-        if toggleMagnetRemote then
-            -- Fire to all clients to ensure visual cleanup
-            toggleMagnetRemote:FireAllClients(player, false)
+    -- Clean up any particle effects in the character
+    if character then
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if rootPart then
+            -- Remove ghost effect light
+            local ghostEffect = rootPart:FindFirstChild("GhostEffect")
+            if ghostEffect then
+                ghostEffect:Destroy()
+            end
+            
+            -- Remove any attachments with particles (this is where the purple effect is!)
+            for _, child in ipairs(rootPart:GetChildren()) do
+                if child:IsA("Attachment") then
+                    -- Check if it has particle emitters
+                    for _, particle in ipairs(child:GetChildren()) do
+                        if particle:IsA("ParticleEmitter") then
+                            particle.Enabled = false
+                            particle:Destroy()
+                        end
+                    end
+                    child:Destroy()
+                end
+            end
         end
         
-        -- Also fire a general cleanup event if one exists
-        local cleanupRemote = remotes:FindFirstChild("CleanupEffects")
-        if cleanupRemote then
-            cleanupRemote:FireClient(player, "magnet")
+        -- Also check the whole character for any lingering effects
+        for _, desc in ipairs(character:GetDescendants()) do
+            if desc:IsA("ParticleEmitter") then
+                desc.Enabled = false
+                desc:Destroy()
+            end
         end
     end
     
-    warn("[DyingState] Disabled magnet attributes for", player.Name, "- MagnetRange set to 0")
+    warn("[DyingState] Cleaned up all effects for", player.Name)
 end
 
 return DyingState
