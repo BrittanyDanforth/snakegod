@@ -25,7 +25,10 @@ local remoteEvents = {
     "PlayerRevivedEffect",   -- For revive VFX
     "PlayerDeathEffect",     -- For death VFX
     "StopSnakeMovement",     -- For stopping client-side snake control
-    "ResumeSnakeMovement"    -- For resuming snake movement after revive
+    "ResumeSnakeMovement",   -- For resuming snake movement after revive
+    "PromptRevive",          -- For prompting player to revive
+    "ReviveResponse",        -- For player's response to revive prompt
+    "ControlDeathUI"         -- For controlling death UI visibility
 }
 
 -- Create each RemoteEvent if it doesn't exist

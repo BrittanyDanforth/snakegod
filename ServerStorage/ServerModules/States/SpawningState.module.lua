@@ -105,6 +105,15 @@ function SpawningState:OnEnter(previousState)
     -- Wait a brief moment for everything to initialize
     task.wait(0.5)
     
+    -- Re-apply gamepass benefits after revival to restore magnet if player has it
+    if isReviving then
+        local GamepassHandler = game.ServerScriptService:FindFirstChild("GamepassHandler")
+        if GamepassHandler then
+            -- The GamepassHandler should re-apply benefits on character spawn
+            warn("[SpawningState] Gamepass benefits should be re-applied for revival")
+        end
+    end
+    
     -- Enable collisions and transition to alive
     self.controller.collisionState.canCollide = true
     

@@ -1332,4 +1332,101 @@ function OptimizedSnakeSystemV9.createSnake(character, config)
 	return Snake.new(character, config)
 end
 
+function OptimizedSnakeSystemV9.createSnakeFromSavedState(character, config, savedState)
+	local snake = Snake.new(character, config)
+	
+	if savedState and snake then
+		-- Restore snake properties
+		snake.targetLength = savedState.targetLength or savedState.length or config.length
+		snake.actualLength = savedState.length or config.length
+		snake.pendingGrowth = 0
+		
+		-- Restore position history if available
+		if savedState.positionHistory and #savedState.positionHistory > 0 then
+			snake.positionHistory = {}
+			-- Only restore recent history to avoid lag
+			local startIdx = math.max(1, #savedState.positionHistory - 500)
+			for i = startIdx, #savedState.positionHistory do
+				local entry = savedState.positionHistory[i]
+				table.insert(snake.positionHistory, {
+					position = entry.position,
+					lookVector = entry.lookVector,
+					time = tick()
+				})
+			end
+			snake.historyIndex = 1
+		end
+		
+		-- Recreate segments at saved positions efficiently
+		if savedState.segments and #savedState.segments > 0 then
+			-- First, ensure we have enough segments
+			local neededSegments = math.min(#savedState.segments, MAX_SEGMENTS)
+			
+			-- Add segments in batches for performance
+			local segmentsToAdd = neededSegments - snake.visibleSegmentCount
+			while segmentsToAdd > 0 do
+				local batchSize = math.min(20, segmentsToAdd)
+				snake:addSegments(batchSize)
+				segmentsToAdd = segmentsToAdd - batchSize
+				
+				-- Small yield to prevent lag
+				if segmentsToAdd > 0 then
+					task.wait()
+				end
+			end
+			
+			-- Position segments at saved locations efficiently
+			task.spawn(function()
+				for i, segmentData in ipairs(savedState.segments) do
+					if i <= snake.visibleSegmentCount and snake.segments[i] then
+						snake.segments[i].Position = segmentData.position
+						snake.segments[i].Size = segmentData.size
+						snake.segments[i].Color = segmentData.color
+						snake.segments[i].Transparency = 0 -- Make visible again
+						
+						-- Update attachment positions for beams
+						if snake.attachments[i] then
+							snake.attachments[i].WorldPosition = segmentData.position
+						end
+						
+						-- Yield every few segments to prevent lag
+						if i % 10 == 0 then
+							task.wait()
+						end
+					end
+				end
+				
+				-- Update beams after all segments are positioned
+				snake:updateBeamConnections()
+			end)
+		end
+		
+		-- Update leaderstats to reflect restored length
+		if snake.player then
+			local leaderstats = snake.player:FindFirstChild("leaderstats")
+			if leaderstats then
+				local lengthValue = leaderstats:FindFirstChild("Length")
+				if lengthValue then
+					lengthValue.Value = math.floor(snake.targetLength)
+				end
+			end
+		end
+		
+		print("✅ Snake restored from saved state with length:", snake.targetLength)
+	end
+	
+	return snake
+end
+
+-- Add method to Snake class for updating beam connections
+function Snake:updateBeamConnections()
+	-- Update all beam connections to match current segment positions
+	for i = 1, self.visibleSegmentCount - 1 do
+		if self.beams[i] and self.attachments[i] and self.attachments[i + 1] then
+			self.beams[i].Attachment0 = self.attachments[i]
+			self.beams[i].Attachment1 = self.attachments[i + 1]
+		end
+	end
+end
+
 return OptimizedSnakeSystemV9

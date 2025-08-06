@@ -217,6 +217,15 @@ local function onPlayerAdded(player)
                         elseif eventName == "onOrbCollision" then
                             -- Let existing orb system handle collection
                             -- The OrbSpawner system has all the logic
+                            local orb = collisionData  -- The orb is passed directly
+                            if orb and orb.Parent then
+                                -- Get orb value for debug
+                                local orbValue = orb:GetAttribute("OrbValue") or 1
+                                local isDeathOrb = orb:GetAttribute("IsDeathOrb") or false
+                                
+                                -- Debug log only - OrbSpawner handles actual collection
+                                print("[MainServer] Orb collision detected:", player.Name, "Value:", orbValue, "IsDeathOrb:", isDeathOrb)
+                            end
                         end
                     end)
     end
