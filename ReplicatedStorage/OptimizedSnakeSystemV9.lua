@@ -12,6 +12,9 @@ local Debris = game:GetService("Debris")
 -- Only get UserInputService on client
 local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
+-- TIER 2: Catmull-Rom Spline Module for seamless path interpolation
+local CatmullRomSpline = require(ReplicatedStorage:WaitForChild("CatmullRomSpline"))
+
 -- LOD System Constants (ENHANCED FOR PERFORMANCE)
 local LOD_UPDATE_RATE = 5 -- Check LOD every N frames
 local LOD_MODES = {
@@ -229,6 +232,11 @@ function Snake.new(character, config)
 	-- Movement history
 	self.positionHistory = {}
 	self.historyIndex = 0
+	
+	-- TIER 2: Spline-based path system
+	self.pathSpline = nil
+	self.splineUpdateCounter = 0
+	self.SPLINE_UPDATE_RATE = 3 -- Update spline every N frames for performance
 
 	-- Visual components
 	self.model = Instance.new("Model")
@@ -942,6 +950,24 @@ function Snake:updateUnifiedBody()
 	
 	-- Apply segment budget
 	local segmentsToUpdate = math.min(requiredSegments, segmentBudget)
+	
+	-- TIER 2: Update spline periodically for smooth path
+	self.splineUpdateCounter = self.splineUpdateCounter + 1
+	if self.splineUpdateCounter >= self.SPLINE_UPDATE_RATE and #self.positionHistory >= 4 then
+		self.splineUpdateCounter = 0
+		
+		-- Convert position history to Vector3 array for spline
+		local splinePoints = {}
+		for i = 1, math.min(#self.positionHistory, 50) do -- Limit to recent history
+			table.insert(splinePoints, self.positionHistory[i].position)
+		end
+		
+		-- Create spline with uniform parameterization
+		if #splinePoints >= 4 then
+			self.pathSpline = CatmullRomSpline.new(splinePoints)
+			self.pathSpline:SetUniform(true) -- Enable arc-length parameterization
+		end
+	end
 
 	-- Add new segments if grown with smooth animation
 	if requiredSegments > self.visibleSegmentCount then
@@ -999,19 +1025,52 @@ function Snake:updateUnifiedBody()
 				self.rightPupil.CFrame = self.rightEye.CFrame * CFrame.new(0, 0, -eyeScale * 0.3)
 			elseif isVisible or i <= FORCE_RENDER_SEGMENTS then
 				-- Body segment positioning
-				local stepsBack = math.floor(i * spacing / 2)
-				local histData = self:getHistoricalPosition(stepsBack)
-				local nextHistData = self:getHistoricalPosition(stepsBack + 1)
+				local targetPos
+				
+				-- TIER 2: Use spline if available for mathematically perfect positioning
+				if self.pathSpline then
+					-- Calculate position along spline based on segment index
+					local splineT = math.min(i * spacing / (self.pathSpline:GetLength() or 1), 1)
+					targetPos = self.pathSpline:GetPoint(splineT)
+				else
+					-- Fallback to original historical position method
+					local stepsBack = math.floor(i * spacing / 2)
+					local histData = self:getHistoricalPosition(stepsBack)
+					local nextHistData = self:getHistoricalPosition(stepsBack + 1)
 
-				if histData and nextHistData then
-					-- Smooth interpolation
-					local alpha = (i * spacing / 2) % 1
-					local targetPos = histData.position:Lerp(nextHistData.position, alpha)
+					if histData and nextHistData then
+						-- Smooth interpolation
+						local alpha = (i * spacing / 2) % 1
+						targetPos = histData.position:Lerp(nextHistData.position, alpha)
+					end
+				end
+				
+				if targetPos then
 					local currentPos = segment.Position
-
 					-- Use higher smoothing during growth for smoother transitions
 					local smoothingFactor = self.isGrowing and VISUAL_SMOOTHING_FACTOR * 1.2 or VISUAL_SMOOTHING_FACTOR
 					segment.Position = currentPos:Lerp(targetPos, smoothingFactor)
+					
+					-- TIER 1 FIX: Reactive Clamping Method (Terraria Destroyer style)
+					-- Check distance to previous segment and clamp if gap detected
+					if i > 0 then
+						local prevSegment = self.segments[i - 1]
+						if prevSegment and prevSegment.Parent then
+							local segmentDiff = segment.Position - prevSegment.Position
+							local currentDistance = segmentDiff.Magnitude
+							local desiredDistance = spacing * 0.95 -- 95% of spacing to ensure overlap
+							
+							-- If gap detected, forcibly clamp the segment
+							if currentDistance > desiredDistance then
+								-- Calculate the clamped position
+								local clampedPosition = prevSegment.Position + (segmentDiff.Unit * desiredDistance)
+								segment.Position = clampedPosition
+								
+								-- Orient segment to look at previous segment
+								segment.CFrame = CFrame.lookAt(clampedPosition, prevSegment.Position)
+							end
+						end
+					end
 
 					-- Use calculated segment size
 					local segmentSize = self:getSegmentSize(i, currentBaseSize)
