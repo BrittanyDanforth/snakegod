@@ -628,27 +628,29 @@ function DyingState:_createDeathOrb(position, value)
     end)
     
     -- Add particle effect AFTER parenting to avoid attachment warning
-    local attachment = Instance.new("Attachment")
-    attachment.Parent = orb
-    
-    local particle = Instance.new("ParticleEmitter")
-    particle.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-    particle.Rate = 15 + value * 2 -- More particles for higher value orbs
-    particle.Lifetime = NumberRange.new(0.5, 1)
-    particle.SpreadAngle = Vector2.new(360, 360)
-    particle.Speed = NumberRange.new(1, 2)
-    particle.VelocityInheritance = 0
-    particle.Color = ColorSequence.new(Color3.fromRGB(255, 200, 0))
-    particle.Size = NumberSequence.new{
-        NumberSequenceKeypoint.new(0, 0.3 * sizeMultiplier),
-        NumberSequenceKeypoint.new(0.5, 0.2 * sizeMultiplier),
-        NumberSequenceKeypoint.new(1, 0)
-    }
-    particle.Transparency = NumberSequence.new{
-        NumberSequenceKeypoint.new(0, 0.3),
-        NumberSequenceKeypoint.new(1, 1)
-    }
-    particle.Parent = attachment
+    if orb and orb.Parent then  -- Make sure orb still exists
+        local attachment = Instance.new("Attachment")
+        attachment.Parent = orb
+        
+        local particle = Instance.new("ParticleEmitter")
+        particle.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+        particle.Rate = 15 + value * 2 -- More particles for higher value orbs
+        particle.Lifetime = NumberRange.new(0.3, 0.6)
+        particle.SpreadAngle = Vector2.new(360, 360)
+        particle.Speed = NumberRange.new(1, 2)
+        particle.VelocityInheritance = 0
+        particle.Color = ColorSequence.new(Color3.fromRGB(255, 200, 0))
+        particle.Size = NumberSequence.new{
+            NumberSequenceKeypoint.new(0, 0.3 * sizeMultiplier),
+            NumberSequenceKeypoint.new(0.5, 0.2 * sizeMultiplier),
+            NumberSequenceKeypoint.new(1, 0)
+        }
+        particle.Transparency = NumberSequence.new{
+            NumberSequenceKeypoint.new(0, 0.3),
+            NumberSequenceKeypoint.new(1, 1)
+        }
+        particle.Parent = attachment
+    end
     
     -- Clean up after 90 seconds
     Debris:AddItem(orb, 90)
@@ -684,8 +686,11 @@ function DyingState:_cleanupVisualEffects()
             
             -- Remove any attachments with particles (ghost mode particles)
             for _, child in ipairs(rootPart:GetChildren()) do
-                if child:IsA("Attachment") then
-                    child:Destroy()
+                if child:IsA("Attachment") and child.Parent then
+                    -- Use pcall to prevent errors if attachment is already being destroyed
+                    pcall(function()
+                        child:Destroy()
+                    end)
                 end
             end
         end
