@@ -2,6 +2,7 @@
 -- Perfect head-body integration with smooth growth transitions
 -- ENHANCED: Fixed gap issues, improved LOD handling, stable at extreme lengths
 -- 🚀 HYPER-ENHANCED: Professional visual effects from comprehensive research integration
+-- 🔧 FIXED: Smooth beam updates to prevent flinging when eating orbs
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -62,10 +63,15 @@ local GLOW_FALLOFF_START = 50 -- Start reducing glow density after this many seg
 local VISUAL_SMOOTHING_FACTOR = 0.6 -- Higher = smoother transitions
 
 -- Growth Animation Constants (NEW)
-local GROWTH_SPEED = 0.15 -- How fast we interpolate to target length (increased for smoother growth)
-local SEGMENT_GROWTH_DELAY = 0.05 -- Delay between segment additions for smooth appearance
-local GROWTH_PULSE_STRENGTH = 0.1 -- How much segments pulse when growing
+local GROWTH_SPEED = 0.25 -- How fast we interpolate to target length (increased for smoother growth)
+local SEGMENT_GROWTH_DELAY = 0.03 -- Delay between segment additions for smooth appearance (reduced for better flow)
+local GROWTH_PULSE_STRENGTH = 0.05 -- How much segments pulse when growing (reduced for stability)
 local GROWTH_WAVE_SPEED = 10 -- Speed of growth wave effect
+
+-- FIXED: Beam smoothing constants to prevent flinging
+local ATTACHMENT_SMOOTHING_FACTOR = 0.85 -- Higher = smoother attachment movement
+local BEAM_UPDATE_THRESHOLD = 0.1 -- Minimum movement before updating beams
+local ATTACHMENT_POSITION_CACHE = {} -- Cache previous positions for smoothing
 
 -- 🎨 PROFESSIONAL VISUAL ENHANCEMENT CONSTANTS
 local BEAM_TEXTURE_SPEED = 2 -- Flow animation speed for beams
@@ -1008,9 +1014,26 @@ function Snake:updateUnifiedBody()
 				end
 			end
 
-			-- Update attachment position
+			-- FIXED: Update attachment position with smoothing to prevent beam flinging
 			if self.attachments[i] then
-				self.attachments[i].WorldPosition = segment.Position
+				local attachmentId = tostring(self.model) .. "_" .. tostring(i)
+				local targetPos = segment.Position
+				local currentPos = self.attachments[i].WorldPosition
+				
+				-- Initialize cache if needed
+				if not ATTACHMENT_POSITION_CACHE[attachmentId] then
+					ATTACHMENT_POSITION_CACHE[attachmentId] = targetPos
+					self.attachments[i].WorldPosition = targetPos
+				else
+					-- Only update if movement is significant
+					local delta = (targetPos - ATTACHMENT_POSITION_CACHE[attachmentId]).Magnitude
+					if delta > BEAM_UPDATE_THRESHOLD then
+						-- Smooth interpolation
+						local smoothedPos = ATTACHMENT_POSITION_CACHE[attachmentId]:Lerp(targetPos, ATTACHMENT_SMOOTHING_FACTOR)
+						self.attachments[i].WorldPosition = smoothedPos
+						ATTACHMENT_POSITION_CACHE[attachmentId] = smoothedPos
+					end
+				end
 			end
 		end
 	end
@@ -1022,8 +1045,11 @@ function Snake:updateUnifiedBody()
 				-- Regular beams
 				if i <= self.visibleSegmentCount then
 					local beamWidth = self:getBeamWidth(i, currentBaseSize)
-					beam.Width0 = beamWidth
-					beam.Width1 = beamWidth
+					-- FIXED: Smooth beam width transitions during growth
+					local currentWidth0 = beam.Width0
+					local currentWidth1 = beam.Width1
+					beam.Width0 = currentWidth0 + (beamWidth - currentWidth0) * 0.3
+					beam.Width1 = currentWidth1 + (beamWidth - currentWidth1) * 0.3
 
 					-- 🎨 ENHANCED: Update beam colors for rainbow mode
 					if self.rainbowMode and i % 5 == 0 then
@@ -1044,8 +1070,11 @@ function Snake:updateUnifiedBody()
 				local index = tonumber(string.match(i, "%d+"))
 				if index and index <= self.visibleSegmentCount - 2 then
 					local overlapWidth = self:getBeamWidth(index, currentBaseSize) * 1.15
-					beam.Width0 = overlapWidth
-					beam.Width1 = overlapWidth
+					-- FIXED: Smooth overlap beam width transitions
+					local currentWidth0 = beam.Width0
+					local currentWidth1 = beam.Width1
+					beam.Width0 = currentWidth0 + (overlapWidth - currentWidth0) * 0.3
+					beam.Width1 = currentWidth1 + (overlapWidth - currentWidth1) * 0.3
 
 					-- Update colors for rainbow mode
 					if self.rainbowMode and index % 5 == 0 then
@@ -1216,8 +1245,8 @@ function Snake:addSegments(count)
 			beam.Parent = self.attachmentPart
 			self.beams[i - 1] = beam
 
-			-- Animate beam growth (width only - transparency needs custom animation)
-			TweenService:Create(beam, TweenInfo.new(0.3), {
+			-- FIXED: Smoother beam growth animation to prevent flinging
+			TweenService:Create(beam, TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
 				Width0 = beamWidth,
 				Width1 = beamWidth
 			}):Play()
@@ -1423,6 +1452,12 @@ function Snake:destroy()
 	end
 
 	if self.model then
+		-- FIXED: Clean up attachment position cache to prevent memory leaks
+		for i = 0, MAX_SEGMENTS do
+			local attachmentId = tostring(self.model) .. "_" .. tostring(i)
+			ATTACHMENT_POSITION_CACHE[attachmentId] = nil
+		end
+		
 		self.model:Destroy()
 		self.model = nil
 	end

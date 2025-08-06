@@ -1569,6 +1569,11 @@ function AISnake:updateBrain()
 end
 
 -- === AI CONSTRUCTOR ===
+-- TODO: This constructor is very large and should be refactored into smaller helper functions:
+-- self:_initializeData(startPosition)
+-- self:_createModel()
+-- self:_createVisuals()
+-- self:_startSpawnSequence()
 function AISnake.new(startPosition, preservedPersonalityType)
 	if #AISnake._activeSnakes >= MAX_AI_SNAKES then
 		print("AI Snake limit reached:", MAX_AI_SNAKES)
@@ -1819,7 +1824,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	for i = 1, initialSegmentCount do
 		-- Start ALL segments at the SAME position to prevent gaps
 		local pos = self.Position
-		local color = self:getSegmentColor(i) -- Use the new function
+		local color = self:getSegmentColor(i, pos) -- Pass position for stable coloring
 		local segment = createSegment(i, pos, color, self.Config, self.Model, i)
 		self.Segments[i] = segment
 
@@ -1871,8 +1876,9 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		-- Color matching with smooth transitions
 		if i == 0 then
 			-- Head to first segment - smooth color transition
-			local headColor = self:getSegmentColor(0)
-			local seg1Color = self:getSegmentColor(1)
+			local headColor = self:getSegmentColor(0, self.Position) -- Head position
+			local seg1Pos = self.Segments[1] and self.Segments[1].Position or self.Position
+			local seg1Color = self:getSegmentColor(1, seg1Pos)
 			beam.Color = ColorSequence.new({
 				ColorSequenceKeypoint.new(0, headColor),
 				ColorSequenceKeypoint.new(0.3, headColor:Lerp(seg1Color, 0.3)),
@@ -1880,7 +1886,8 @@ function AISnake.new(startPosition, preservedPersonalityType)
 				ColorSequenceKeypoint.new(1, seg1Color)
 			})
 		else
-			beam.Color = ColorSequence.new(self:getSegmentColor(i))
+			local segPos = self.Segments[i] and self.Segments[i].Position or self.Position
+			beam.Color = ColorSequence.new(self:getSegmentColor(i, segPos))
 		end
 
 		beam.Parent = attachmentPart
@@ -1907,16 +1914,93 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			return
 		end
 		
-		-- Add spawn protection visual effect
+		-- Add clean countdown timer UI for spawn protection (no ForceField)
 		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
-			local protectionField = Instance.new("ForceField")
-			protectionField.Parent = self.Model
+			-- 1. CREATE A BillboardGui TO HOLD THE COUNTDOWN TEXT
+			-- A BillboardGui always faces the player's camera.
+			local billboardGui = Instance.new("BillboardGui")
+			billboardGui.Name = "InvincibilityTimer"
+			billboardGui.Adornee = self.HeadParts.head -- Attach it directly to the snake's head
+			billboardGui.Size = UDim2.new(8, 0, 2.5, 0)      -- Set size in studs
+			billboardGui.StudsOffset = Vector3.new(0, 5, 0) -- Make it float 5 studs above the head
+			billboardGui.AlwaysOnTop = true
+			billboardGui.LightInfluence = 0
+			billboardGui.Parent = self.HeadParts.head -- Parent to the head
+
+			-- Create a background frame for the text
+			local bgFrame = Instance.new("Frame")
+			bgFrame.Size = UDim2.new(1, 0, 1, 0)
+			bgFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+			bgFrame.BackgroundTransparency = 0.4
+			bgFrame.BorderSizePixel = 0
+			bgFrame.Parent = billboardGui
 			
-			-- Remove protection field when spawn protection expires
+			local uiCorner = Instance.new("UICorner")
+			uiCorner.CornerRadius = UDim.new(0.2, 0)
+			uiCorner.Parent = bgFrame
+
+			-- Create the text label itself
+			local textLabel = Instance.new("TextLabel")
+			textLabel.Size = UDim2.new(1, 0, 1, 0)
+			textLabel.BackgroundTransparency = 1
+			textLabel.Font = Enum.Font.GothamSemibold
+			textLabel.TextColor3 = Color3.fromRGB(170, 255, 255)
+			textLabel.TextScaled = true
+			textLabel.TextStrokeTransparency = 0
+			textLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+			textLabel.Parent = bgFrame
+			textLabel.Text = "INVINCIBLE" -- Set the initial text right away
+
+			-- 2. RUN THE COUNTDOWN AND ANIMATION LOGIC
 			task.spawn(function()
-				task.wait(10) -- Match spawn protection time
-				if protectionField and protectionField.Parent then
-					protectionField:Destroy()
+				local protectionDuration = 10 -- Your AI protection time in seconds
+				local TweenService = game:GetService("TweenService")
+				
+				-- Start countdown immediately from 10
+				for i = protectionDuration, 1, -1 do
+					if not textLabel or not textLabel.Parent then break end -- Stop if snake was destroyed
+					
+					-- Update text with appropriate styling
+					if i > 5 then
+						textLabel.Text = "PROTECTED: " .. i
+						textLabel.TextColor3 = Color3.fromRGB(170, 255, 255) -- Cyan
+					elseif i > 3 then
+						textLabel.Text = "PROTECTED: " .. i
+						textLabel.TextColor3 = Color3.fromRGB(255, 255, 170) -- Yellow
+					else
+						textLabel.Text = "VULNERABLE: " .. i
+						textLabel.TextColor3 = Color3.fromRGB(255, 170, 170) -- Red
+					end
+					
+					-- Pulse effect on last 3 seconds
+					if i <= 3 then
+						local pulseTween = TweenService:Create(textLabel, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+							TextTransparency = 0.3
+						})
+						pulseTween:Play()
+						pulseTween.Completed:Connect(function()
+							if textLabel and textLabel.Parent then
+								textLabel.TextTransparency = 0
+							end
+						end)
+					end
+					
+					task.wait(1)
+				end
+				
+				-- Fade out the UI
+				if billboardGui and billboardGui.Parent then
+					local fadeOut = TweenService:Create(bgFrame, TweenInfo.new(0.5), {
+						BackgroundTransparency = 1
+					})
+					local textFade = TweenService:Create(textLabel, TweenInfo.new(0.5), {
+						TextTransparency = 1,
+						TextStrokeTransparency = 1
+					})
+					fadeOut:Play()
+					textFade:Play()
+					
+					game:GetService("Debris"):AddItem(billboardGui, 0.6)
 				end
 			end)
 		end
@@ -2057,9 +2141,9 @@ function AISnake:grow(amount)
 				self.growthFactor = self:calculateGrowthFactor()
 				local currentBaseSize = BASE_SIZE * self.growthFactor
 
-				local color = self:getSegmentColor(self.CurrentLength)
 				local lastSegment = self.Segments[self.CurrentLength - 1]
 				local newPos = lastSegment and lastSegment.Position or self.Position
+				local color = self:getSegmentColor(self.CurrentLength, newPos) -- Pass position for stable coloring
 				local segment = createSegment(self.CurrentLength, newPos, color, self.Config, self.Model, self.CurrentLength)
 				self.Segments[self.CurrentLength] = segment
 
@@ -2124,8 +2208,11 @@ function AISnake:grow(amount)
 						}
 
 						-- Color matching
-						local prevColor = self:getSegmentColor(self.CurrentLength - 1)
-						local currColor = self:getSegmentColor(self.CurrentLength)
+						local prevSegment = self.Segments[self.CurrentLength - 1]
+						local prevPos = prevSegment and prevSegment.Position or self.Position
+						local prevColor = self:getSegmentColor(self.CurrentLength - 1, prevPos)
+						local currPos = newPos -- We already have the new segment position
+						local currColor = self:getSegmentColor(self.CurrentLength, currPos)
 
 						-- Safety check for colors
 						if not prevColor or not currColor then
@@ -2504,6 +2591,13 @@ function AISnake:Destroy()
 end
 
 -- === SMOOTHER MOVEMENT (FIXED) ===
+-- TODO: This function is very large and should be refactored into smaller helper functions:
+-- self:_updateTurning(dt)
+-- self:_updateSpeed(dt) 
+-- self:_updatePosition(dt)
+-- self:_checkCollisions()
+-- self:_checkOrbPickups()
+-- self:_updateSegments()
 function AISnake:updateMovement(dt)
 	if not self._active or self._destroyed then
 		return
@@ -2803,120 +2897,62 @@ function AISnake:updateMovement(dt)
 	local headPos = self.HeadParts.head.Position
 	local pickupRadius = 8 -- Increased for better upgrade orb pickup (they're bigger)
 
-	-- CHECK FOR COLLISIONS WITH OTHER SNAKES
-	-- Check collision with player snakes
-	local Players = game:GetService("Players")
+	-- HIGH-PERFORMANCE COLLISION CHECK USING SPATIAL GRID
 	local myHead = self.HeadParts.head
 	local myHeadPos = myHead.Position
+	local checkRadius = 15 -- Check for collisions within a 15 stud radius
+
+	-- Query the grid for any snake parts near our head
+	local nearbyEntities = SpatialGrid.QueryRadius(myHeadPos, checkRadius)
 	
-	-- Check collision with player snakes
-	for _, player in pairs(Players:GetPlayers()) do
-		local snakeModel = nil
-		
-		-- First check workspace directly
-		snakeModel = Workspace:FindFirstChild("Snake_" .. player.Name)
-		
-		-- If not found, check SnakeFolder
-		if not snakeModel then
-			local snakeFolder = Workspace:FindFirstChild("SnakeFolder")
-			if snakeFolder then
-				snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
-			end
-		end
-		
-		if snakeModel and snakeModel:IsA("Model") then
-			-- Check head-to-head collision
-			local playerHead = snakeModel:FindFirstChild("Segment0_Head")
-			if playerHead and playerHead:IsA("BasePart") then
-				local distance = (playerHead.Position - myHeadPos).Magnitude
-				if distance <= 10 then -- Head collision radius
-					-- AI snake dies in head-to-head collision
-					warn("AI Snake died from head-to-head collision with", player.Name)
-					self:Destroy()
-					return
-				end
-			end
+	-- Process collision checks using the spatial grid results
+	for _, entity in ipairs(nearbyEntities) do
+		if entity.owner ~= self then -- Don't check against ourself
 			
-			-- Check collision with player body segments
-			local segmentNum = 1
-			while true do
-				local segment = snakeModel:FindFirstChild("Segment" .. segmentNum)
-				if segment and segment:IsA("BasePart") then
-					-- Skip first few segments to prevent unfair deaths
-					if segmentNum > 3 then
-						local distance = (segment.Position - myHeadPos).Magnitude
-						if distance <= 5 then -- Body collision radius
-							-- AI snake dies when hitting player body
-							warn("AI Snake died from hitting", player.Name, "'s body")
-							self:Destroy()
-							return
-						end
+			local part = entity.part
+			if not part or not part.Parent then continue end
+			
+			local distance = (myHeadPos - part.Position).Magnitude
+			
+			if entity.type == "PLAYER_HEAD" or entity.type == "AI_HEAD" then
+				-- Head-to-head collision
+				if distance < 10 then
+					local ownerName = entity.owner.Name or (entity.owner.player and entity.owner.player.Name) or "Unknown"
+					warn("AI Snake died from head-to-head collision with " .. ownerName)
+					self:Destroy()
+					
+					-- If it's another AI, destroy it too
+					if entity.type == "AI_HEAD" and entity.owner.Destroy then
+						entity.owner:Destroy()
 					end
-					segmentNum = segmentNum + 1
-				else
-					break
+					return -- Stop checking
 				end
-			end
-		end
-	end
-	
-	-- Check collision with other AI snakes
-	for _, otherSnake in ipairs(AISnake._activeSnakes) do
-		if otherSnake ~= self and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
-			local otherHead = otherSnake.HeadParts.head
-			if otherHead.Parent then
-				local distance = (otherHead.Position - myHeadPos).Magnitude
-				if distance <= 10 then -- Head-to-head collision
-					-- Both AI snakes die in head-to-head collision
-					warn("AI Snakes died from head-to-head collision")
-					self:Destroy()
-					otherSnake:Destroy()
-					return
-				end
-			end
-			
-			-- Check collision with other AI snake body
-			if otherSnake.Segments then
-				for i = 4, #otherSnake.Segments do -- Skip first few segments
-					local segment = otherSnake.Segments[i]
-					if segment and segment.Parent then
-						local distance = (segment.Position - myHeadPos).Magnitude
-						if distance <= 5 then -- Body collision
-							warn("AI Snake died from hitting another AI snake's body")
-							self:Destroy()
-							return
-						end
+			elseif entity.type == "PLAYER_SEGMENT" or entity.type == "AI_SEGMENT" then
+				-- Body collision (skip segments 1-3 for fairness)
+				local segmentNum = tonumber(string.match(part.Name, "Segment(%d+)") or "0")
+				if segmentNum > 3 then
+					if distance < 5 then
+						local ownerName = entity.owner.Name or (entity.owner.player and entity.owner.player.Name) or "Unknown"
+						warn("AI Snake died from hitting body of " .. ownerName)
+						self:Destroy()
+						return -- Stop checking
 					end
 				end
 			end
 		end
 	end
 
-	local orbsToCheck = {}
+	-- HIGH-PERFORMANCE ORB PICKUP USING SPATIAL GRID
+	-- Query nearby orbs instead of checking all orbs in workspace
+	local nearbyOrbs = SpatialGrid.QueryRadius(headPos, pickupRadius + 2) -- Slightly larger radius for buffer
+	
+	for _, entity in ipairs(nearbyOrbs) do
+		if entity.type == "ORB" then
+			local orb = entity.part
+			if orb and orb:IsA("BasePart") and orb.Parent then
+				local dist = (orb.Position - headPos).Magnitude
 
-	-- Add orbs from workspace
-	for _, obj in pairs(Workspace:GetChildren()) do
-		if obj:IsA("BasePart") and (obj.Name == "Orb" or obj.Name == "UpgradeOrb" or obj.Name == "DeathOrb") then
-			table.insert(orbsToCheck, obj)
-		end
-	end
-
-	-- Also check OrbFolder if it exists
-	local orbFolder = Workspace:FindFirstChild("OrbFolder") or Workspace:FindFirstChild("Orbs")
-	if orbFolder then
-		for _, orb in ipairs(orbFolder:GetChildren()) do
-			if orb:IsA("BasePart") then
-				table.insert(orbsToCheck, orb)
-			end
-		end
-	end
-
-	-- Now check all orbs
-	for _, orb in ipairs(orbsToCheck) do
-		if orb:IsA("BasePart") and orb.Parent then
-			local dist = (orb.Position - headPos).Magnitude
-
-			if dist <= pickupRadius then
+				if dist <= pickupRadius then
 				-- Check if orb is already being collected
 				local isBeingCollected = orb:GetAttribute("BeingCollected")
 				if isBeingCollected then
@@ -2944,6 +2980,7 @@ function AISnake:updateMovement(dt)
 				-- Destroy the orb
 				orb:Destroy()
 				break -- Only pick up one orb per frame
+				end
 			end
 		end
 	end
@@ -3053,7 +3090,10 @@ function AISnake:updateMovement(dt)
 		end
 	end
 
-	-- Set velocity for collision detection
+	-- Set velocity for collision detection (check if still alive)
+	if self._destroyed or not self.HeadParts or not self.HeadParts.head then
+		return
+	end
 	self.HeadParts.head.AssemblyLinearVelocity = self.Direction * self.Speed
 
 	-- CHECK FOR COLLISIONS (OPTIMIZED - run less frequently)
@@ -3420,21 +3460,38 @@ AISnake._brainConnection = RunService.Stepped:Connect(function(time, deltaTime)
 	end
 end)
 
--- Get segment color matching OptimizedSnakeSystem
-function AISnake:getSegmentColor(index)
+-- Get segment color with stable world-position based pattern
+function AISnake:getSegmentColor(index, position)
 	if not self.Config or not self.Config.BodyColors or #self.Config.BodyColors == 0 then
 		return Color3.fromRGB(255, 255, 51) -- Default yellow color
 	end
 
 	if index == 0 then
+		-- Head color is always the same
 		return self.Config.HeadColor or self.Config.BodyColors[1]
 	elseif index <= 8 then -- HEAD_BLEND_SEGMENTS = 8
+		-- The smooth blend from head-to-body is also fine
 		local blendFactor = (index / 8) ^ 0.7
 		local headColor = self.Config.HeadColor or self.Config.BodyColors[1]
 		local bodyColor = self.Config.BodyColors[1]
 		return headColor:Lerp(bodyColor, blendFactor)
 	else
-		local colorIndex = ((index - 1) % #self.Config.BodyColors) + 1
+		-- *** THE NEW, STABLE COLOR LOGIC ***
+		-- The pattern is now based on the segment's actual position in the world, not its index.
+		
+		-- 1. Define the size of one full color pattern cycle (in studs)
+		local patternLength = 25 
+		
+		-- 2. Calculate a stable value based on the segment's world position
+		-- We use the dot product to measure how far "along" the snake's body the point is.
+		local distanceAlongSnake = self.Position:Dot(self.Direction) + position:Dot(self.Direction)
+		
+		-- 3. Use math.fmod to create a repeating pattern
+		local patternValue = math.fmod(distanceAlongSnake, patternLength) / patternLength
+		
+		-- 4. Map this value to the color array
+		local colorIndex = math.floor(patternValue * #self.Config.BodyColors) + 1
+		
 		return self.Config.BodyColors[colorIndex]
 	end
 end
@@ -3516,7 +3573,7 @@ function AISnake:ensureSegmentExists(index)
 		return nil
 	end
 
-	local color = self:getSegmentColor(index)
+	local color = self:getSegmentColor(index, targetData.position) -- Pass position for stable coloring
 	segment = createSegment(index, targetData.position, color, self.Config, self.Model, self.CurrentLength)
 
 	-- Apply proper size
