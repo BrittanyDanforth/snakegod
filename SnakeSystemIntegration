@@ -386,8 +386,15 @@ end)
 -- Handle spawn requests from menu
 local respawnEvent = ReplicatedStorage:FindFirstChild("RespawnSnake")
 if respawnEvent then
-	respawnEvent.OnServerEvent:Connect(function(player)
+	respawnEvent.OnServerEvent:Connect(function(player, username)
 		print("🎮 Respawn requested for:", player.Name)
+		
+		-- Store username if provided
+		if username and type(username) == "string" then
+			player:SetAttribute("SlitherUsername", username)
+			print("📝 Username set to:", username)
+		end
+		
 		if player.Character then
 			player.Character:Destroy()
 		end

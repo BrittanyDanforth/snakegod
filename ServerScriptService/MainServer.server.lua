@@ -160,6 +160,12 @@ local function onPlayerAdded(player)
     -- Check periodically for snake creation
     local checkConnection
     checkConnection = RunService.Heartbeat:Connect(function()
+        -- Safety check in case controller was destroyed
+        if not controller or not playerControllers[player] then
+            checkConnection:Disconnect()
+            return
+        end
+        
         if controller.snakeObject or controller.isDestroyed then
             checkConnection:Disconnect()
             return
@@ -241,6 +247,9 @@ local function onPlayerAdded(player)
         -- Set up death handler for orb spawning
         local humanoid = character:WaitForChild("Humanoid")
         humanoid.Died:Connect(function()
+            -- Safety check in case player left
+            if not player.Parent then return end
+            
             -- Get snake length for orb calculation
             local snakeLength = 55 -- default
             if player:FindFirstChild("leaderstats") then
@@ -267,7 +276,7 @@ local function onPlayerAdded(player)
         -- Also set up monitoring for snake creation
         local checkCount = 0
         task.spawn(function()
-            while not currentController.snakeObject and checkCount < 10 do
+            while currentController and not currentController.snakeObject and checkCount < 10 do
                 task.wait(0.5)
                 checkForSnake()
                 checkCount = checkCount + 1

@@ -3,6 +3,8 @@
     Handles player input processing, movement, and collision response
 ]]
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
 local AliveState = {}
 AliveState.__index = AliveState
 
@@ -17,6 +19,26 @@ function AliveState:OnEnter()
     -- Enable player controls
     self.controller.collisionState.canCollide = true
     
+    -- Resume snake movement on client
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local resumeMovementRemote = remotes:FindFirstChild("ResumeSnakeMovement")
+    if resumeMovementRemote then
+        resumeMovementRemote:FireClient(self.controller.player)
+    end
+    
+    -- Resume server-side snake movement if it was stopped
+    local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[self.controller.player]
+    if snakeSystem and not snakeSystem.updateConnection then
+
+        -- Re-create the update connection
+        local RunService = game:GetService("RunService")
+        snakeSystem.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
+            if snakeSystem.update then
+                snakeSystem:update(deltaTime)
+            end
+        end)
+    end
+    
     -- Notify systems that player is alive
     self.controller:notifyStateChange("Alive")
     
@@ -25,6 +47,8 @@ function AliveState:OnEnter()
         self.controller.player:SetAttribute("IsDead", false)
         self.controller.player:SetAttribute("IsReviving", false)
     end
+    
+
 end
 
 function AliveState:OnExecute(dt)
