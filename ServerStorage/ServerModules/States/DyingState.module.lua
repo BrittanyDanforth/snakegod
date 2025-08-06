@@ -62,8 +62,7 @@ function DyingState:OnEnter(collisionData)
             action = "hide"
         })
         
-        -- Wait a moment for death to process
-        task.wait(0.5)
+        -- Don't wait - show revive prompt immediately
         
         -- Disable movement but don't kill yet
         if humanoid then
@@ -72,7 +71,7 @@ function DyingState:OnEnter(collisionData)
             humanoid.PlatformStand = true
         end
         
-        -- Make snake invisible/non-collidable
+        -- Make snake invisible/non-collidable immediately
         if self.controller.snakeObject then
             if self.controller.snakeObject:IsA("Model") then
                 for _, part in ipairs(self.controller.snakeObject:GetDescendants()) do
@@ -84,10 +83,7 @@ function DyingState:OnEnter(collisionData)
             end
         end
         
-        -- Short pause before showing prompt
-        task.wait(0.2)
-        
-        -- Check for revives
+        -- Check for revives immediately
         if self.controller:hasReviveToken() then
             warn("[DyingState] Player has revive tokens available")
             
@@ -108,7 +104,7 @@ function DyingState:OnEnter(collisionData)
                 self.controller.player:SetAttribute("RevivePromptActive", true)
                 self.controller.player:SetAttribute("AwaitingReviveResponse", true)
                 
-                -- Fire revive prompt to client
+                -- Fire revive prompt to client IMMEDIATELY
                 promptRevive:FireClient(self.controller.player, {
                     revivesLeft = self.controller.player:GetAttribute("RevivesAvailable"),
                     deathCause = collisionData and (
@@ -166,6 +162,9 @@ function DyingState:OnEnter(collisionData)
                                 })
                             end
                             
+                            -- Spawn death orbs
+                            self:_spawnDeathOrbs()
+                            
                             resolve("Spectating")
                         end
                     end
@@ -193,6 +192,9 @@ function DyingState:OnEnter(collisionData)
                             })
                         end
                         
+                        -- Spawn death orbs
+                        self:_spawnDeathOrbs()
+                        
                         resolve("Spectating")
                     end
                 end)
@@ -211,13 +213,15 @@ function DyingState:OnEnter(collisionData)
                 end)
             else
                 warn("[DyingState] PromptRevive remote not found!")
-                -- Wait a bit before killing to prevent jarring transition
-                task.wait(1.0)
                 -- Kill the player since we can't prompt
                 if humanoid and humanoid.Health > 0 then
                     warn("[DyingState] Killing player humanoid (no prompt remote)")
                     humanoid.Health = 0
                 end
+                
+                -- Spawn death orbs
+                self:_spawnDeathOrbs()
+                
                 task.wait(0.5)
                 resolve("Spectating")
             end
@@ -225,21 +229,21 @@ function DyingState:OnEnter(collisionData)
             -- No revives available, go straight to spectating
             warn("[DyingState] No revive tokens available")
             
-            -- Wait a bit before showing death UI to prevent jarring transition
-            task.wait(1.0)
-            
-            -- Show death UI after delay
+            -- Show death UI immediately
             if deathUIRemote then
                 deathUIRemote:FireClient(self.controller.player, {
                     action = "show"
                 })
             end
             
-            -- Kill the player after showing UI
+            -- Kill the player
             if humanoid and humanoid.Health > 0 then
                 warn("[DyingState] Killing player humanoid (no revives)")
                 humanoid.Health = 0
             end
+            
+            -- Spawn death orbs
+            self:_spawnDeathOrbs()
             
             -- Wait for death to process
             task.wait(0.5)
@@ -261,37 +265,38 @@ function DyingState:OnExit()
 end
 
 function DyingState:_spawnDeathOrbs()
-    -- Spawn orbs at death location
-    local head = self.controller:getSnakeHead()
-    if not head then return end
+    -- Death orbs are handled by SnakeSystemIntegration when the humanoid dies
+    -- We just need to make sure the humanoid dies after the player declines revive
+    -- The MainServer's humanoid.Died connection will handle orb spawning
     
-    local OrbUtils = ReplicatedStorage:FindFirstChild("OrbUtils")
-    if not OrbUtils then return end
+    warn("[DyingState] Death orbs will be spawned by the main death system")
     
-    local OrbUtilsModule = require(OrbUtils)
-    
-    -- Calculate orbs to spawn based on length
-    local orbCount = math.min(
-        math.floor(self.controller:getLength() * 0.7),
-        self.controller.config.maxDeathOrbs or 50
-    )
-    
-    -- Spawn orbs asynchronously
-    task.spawn(function()
-        for i = 1, orbCount do
-            if self.controller.isDestroyed then break end
+    -- Alternative: Manually trigger death orb spawning if needed
+    local SnakeCollisionHandler = workspace:FindFirstChild("SnakeCollisionHandler_FINAL")
+    if SnakeCollisionHandler then
+        local handler = require(SnakeCollisionHandler)
+        if handler and handler.spawnDeathOrbsForPlayer then
+            -- Get snake segments for death orb spawning
+            local segmentPositions = {}
+            if self.controller.snakeObject and self.controller.snakeObject:IsA("Model") then
+                for i = 0, 100 do
+                    local segment = self.controller.snakeObject:FindFirstChild("Segment" .. i) or 
+                                   self.controller.snakeObject:FindFirstChild("Segment" .. i .. "_Head")
+                    if segment and segment:IsA("BasePart") then
+                        table.insert(segmentPositions, segment.Position)
+                    end
+                end
+            end
             
-            local offset = Vector3.new(
-                math.random(-10, 10),
-                0,
-                math.random(-10, 10)
-            )
+            -- If no segments found, use death position
+            if #segmentPositions == 0 and self.deathPosition then
+                segmentPositions = {self.deathPosition}
+            end
             
-            -- OrbUtilsModule.spawnOrb(head.Position + offset, 1)
-            -- Orb spawning is handled by the existing SnakeSystemIntegration
-            task.wait(0.03) -- Small delay between orbs
+            -- Spawn death orbs
+            handler.spawnDeathOrbsForPlayer(self.controller.player, segmentPositions, self.currentLength)
         end
-    end)
+    end
 end
 
 function DyingState:_freezeCamera()

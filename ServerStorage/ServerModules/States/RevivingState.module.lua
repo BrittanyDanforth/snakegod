@@ -34,8 +34,8 @@ function RevivingState:OnEnter()
         -- Set reviving attribute
         self.controller.player:SetAttribute("IsReviving", true)
         
-        -- Start countdown
-        local countdownDuration = self.controller.config.reviveCountdown or 5
+        -- Start countdown - reduced from 5 to 3 seconds
+        local countdownDuration = 3  -- Faster revive time
         local startTime = os.clock()
         
         -- Update UI with countdown

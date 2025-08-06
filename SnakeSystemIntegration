@@ -40,7 +40,9 @@ if not OptimizedSnakeSystem then
 end
 
 -- Initialize the system (creates networking folder)
-OptimizedSnakeSystem.init()
+if OptimizedSnakeSystem and OptimizedSnakeSystem.init then
+	OptimizedSnakeSystem.init()
+end
 
 -- Wait a moment for folder creation
 wait(0.1)
@@ -185,26 +187,23 @@ local function onCharacterAdded(character)
 		player:SetAttribute("ReviveSnakeLength", nil)
 	end
 
-	print("Creating snake with config - InitialLength:", config.InitialLength, "MaxSegments:", config.MaxSegments)
-
-	-- Create optimized snake
-	print("🐍 Creating snake for", player.Name, "with config:", config.InitialLength, "length")
-	local success, snake = pcall(function()
-		return OptimizedSnakeSystem.createSnake(character, config)
-	end)
-
-	if not success then
-		warn("❌ Error creating snake:", snake)
-		return
+	-- Apply gamepass multipliers
+	if GrowthMultiplier > 1 then
+		config.InitialLength = math.floor(config.InitialLength * GrowthMultiplier)
+		print("✅ Applying", GrowthMultiplier, "x growth multiplier! New length:", config.InitialLength)
 	end
-
-	if not snake then
-		warn("❌ Failed to create snake for", player.Name)
-		return
-	end
-
-	print("✅ Snake created successfully for", player.Name)
-	activeSnakes[player] = snake
+	
+	-- Log config (less verbose)
+	-- print("Creating snake with config - InitialLength:", config.InitialLength, "MaxSegments:", config.MaxSegments)
+	print("🐍 Creating snake for", player.Name, "with length:", config.InitialLength)
+	
+	-- Create the snake
+	local snake = OptimizedSnakeSystem.createSnake(character, config)
+	if snake then
+		-- print("✅ Snake created successfully for", player.Name)
+		
+		-- Store snake reference
+		PlayerSnakes[player] = snake
 
 	-- Add to global table for collision handler
 	if not _G.PlayerSnakes then
@@ -406,4 +405,12 @@ end
 
 -- Removed auto-spawn - players spawn when clicking Play button
 
-print("✅ Snake System Integration loaded!")
+-- Return the public API
+return {
+	createSnake = createSnakeForPlayer,
+	removeSnake = removeSnakeForPlayer,
+	respawnSnake = respawnSnakeWithLength,
+	handleRespawn = handlePlayerRespawn
+}
+
+-- print("✅ Snake System Integration loaded!")

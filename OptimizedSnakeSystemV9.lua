@@ -1321,11 +1321,11 @@ local OptimizedSnakeSystemV9 = {}
 
 function OptimizedSnakeSystemV9.init()
 	createNetworkEvents()
-	print("✅ Snake System V9 ULTIMATE - HYPER-ENHANCED WITH PROFESSIONAL VISUALS")
-	print("🐍 Features: Fixed Gap Issues | Enhanced LOD | Stable at Extreme Lengths")
-	print("🔧 Improvements: Smart Visibility | Forced Rendering | Beam-Part Sync")
-	print("🎨 Visual Enhancements: Rainbow Mode | Professional Textures | Advanced Particles")
-	print("📊 Performance: Mobile Optimization | Draw Call Reduction | Smart LOD")
+	print("✅ Snake System V9 initialized")
+	-- print("🐍 Features: Fixed Gap Issues | Enhanced LOD | Stable at Extreme Lengths")
+	-- print("🔧 Improvements: Smart Visibility | Forced Rendering | Beam-Part Sync")
+	-- print("🎨 Visual Enhancements: Rainbow Mode | Professional Textures | Advanced Particles")
+	-- print("📊 Performance: Mobile Optimization | Draw Call Reduction | Smart LOD")
 end
 
 function OptimizedSnakeSystemV9.createSnake(character, config)
