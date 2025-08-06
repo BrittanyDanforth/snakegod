@@ -1,5 +1,5 @@
 -- Death Orb Collection Feedback
--- Shows special UI feedback when collecting death orbs
+-- Shows minimal UI feedback when collecting death orbs
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -13,6 +13,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "OrbCollectionFeedback"
 screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 10 -- Ensure it's on top
 screenGui.Parent = playerGui
 
 -- Wait for the remote event
@@ -22,110 +23,86 @@ if not OrbCollectedEvent then
     return
 end
 
+-- Keep track of active labels to prevent overlap
+local activeLabels = {}
+local lastFeedbackTime = 0
+local feedbackCooldown = 0.1 -- Minimum time between feedback displays
+
 -- Create a function to show collection feedback
 local function showCollectionFeedback(position, orbName, isDeathOrb, orbValue)
     if not isDeathOrb then return end -- Only show special feedback for death orbs
     
-    -- Create a text label that shows the value collected
+    -- Throttle feedback to prevent spam
+    local currentTime = tick()
+    if currentTime - lastFeedbackTime < feedbackCooldown then
+        return -- Skip this feedback
+    end
+    lastFeedbackTime = currentTime
+    
+    -- Limit active labels
+    if #activeLabels > 5 then
+        return -- Too many active labels, skip
+    end
+    
+    -- Get viewport size
+    local viewportSize = workspace.CurrentCamera.ViewportSize
+    
+    -- Random position on screen (avoid edges)
+    local margin = 100
+    local randomX = math.random(margin, viewportSize.X - margin)
+    local randomY = math.random(margin, viewportSize.Y - margin)
+    
+    -- Check if position is too close to other active labels
+    for _, label in pairs(activeLabels) do
+        if label and label.Parent then
+            local labelPos = label.Position
+            local dx = math.abs(labelPos.X.Offset - randomX)
+            local dy = math.abs(labelPos.Y.Offset - randomY)
+            if dx < 80 and dy < 40 then
+                -- Too close, adjust position
+                randomX = math.random(margin, viewportSize.X - margin)
+                randomY = math.random(margin, viewportSize.Y - margin)
+            end
+        end
+    end
+    
+    -- Create a small text label that shows the value collected
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(0, 200, 0, 50)
-    label.Position = UDim2.new(0.5, -100, 0.5, -25)
+    label.Size = UDim2.new(0, 60, 0, 30)
+    label.Position = UDim2.new(0, randomX, 0, randomY)
     label.BackgroundTransparency = 1
     label.Text = "+" .. tostring(orbValue or 1)
     label.TextScaled = true
-    label.TextColor3 = Color3.fromRGB(255, 200, 0)
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
     label.TextStrokeColor3 = Color3.new(0, 0, 0)
-    label.TextStrokeTransparency = 0
+    label.TextStrokeTransparency = 0.3
     label.Font = Enum.Font.SourceSansBold
     label.Parent = screenGui
     
-    -- Add a sub-label for death orb indication
-    local subLabel = Instance.new("TextLabel")
-    subLabel.Size = UDim2.new(1, 0, 0.4, 0)
-    subLabel.Position = UDim2.new(0, 0, 1, -5)
-    subLabel.BackgroundTransparency = 1
-    subLabel.Text = "REVENGE ORB!"
-    subLabel.TextScaled = true
-    subLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-    subLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
-    subLabel.TextStrokeTransparency = 0
-    subLabel.Font = Enum.Font.SourceSansItalic
-    subLabel.Parent = label
+    -- Add to active labels
+    table.insert(activeLabels, label)
     
-    -- Convert 3D position to screen position
-    local camera = workspace.CurrentCamera
-    local screenPos, onScreen = camera:WorldToViewportPoint(position)
+    -- Simple fade out animation
+    local fadeInfo = TweenInfo.new(0.8, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+    local fadeTween = TweenService:Create(label, fadeInfo, {
+        TextTransparency = 1,
+        TextStrokeTransparency = 1,
+        Position = UDim2.new(0, randomX, 0, randomY - 30) -- Slight upward drift
+    })
     
-    if onScreen then
-        label.Position = UDim2.new(0, screenPos.X - 100, 0, screenPos.Y - 25)
-    end
+    -- Play animation
+    fadeTween:Play()
     
-    -- Animate the label
-    local startSize = label.Size
-    local endSize = UDim2.new(0, 300, 0, 75)
-    
-    -- Scale up animation
-    local scaleTween = TweenService:Create(label,
-        TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-        {
-            Size = endSize,
-            Position = UDim2.new(0, screenPos.X - 150, 0, screenPos.Y - 37.5)
-        }
-    )
-    scaleTween:Play()
-    
-    -- Float up and fade animation
-    task.wait(0.3)
-    local floatTween = TweenService:Create(label,
-        TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        {
-            Position = UDim2.new(0, screenPos.X - 150, 0, screenPos.Y - 100),
-            TextTransparency = 1,
-            TextStrokeTransparency = 1
-        }
-    )
-    
-    local subFloatTween = TweenService:Create(subLabel,
-        TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        {
-            TextTransparency = 1,
-            TextStrokeTransparency = 1
-        }
-    )
-    
-    floatTween:Play()
-    subFloatTween:Play()
-    
-    -- Rainbow effect during animation
-    local connection
-    local hue = 0
-    connection = RunService.Heartbeat:Connect(function(dt)
-        hue = (hue + dt * 2) % 1
-        label.TextColor3 = Color3.fromHSV(hue, 1, 1)
-    end)
-    
-    floatTween.Completed:Connect(function()
-        if connection then
-            connection:Disconnect()
+    -- Clean up when done
+    fadeTween.Completed:Connect(function()
+        -- Remove from active labels
+        for i, activeLabel in ipairs(activeLabels) do
+            if activeLabel == label then
+                table.remove(activeLabels, i)
+                break
+            end
         end
         label:Destroy()
-    end)
-    
-    -- Screen flash effect
-    local flash = Instance.new("Frame")
-    flash.Size = UDim2.new(1, 0, 1, 0)
-    flash.Position = UDim2.new(0, 0, 0, 0)
-    flash.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
-    flash.BackgroundTransparency = 0.8
-    flash.Parent = screenGui
-    
-    local flashTween = TweenService:Create(flash,
-        TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        {BackgroundTransparency = 1}
-    )
-    flashTween:Play()
-    flashTween.Completed:Connect(function()
-        flash:Destroy()
     end)
 end
 

@@ -434,68 +434,43 @@ local function createDeathOrbCollectVFX(position, color, value)
 	-- Create the standard orb collection effect
 	createOrbCollectVFX(position, color)
 	
-	-- Add extra effects for death orbs
+	-- Add subtle extra effects for death orbs
 	local attachment = Instance.new("Attachment")
 	attachment.Position = position
 	attachment.Parent = workspace.Terrain
 	
-	-- Create a burst effect that scales with value
+	-- Create a subtle burst effect
 	local burst = Instance.new("ParticleEmitter")
 	burst.Texture = "rbxasset://textures/particles/sparkles_main.dds"
 	burst.Color = ColorSequence.new{
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 200, 0)),
-		ColorSequenceKeypoint.new(0.5, color),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255))
+		ColorSequenceKeypoint.new(0, color),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(1, color)
 	}
-	burst.Lifetime = NumberRange.new(0.5, 1)
+	burst.Lifetime = NumberRange.new(0.3, 0.6)
 	burst.Rate = 0
-	burst.Speed = NumberRange.new(5, 10)
+	burst.Speed = NumberRange.new(3, 6)
 	burst.SpreadAngle = Vector2.new(360, 360)
 	burst.VelocityInheritance = 0
 	burst.EmissionDirection = Enum.NormalId.Top
 	burst.Size = NumberSequence.new{
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.5, 0.5),
+		NumberSequenceKeypoint.new(0, 0.5),
+		NumberSequenceKeypoint.new(0.5, 0.3),
 		NumberSequenceKeypoint.new(1, 0)
 	}
 	burst.Transparency = NumberSequence.new{
-		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0, 0.3),
 		NumberSequenceKeypoint.new(1, 1)
 	}
 	burst.Parent = attachment
 	
-	-- Emit particles based on value
-	burst:Emit(20 + value * 2)
-	
-	-- Create a shockwave effect
-	local shockwave = Instance.new("Part")
-	shockwave.Name = "DeathOrbShockwave"
-	shockwave.Anchored = true
-	shockwave.CanCollide = false
-	shockwave.Transparency = 0.5
-	shockwave.Material = Enum.Material.ForceField
-	shockwave.Color = color
-	shockwave.Size = Vector3.new(1, 0.1, 1)
-	shockwave.Shape = Enum.PartType.Cylinder
-	shockwave.CFrame = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
-	shockwave.Parent = workspace
-	
-	-- Animate the shockwave
-	local TweenService = game:GetService("TweenService")
-	local shockwaveTween = TweenService:Create(shockwave, 
-		TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{
-			Size = Vector3.new(10 + value, 0.1, 10 + value),
-			Transparency = 1
-		}
-	)
-	shockwaveTween:Play()
+	-- Emit particles based on value (but not too many)
+	burst:Emit(math.min(10 + value, 20))
 	
 	-- Clean up
-	Debris:AddItem(attachment, 2)
-	Debris:AddItem(shockwave, 1)
+	Debris:AddItem(attachment, 1)
 	
-	-- Play a special sound if we have a sound service
+	-- Play a subtle sound
 	local soundPart = Instance.new("Part")
 	soundPart.Anchored = true
 	soundPart.CanCollide = false
@@ -505,8 +480,8 @@ local function createDeathOrbCollectVFX(position, color, value)
 	
 	local sound = Instance.new("Sound")
 	sound.SoundId = "rbxassetid://9125713501" -- Magical collect sound
-	sound.Volume = 0.3 + math.min(value * 0.05, 0.5)
-	sound.Pitch = 1 + math.random() * 0.2 - 0.1
+	sound.Volume = 0.2 -- Quieter
+	sound.Pitch = 1.2 + math.random() * 0.2 - 0.1
 	sound.Parent = soundPart
 	sound:Play()
 	

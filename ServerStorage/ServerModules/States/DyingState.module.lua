@@ -573,8 +573,8 @@ function DyingState:_createDeathOrb(position, value)
     orb.Anchored = true
     orb.Position = position
     
-    -- Start with a warm golden color that stands out
-    local hueStart = math.random() * 0.15 + 0.05 -- Golden to orange range
+    -- Start with a random color for immediate rainbow effect
+    local hueStart = math.random()
     orb.Color = Color3.fromHSV(hueStart, 1, 1)
     
     -- Set attributes for the orb system
@@ -592,18 +592,12 @@ function DyingState:_createDeathOrb(position, value)
     -- Parent to Orbs folder BEFORE adding attachments/particles
     orb.Parent = orbsFolder
     
-    -- Rainbow effect with death orb specific colors
+    -- Rainbow effect - full spectrum like original
     task.spawn(function()
         local hue = hueStart
-        local hueDirection = 1
         while orb and orb.Parent do
-            -- Oscillate between warm colors (red-orange-yellow)
-            hue = hue + 0.015 * hueDirection
-            if hue > 0.2 or hue < 0 then
-                hueDirection = -hueDirection
-                hue = math.clamp(hue, 0, 0.2)
-            end
-            
+            -- Full rainbow cycle
+            hue = (hue + 0.01) % 1
             local color = Color3.fromHSV(hue, 1, 1)
             orb.Color = color
             if glow and glow.Parent then
