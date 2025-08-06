@@ -1,0 +1,560 @@
+-- GamepassHandler - ServerScriptService
+-- Handles all gamepass functionality and benefits
+
+local RunService = game:GetService("RunService")
+
+-- STUDIO TESTING OVERRIDE - Set to true to test gamepasses in studio
+local STUDIO_TESTING = RunService:IsStudio()
+local STUDIO_OVERRIDE_GAMEPASSES = {
+	["Magnet"] = true,  -- Test magnet in studio
+	["2x Coins"] = false,
+	["2x Growth"] = false,
+	["Revive"] = true,  -- Test revive in studio
+	-- Add more as needed
+}
+
+print("🎮 GamepassHandler loading...")
+if STUDIO_TESTING then
+	warn("⚠️ STUDIO TESTING MODE - Some gamepasses will be overridden!")
+end
+
+local Players = game:GetService("Players")
+local MarketplaceService = game:GetService("MarketplaceService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- GAMEPASS IDs (Replace with your actual IDs)
+local GAMEPASS_IDS = {
+	["Lifeline Boost"] = 123456789, -- TODO: Replace with real ID
+	["Mega Speed"] = 123456790, -- TODO: Replace with real ID
+	["2x Growth"] = 123456791, -- TODO: Replace with real ID
+	["2x Coins"] = 123456792, -- TODO: Replace with real ID
+	["Magnet"] = 1335069823,  -- Real gamepass ID - WORKING!
+	["Ghost Mode"] = 123456794, -- TODO: Replace with real ID
+	["VIP Access"] = 123456795, -- TODO: Replace with real ID
+	["Pet Ally"] = 123456796, -- TODO: Replace with real ID (skipping for now)
+	["Revive"] = 123456797 -- TODO: Replace with real ID
+}
+
+-- Create RemoteEvents
+local remotes = ReplicatedStorage:FindFirstChild("Remotes") or Instance.new("Folder")
+remotes.Name = "Remotes"
+remotes.Parent = ReplicatedStorage
+
+local checkGamepassRemote = remotes:FindFirstChild("CheckGamepass") or Instance.new("RemoteFunction")
+checkGamepassRemote.Name = "CheckGamepass"
+checkGamepassRemote.Parent = remotes
+
+local gamepassPurchasedRemote = remotes:FindFirstChild("GamepassPurchased") or Instance.new("RemoteEvent")
+gamepassPurchasedRemote.Name = "GamepassPurchased"
+gamepassPurchasedRemote.Parent = remotes
+
+local useBoostRemote = remotes:FindFirstChild("UseBoost") or Instance.new("RemoteEvent")
+useBoostRemote.Name = "UseBoost"
+useBoostRemote.Parent = remotes
+
+-- Create PromptRevive remote early so ReviveUI doesn't have infinite yield
+local promptReviveRemote = remotes:FindFirstChild("PromptRevive") or Instance.new("RemoteEvent")
+promptReviveRemote.Name = "PromptRevive"
+promptReviveRemote.Parent = remotes
+
+local boostStatusRemote = remotes:FindFirstChild("BoostStatus") or Instance.new("RemoteEvent")
+boostStatusRemote.Name = "BoostStatus"
+boostStatusRemote.Parent = remotes
+
+-- Player gamepass cache
+local playerGamepasses = {}
+
+-- Player boost inventories and active boosts
+local playerBoostInventory = {}
+local activeBoosts = {}
+
+-- Boost configurations
+local BOOST_CONFIGS = {
+	["Speed Boost"] = {
+		multiplier = 1.5,
+		duration = 30,
+		attribute = "ActiveSpeedBoost",
+		cooldown = 60
+	},
+	["Mega Speed"] = {
+		multiplier = 2.0,
+		duration = 20,
+		attribute = "ActiveMegaSpeed",
+		cooldown = 120
+	},
+	["Growth Boost"] = {
+		multiplier = 2.0,
+		duration = 45,
+		attribute = "ActiveGrowthBoost",
+		cooldown = 90
+	},
+	["Ghost Mode"] = {
+		duration = 10,
+		attribute = "ActiveGhostMode",
+		cooldown = 180
+	},
+	["Magnet"] = {
+		multiplier = 2.0,
+		duration = 60,
+		attribute = "ActiveMagnet",
+		cooldown = 120
+	}
+}
+
+-- Check if player owns a gamepass
+local function hasGamepass(player, gamepassName)
+	local gamepassId = GAMEPASS_IDS[gamepassName]
+	if not gamepassId then 
+		warn("Gamepass not found:", gamepassName)
+		return false 
+	end
+
+	print("Checking gamepass:", gamepassName, "ID:", gamepassId, "for player:", player.Name)
+
+	-- Studio testing override
+	if STUDIO_TESTING and STUDIO_OVERRIDE_GAMEPASSES[gamepassName] ~= nil then
+		local override = STUDIO_OVERRIDE_GAMEPASSES[gamepassName]
+		print("🎮 STUDIO OVERRIDE:", gamepassName, "=", override)
+		return override
+	end
+
+	-- Check cache first
+	if playerGamepasses[player.UserId] and playerGamepasses[player.UserId][gamepassName] ~= nil then
+		local cached = playerGamepasses[player.UserId][gamepassName]
+		print("Using cached value:", cached)
+		return cached
+	end
+
+	-- Check with Roblox
+	local success, hasPass = pcall(function()
+		return MarketplaceService:UserOwnsGamePassAsync(player.UserId, gamepassId)
+	end)
+
+	if success then
+		print("Roblox check result:", hasPass)
+		-- Cache the result
+		if not playerGamepasses[player.UserId] then
+			playerGamepasses[player.UserId] = {}
+		end
+		playerGamepasses[player.UserId][gamepassName] = hasPass
+		return hasPass
+	else
+		warn("Failed to check gamepass:", hasPass)
+	end
+
+	return false
+end
+
+-- Apply gamepass benefits
+local function applyGamepassBenefits(player)
+	local character = player.Character
+	if not character then return end
+
+	-- Store benefits in player attributes
+	local speedMultiplier = 1
+	local growthMultiplier = 1
+	local coinMultiplier = 1
+	local hasGhostMode = false
+	local hasMagnet = false
+
+	-- Check each gamepass
+	if hasGamepass(player, "Lifeline Boost") then
+		-- Give emergency boost items every 3 minutes
+		player:SetAttribute("HasLifelineBoost", true)
+		speedMultiplier = speedMultiplier * 1.1 -- Small permanent boost
+	end
+
+	if hasGamepass(player, "Mega Speed") then
+		speedMultiplier = speedMultiplier * 1.5
+	end
+
+	if hasGamepass(player, "2x Growth") then
+		growthMultiplier = growthMultiplier * 2
+	end
+
+	if hasGamepass(player, "2x Coins") then
+		coinMultiplier = coinMultiplier * 2
+	end
+
+	if hasGamepass(player, "Magnet") then
+		hasMagnet = true
+		player:SetAttribute("MagnetRange", 5)  -- 5x collection range (MUCH MORE POWERFUL!)
+		print("✅ Player has Magnet gamepass! MagnetRange set to 5")
+	else
+		player:SetAttribute("MagnetRange", 1)  -- Default range
+		print("❌ Player does not have Magnet gamepass. MagnetRange set to 1")
+	end
+
+	if hasGamepass(player, "VIP Access") then
+		-- VIP gets everything
+		speedMultiplier = math.max(speedMultiplier, 1.25)
+		growthMultiplier = math.max(growthMultiplier, 2)
+		coinMultiplier = 3 -- VIP gets 3x coins
+
+		-- Add VIP tag to player
+		if character:FindFirstChild("Head") then
+			local billboardGui = character.Head:FindFirstChild("VIPTag") or Instance.new("BillboardGui")
+			billboardGui.Name = "VIPTag"
+			billboardGui.Size = UDim2.new(0, 100, 0, 40)
+			billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+			billboardGui.Parent = character.Head
+
+			local textLabel = billboardGui:FindFirstChild("TextLabel") or Instance.new("TextLabel")
+			textLabel.Size = UDim2.new(1, 0, 1, 0)
+			textLabel.BackgroundTransparency = 1
+			textLabel.Text = "👑 VIP"
+			textLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+			textLabel.TextScaled = true
+			textLabel.Font = Enum.Font.SourceSansBold
+			textLabel.Parent = billboardGui
+		end
+	end
+
+	if hasGamepass(player, "Ghost Mode") then
+		hasGhostMode = true
+	end
+
+	if hasGamepass(player, "Magnet Power") then
+		hasMagnet = true
+	end
+
+	-- Apply attributes
+	player:SetAttribute("SpeedMultiplier", speedMultiplier)
+	player:SetAttribute("GrowthMultiplier", growthMultiplier)
+	player:SetAttribute("CoinMultiplier", coinMultiplier)
+	player:SetAttribute("HasGhostMode", hasGhostMode)
+	player:SetAttribute("HasMagnet", hasMagnet)
+
+	-- Check for Revive gamepass
+	if hasGamepass(player, "Revive") then
+		-- Set to 2 revives per life (not cumulative)
+		player:SetAttribute("RevivesAvailable", 2)
+		player:SetAttribute("HasRevive", true)
+		print("✅ Player has Revive gamepass! Set RevivesAvailable to 2")
+	end
+
+	-- Check for Pet Ally gamepass
+	if hasGamepass(player, "Pet Ally") then
+		player:SetAttribute("HasPetAlly", true)
+		-- Pet ally will be spawned by a separate system
+	end
+
+	print("Applied gamepass benefits to", player.Name)
+	print("Speed:", speedMultiplier, "Growth:", growthMultiplier, "Coins:", coinMultiplier)
+end
+
+-- Handle player joining
+Players.PlayerAdded:Connect(function(player)
+	-- Clear cache for this player
+	playerGamepasses[player.UserId] = {}
+
+	-- Apply benefits when character spawns
+	player.CharacterAdded:Connect(function(character)
+		wait(0.5) -- Wait for character to load
+		applyGamepassBenefits(player)
+
+		-- Apply ghost mode if they have it
+		if player:GetAttribute("HasGhostMode") then
+			-- Set a temporary ghost mode attribute for 5 seconds on spawn
+			player:SetAttribute("SpawnGhostMode", true)
+
+			-- Add visual ghost effect to character
+			local ghostEffect = Instance.new("PointLight")
+			ghostEffect.Name = "GhostEffect"
+			ghostEffect.Brightness = 2
+			ghostEffect.Color = Color3.fromRGB(150, 150, 255)
+			ghostEffect.Range = 10
+			ghostEffect.Parent = character:FindFirstChild("HumanoidRootPart")
+
+			-- Add particle effect for extra visibility
+			local attachment = Instance.new("Attachment")
+			attachment.Parent = character:FindFirstChild("HumanoidRootPart")
+
+			local particles = Instance.new("ParticleEmitter")
+			particles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+			particles.Color = ColorSequence.new(Color3.fromRGB(150, 150, 255))
+			particles.LightEmission = 1
+			particles.Rate = 30
+			particles.Lifetime = NumberRange.new(0.5, 1)
+			particles.Speed = NumberRange.new(3)
+			particles.SpreadAngle = Vector2.new(360, 360)
+			particles.Parent = attachment
+
+			-- Remove after 5 seconds
+			task.spawn(function()
+				wait(5)
+				player:SetAttribute("SpawnGhostMode", false)
+
+				if ghostEffect and ghostEffect.Parent then
+					ghostEffect:Destroy()
+				end
+
+				if attachment and attachment.Parent then
+					attachment:Destroy()
+				end
+			end)
+		end
+
+		-- *** REVIVE EFFECT REMOVED ***
+		-- JustRevived attribute check removed - now using direct remote communication
+	end)
+end)
+
+-- Handle player leaving
+Players.PlayerRemoving:Connect(function(player)
+	playerGamepasses[player.UserId] = nil
+end)
+
+-- Remote function to check gamepass ownership
+checkGamepassRemote.OnServerInvoke = function(player, gamepassName)
+	return hasGamepass(player, gamepassName)
+end
+
+-- Handle gamepass purchases
+MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, gamepassId, wasPurchased)
+	print("🛒 Gamepass purchase finished - ID:", gamepassId, "Purchased:", wasPurchased)
+
+	if wasPurchased then
+		-- Find which gamepass was purchased
+		local gamepassName = nil
+		for name, id in pairs(GAMEPASS_IDS) do
+			if id == gamepassId then
+				gamepassName = name
+				break
+			end
+		end
+
+		if gamepassName then
+			print("✅ Purchased gamepass:", gamepassName)
+
+			-- Update cache
+			if not playerGamepasses[player.UserId] then
+				playerGamepasses[player.UserId] = {}
+			end
+			playerGamepasses[player.UserId][gamepassName] = true
+
+			-- Apply benefits immediately
+			applyGamepassBenefits(player)
+
+			-- Notify client
+			gamepassPurchasedRemote:FireClient(player, gamepassName)
+
+			print("✅ Benefits applied for:", gamepassName)
+		else
+			warn("⚠️ Unknown gamepass ID purchased:", gamepassId)
+		end
+	end
+end)
+
+-- Initialize player boost inventory
+local function initializePlayerBoosts(player)
+	if not playerBoostInventory[player] then
+		playerBoostInventory[player] = {
+			["Speed Boost"] = 5,  -- Start with 5 free speed boosts
+			["Mega Speed"] = 0,
+			["Growth Boost"] = 3,  -- Start with 3 free growth boosts
+			["Ghost Mode"] = 0,
+			["Magnet"] = 2  -- Start with 2 free magnets
+		}
+
+		-- Give more boosts to gamepass owners
+		if hasGamepass(player, "VIP Access") then
+			playerBoostInventory[player]["Speed Boost"] = 10
+			playerBoostInventory[player]["Mega Speed"] = 5
+			playerBoostInventory[player]["Growth Boost"] = 10
+			playerBoostInventory[player]["Ghost Mode"] = 3
+			playerBoostInventory[player]["Magnet"] = 10
+		end
+
+		-- Lifeline boost gives emergency speed boosts
+		if hasGamepass(player, "Lifeline Boost") then
+			playerBoostInventory[player]["Speed Boost"] = 999  -- Unlimited emergency boosts
+			-- Auto-give boost every 3 minutes
+			task.spawn(function()
+				while player.Parent do
+					wait(180) -- 3 minutes
+					if player.Parent then
+						-- Notify player they got a lifeline boost
+						boostStatusRemote:FireClient(player, nil, "lifeline_ready", {})
+					end
+				end
+			end)
+		end
+	end
+
+	-- Send inventory to client
+	boostStatusRemote:FireClient(player, nil, "update_inventory", {
+		inventory = playerBoostInventory[player]
+	})
+end
+
+-- Handle boost usage
+local function useBoost(player, boostType)
+	local config = BOOST_CONFIGS[boostType]
+	if not config then return end
+
+	-- Check if player has the boost
+	local inventory = playerBoostInventory[player]
+	if not inventory or inventory[boostType] <= 0 then
+		return
+	end
+
+	-- Check if boost is already active
+	if activeBoosts[player] and activeBoosts[player][boostType] then
+		return
+	end
+
+	-- Use the boost
+	if inventory[boostType] < 999 then  -- Don't decrement unlimited boosts
+		inventory[boostType] = inventory[boostType] - 1
+	end
+
+	-- Initialize active boosts table
+	if not activeBoosts[player] then
+		activeBoosts[player] = {}
+	end
+
+	-- Activate boost
+	activeBoosts[player][boostType] = {
+		startTime = tick(),
+		duration = config.duration
+	}
+
+	-- Set player attribute
+	player:SetAttribute(config.attribute, true)
+
+	-- Apply immediate effects
+	if boostType == "Speed Boost" or boostType == "Mega Speed" then
+		local currentMultiplier = player:GetAttribute("SpeedMultiplier") or 1
+		player:SetAttribute("TempSpeedMultiplier", config.multiplier)
+
+		-- Update SnakeMovement speed
+		if _G.SnakeState then
+			_G.SnakeState.speedMultiplier = currentMultiplier * config.multiplier
+		end
+	elseif boostType == "Growth Boost" then
+		player:SetAttribute("TempGrowthMultiplier", config.multiplier)
+	elseif boostType == "Magnet" then
+		player:SetAttribute("TempMagnetRange", config.multiplier)
+	elseif boostType == "Ghost Mode" then
+		-- Make snake semi-transparent
+		local character = player.Character
+		if character then
+			for _, part in pairs(character:GetDescendants()) do
+				if part:IsA("BasePart") and part.Name:match("Segment") then
+					part.Transparency = 0.5
+					part.CanCollide = false
+				end
+			end
+		end
+	end
+
+	-- Notify client
+	boostStatusRemote:FireClient(player, boostType, "activate", {
+		duration = config.duration
+	})
+
+	-- Update inventory on client
+	boostStatusRemote:FireClient(player, nil, "update_inventory", {
+		inventory = inventory
+	})
+
+	-- Set cooldown
+	task.wait(config.duration)
+
+	-- Deactivate boost
+	if activeBoosts[player] and activeBoosts[player][boostType] then
+		activeBoosts[player][boostType] = nil
+		player:SetAttribute(config.attribute, false)
+
+		-- Remove temporary multipliers
+		if boostType == "Speed Boost" or boostType == "Mega Speed" then
+			player:SetAttribute("TempSpeedMultiplier", 1)
+			if _G.SnakeState then
+				_G.SnakeState.speedMultiplier = player:GetAttribute("SpeedMultiplier") or 1
+			end
+		elseif boostType == "Growth Boost" then
+			player:SetAttribute("TempGrowthMultiplier", 1)
+		elseif boostType == "Magnet" then
+			player:SetAttribute("TempMagnetRange", 1)
+		elseif boostType == "Ghost Mode" then
+			-- Restore visibility
+			local character = player.Character
+			if character then
+				for _, part in pairs(character:GetDescendants()) do
+					if part:IsA("BasePart") and part.Name:match("Segment") then
+						part.Transparency = 0
+						part.CanCollide = true
+					end
+				end
+			end
+		end
+
+		-- Notify client
+		boostStatusRemote:FireClient(player, boostType, "deactivate", {})
+
+		-- Send cooldown
+		boostStatusRemote:FireClient(player, boostType, "cooldown", {
+			cooldown = config.cooldown
+		})
+	end
+end
+
+-- Handle boost remote
+useBoostRemote.OnServerEvent:Connect(function(player, boostType)
+	task.spawn(function()
+		useBoost(player, boostType)
+	end)
+end)
+
+-- Update player joined handling
+Players.PlayerAdded:Connect(function(player)
+	-- Initialize boosts
+	initializePlayerBoosts(player)
+
+	player.CharacterAdded:Connect(function()
+		applyGamepassBenefits(player)
+	end)
+end)
+
+-- Clean up on player leaving
+Players.PlayerRemoving:Connect(function(player)
+	playerBoostInventory[player] = nil
+	activeBoosts[player] = nil
+	playerGamepasses[player.UserId] = nil
+end)
+
+-- Handle magnet toggle
+local toggleMagnetRemote = remotes:FindFirstChild("ToggleMagnet")
+if not toggleMagnetRemote then
+	toggleMagnetRemote = Instance.new("RemoteEvent")
+	toggleMagnetRemote.Name = "ToggleMagnet"
+	toggleMagnetRemote.Parent = remotes
+end
+
+toggleMagnetRemote.OnServerEvent:Connect(function(player, state)
+	-- Verify player has magnet gamepass
+	if not hasGamepass(player, "Magnet") then
+		warn("Player trying to toggle magnet without gamepass:", player.Name)
+		return
+	end
+
+	-- Update magnet state
+	if state then
+		player:SetAttribute("MagnetRange", 5)  -- Turn on with 5x power
+		print("🧲 Magnet activated for", player.Name)
+	else
+		player:SetAttribute("MagnetRange", 1)  -- Turn off (default range)
+		print("🧲 Magnet deactivated for", player.Name)
+	end
+
+	-- Also set the active state
+	player:SetAttribute("MagnetActive", state)
+end)
+
+-- NOTE: Visual effects for revive should be handled in a LocalScript
+-- Server scripts cannot create client-side visual effects
+-- The RemoteEvent "PlayerRevivedEffect" is fired by SnakeCollisionHandler
+-- and should be received by a LocalScript in StarterPlayerScripts
+
+print("GamepassHandler loaded successfully with boost system!")
