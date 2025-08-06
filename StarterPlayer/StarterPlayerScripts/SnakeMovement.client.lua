@@ -758,12 +758,16 @@ local function initializeForCharacter(character)
 
 		if angleToTarget > 0.01 then -- Only turn if we need to
 			-- Determine the direction of the turn (left or right).
+			-- Use the Y component of the cross product to determine turn direction
 			local cross = State.currentDirection:Cross(State.targetDirection)
-			local turnAxis = cross.Y > 0 and Vector3.new(0, 1, 0) or Vector3.new(0, -1, 0)
+			local turnDirection = cross.Y >= 0 and 1 or -1
 			
-			-- Rotate the current direction by the clamped turn angle.
-			local newDirectionCFrame = CFrame.fromAxisAngle(turnAxis, turnAngle)
-			State.currentDirection = (CFrame.new(Vector3.new(), State.currentDirection) * newDirectionCFrame).LookVector.Unit
+			-- Create a rotation around the Y axis
+			local rotationCFrame = CFrame.fromAxisAngle(Vector3.new(0, 1, 0), turnAngle * turnDirection)
+			
+			-- Apply the rotation to our current direction
+			local newDirection = rotationCFrame * State.currentDirection
+			State.currentDirection = newDirection.Unit
 		end
 		
 		-- Reduce turn rate when near walls to prevent shaking
