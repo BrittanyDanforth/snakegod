@@ -38,7 +38,19 @@ end)
 -- Wait for snake system to be available
 local function waitForSnakeSystem()
     -- SnakeSystemIntegration should already be loaded
-    return true
+    -- Just verify it exists
+    local integration = game.ServerScriptService:FindFirstChild("SnakeSystemIntegration") or 
+                       workspace:FindFirstChild("SnakeSystemIntegration")
+    
+    if integration then
+        local success, module = pcall(require, integration)
+        if success then
+            snakeSystemIntegration = module
+            return true
+        end
+    end
+    
+    return false
 end
 
 -- Create/verify remote events
@@ -74,39 +86,20 @@ end
 
 -- Initialize systems
 local function initializeSystems()
-    warn("[MainServer] Initializing game systems...")
+    print("[MainServer] Initializing game systems...")
     
-    -- Wait for existing systems
-    waitForSnakeSystem()
-    
-    -- Initialize collision system
-    collisionSystem = CollisionModule.new(playerControllers)
-    collisionSystem:start()
-    
-    -- Disable the old InitializeCollisionHandler if it exists
-    local collisionHandler = workspace:FindFirstChild("SnakeCollisionHandlerV1")
-    if not collisionHandler then
-        collisionHandler = workspace:FindFirstChild("SnakeCollisionHandler_FINAL")
-    end
-    if not collisionHandler then
-        -- Try to find it in ServerScriptService
-        collisionHandler = game.ServerScriptService:FindFirstChild("SnakeCollisionHandler_FINAL")
-    end
-    
-    if collisionHandler then
-        collisionHandler:SetAttribute("Disabled", true)
-        collisionHandler.Disabled = true
-        -- warn("[MainServer] Disabled old collision handler:", collisionHandler.Name)
-    end
-    
-    -- Create/verify necessary remote events
+    -- Create RemoteEvents
     createRemoteEvents()
     
-    -- warn("[MainServer] Systems initialized successfully")
+    -- Initialize collision system
+    collisionSystem = CollisionModule.new()
+    collisionSystem:start()
+    
+    -- Other initialization can go here
 end
 
 -- Handle player joining
-local function onPlayerAdded(player)
+local function setupPlayer(player)
     -- warn("[MainServer] Player joined:", player.Name)
     
     -- Check if controller already exists (for respawn cases)
@@ -117,9 +110,20 @@ local function onPlayerAdded(player)
         playerControllers[player] = nil
     end
     
-    -- Create player controller
+    -- Create controller
     local controller = PlayerController.new(player, Config)
     playerControllers[player] = controller
+    
+    -- Register with collision system
+    if collisionSystem then
+        collisionSystem:registerController(player, controller)
+    end
+    
+    -- Expose controller for debugging
+    if not _G.PlayerControllers then
+        _G.PlayerControllers = {}
+    end
+    _G.PlayerControllers[player] = controller
     
         -- Listen for snake creation from SnakeSystemIntegration
     local function checkForSnake()
@@ -260,20 +264,26 @@ local function onPlayerAdded(player)
 end
 
 -- Handle player leaving
-local function onPlayerRemoving(player)
-    warn("[MainServer] Player leaving:", player.Name)
+Players.PlayerRemoving:Connect(function(player)
+    print("[MainServer] Player leaving:", player.Name)
     
+    -- Clean up controller
     local controller = playerControllers[player]
     if controller then
-        -- Destroy controller (handles all cleanup)
         controller:destroy()
         playerControllers[player] = nil
+        
+        -- Unregister from collision system
+        if collisionSystem then
+            collisionSystem:unregisterController(player)
+        end
+        
+        -- Clean up global reference
+        if _G.PlayerControllers then
+            _G.PlayerControllers[player] = nil
+        end
     end
-    
-    if existingSnakes[player] then
-        existingSnakes[player] = nil
-    end
-end
+end)
 
 -- Remote event handlers
 local function setupRemoteHandlers()
@@ -353,8 +363,7 @@ end
 
 -- Main initialization
 local function main()
-    warn("[MainServer] Starting Modular Snake Controller...")
-    -- warn("[MainServer] This works WITH SnakeSystemIntegration")
+    print("[MainServer] Starting Modular Snake Controller...")
     
     -- Initialize core systems
     initializeSystems()
@@ -363,16 +372,15 @@ local function main()
     setupRemoteHandlers()
     
     -- Connect player events
-    Players.PlayerAdded:Connect(onPlayerAdded)
-    Players.PlayerRemoving:Connect(onPlayerRemoving)
+    Players.PlayerAdded:Connect(setupPlayer)
+    -- PlayerRemoving is already connected above
     
     -- Handle existing players (studio testing)
     for _, player in ipairs(Players:GetPlayers()) do
-        onPlayerAdded(player)
+        setupPlayer(player)
     end
     
-    warn("[MainServer] Modular controller ready!")
-    -- warn("[MainServer] Collision system active")
+    print("[MainServer] Modular controller ready!")
 end
 
 -- Run main
