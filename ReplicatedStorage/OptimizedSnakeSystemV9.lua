@@ -9,7 +9,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
-local UserInputService = game:GetService("UserInputService")
+-- Only get UserInputService on client
+local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
 -- LOD System Constants (ENHANCED FOR PERFORMANCE)
 local LOD_UPDATE_RATE = 5 -- Check LOD every N frames
@@ -196,7 +197,7 @@ function Snake.new(character, config)
 	self.beamAnimationOffset = 0
 
 	-- 📊 ENHANCED: Performance detection
-	self.isMobile = UserInputService.TouchEnabled
+	self.isMobile = UserInputService and UserInputService.TouchEnabled or false
 	self.qualityTier = self.isMobile and "mobile" or "desktop"
 	self.particleRateMultiplier = self.isMobile and 0.5 or 1
 
@@ -233,7 +234,7 @@ function Snake.new(character, config)
 	self.segmentVisibility = {} -- Track visibility state of each segment
 	self.lastVisibilityCheck = 0
 	self.lastBeamSync = 0
-	self.camera = workspace.CurrentCamera
+	self.camera = RunService:IsClient() and workspace.CurrentCamera or nil
 	self.isLocalPlayer = (self.player == Players.LocalPlayer)
 
 	-- ENHANCED: LOD state tracking
@@ -813,7 +814,7 @@ function Snake:startUpdateLoop()
 		
 		-- Every 5th frame: LOD and visibility
 		if self.frameCount and self.frameCount % LOD_UPDATE_RATE == 0 then
-			self:checkVisibility()
+			-- checkVisibility method doesn't exist, visibility is handled in the main update loop
 		end
 		
 		-- Every 5th frame: Particle updates
@@ -896,10 +897,13 @@ end
 
 function Snake:updateUnifiedBody()
 	-- DYNAMIC SEGMENT BUDGET (Performance Optimization)
-	local cameraDist = 0
-	if workspace.CurrentCamera then
-		cameraDist = (self.head.Position - workspace.CurrentCamera.CFrame.Position).Magnitude
-	end
+				local cameraDist = 0
+			if RunService:IsClient() and workspace.CurrentCamera then
+				cameraDist = (self.head.Position - workspace.CurrentCamera.CFrame.Position).Magnitude
+			elseif not RunService:IsClient() then
+				-- On server, skip LOD calculations
+				cameraDist = 0
+			end
 	
 	-- Determine segment budget based on distance
 	local segmentBudget = MAX_SEGMENTS
@@ -1356,23 +1360,25 @@ function Snake:setBoosting(boosting)
 			Debris:AddItem(speedLine, 0.4)
 		end
 
-		-- Camera shake effect for local player
-		if self.isLocalPlayer then
+		-- Camera shake effect for local player (client only)
+		if self.isLocalPlayer and RunService:IsClient() then
 			local camera = workspace.CurrentCamera
-			local originalCF = camera.CFrame
+			if camera then
+				local originalCF = camera.CFrame
 
-			spawn(function()
-				for i = 1, 10 do
-					if not self.isBoosting then break end
-					camera.CFrame = originalCF * CFrame.Angles(
-						math.rad(math.random(-1, 1) * 0.5),
-						math.rad(math.random(-1, 1) * 0.5),
-						0
-					)
-					wait(0.03)
-				end
-				camera.CFrame = originalCF
-			end)
+				spawn(function()
+					for i = 1, 10 do
+						if not self.isBoosting then break end
+						camera.CFrame = originalCF * CFrame.Angles(
+							math.rad(math.random(-1, 1) * 0.5),
+							math.rad(math.random(-1, 1) * 0.5),
+							0
+						)
+						wait(0.03)
+					end
+					camera.CFrame = originalCF
+				end)
+			end
 		end
 	else
 		self.boostParticles.Enabled = false
@@ -1380,7 +1386,8 @@ function Snake:setBoosting(boosting)
 end
 
 function Snake:sendNetworkUpdate()
-	if remoteEvents.positionupdate then
+	-- Only send network updates from client
+	if RunService:IsClient() and remoteEvents.positionupdate then
 		remoteEvents.positionupdate:FireServer({
 			position = self.rootPart.Position,
 			lookVector = self.rootPart.CFrame.LookVector,
