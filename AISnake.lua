@@ -1659,8 +1659,9 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	self._visibilityCheckFrame = 0
 	self._segmentUpdateFrame = 0
 	
-	-- Spawn protection
-	self._spawnProtectionTime = tick() + 3 -- 3 seconds of spawn protection
+	-- Spawn protection (increased to 10 seconds)
+	self._spawnProtectionTime = tick() + 10
+	self._isSpawnProtected = true  -- Flag for easier checking
 
 	-- Use preserved personality or assign random one
 	local pType
@@ -1720,10 +1721,10 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		if self.HeadParts.rightEye then
 			self.HeadParts.rightEye.CFrame = self.HeadParts.head.CFrame * CFrame.new(0.4, 0.2, 0.8)
 		end
-		if self.HeadParts.leftPupil then
+		if self.HeadParts.leftPupil and self.HeadParts.leftEye then
 			self.HeadParts.leftPupil.CFrame = self.HeadParts.leftEye.CFrame * CFrame.new(0, 0, 0.15)
 		end
-		if self.HeadParts.rightPupil then
+		if self.HeadParts.rightPupil and self.HeadParts.rightEye then
 			self.HeadParts.rightPupil.CFrame = self.HeadParts.rightEye.CFrame * CFrame.new(0, 0, 0.15)
 		end
 	end
@@ -1889,6 +1890,20 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		-- Check if snake was destroyed during wait
 		if self._destroyed or not self.Segments then
 			return
+		end
+		
+		-- Add spawn protection visual effect
+		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
+			local protectionField = Instance.new("ForceField")
+			protectionField.Parent = self.Model
+			
+			-- Remove protection field when spawn protection expires
+			task.spawn(function()
+				task.wait(10) -- Match spawn protection time
+				if protectionField and protectionField.Parent then
+					protectionField:Destroy()
+				end
+			end)
 		end
 		
 		-- Make segments visible gradually
@@ -2165,7 +2180,15 @@ function AISnake:setConfidenceBuff()
 end
 
 function AISnake:Destroy()
-	if not self._active then return end
+	if self._destroyed then return end
+	
+	-- Check if we're still spawn protected
+	if self._isSpawnProtected and tick() < self._spawnProtectionTime then
+		-- Don't allow destruction during spawn protection
+		return
+	end
+	
+	self._destroyed = true
 	self._active = false
 
 	-- Immediately mark as destroyed to prevent any updates
@@ -2996,90 +3019,103 @@ function AISnake:updateMovement(dt)
 	if self._collisionCheckFrame >= COLLISION_CHECK_INTERVAL then
 		self._collisionCheckFrame = 0
 		
+		-- Update spawn protection status
+		if self._isSpawnProtected and tick() >= self._spawnProtectionTime then
+			self._isSpawnProtected = false
+			print("🛡️ Spawn protection expired for", self.Name or "AI Snake")
+		end
+		
 		-- Skip collision checks during spawn protection
-		if not (self._spawnProtectionTime and tick() < self._spawnProtectionTime) then
-			-- Check collision with player snakes
-			local Players = game:GetService("Players")
-			local myHead = self.HeadParts.head
-			local myHeadPos = myHead.Position
+		if self._isSpawnProtected then
+			return -- Skip ALL collision checks during spawn protection
+		end
+		
+		-- Check collision with player snakes
+		local Players = game:GetService("Players")
+		local myHead = self.HeadParts.head
+		local myHeadPos = myHead.Position
+		
+		-- Check collision with player snakes
+		for _, player in pairs(Players:GetPlayers()) do
+			local snakeModel = nil
 			
-			-- Check collision with player snakes
-			for _, player in pairs(Players:GetPlayers()) do
-				local snakeModel = nil
-				
-				-- First check workspace directly
-				snakeModel = Workspace:FindFirstChild("Snake_" .. player.Name)
-				
-				-- If not found, check SnakeFolder
-				if not snakeModel then
-					local snakeFolder = Workspace:FindFirstChild("SnakeFolder")
-					if snakeFolder then
-						snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
+			-- First check workspace directly
+			snakeModel = Workspace:FindFirstChild("Snake_" .. player.Name)
+			
+			-- If not found, check SnakeFolder
+			if not snakeModel then
+				local snakeFolder = Workspace:FindFirstChild("SnakeFolder")
+				if snakeFolder then
+					snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
+				end
+			end
+			
+			if snakeModel and snakeModel:IsA("Model") then
+				-- Check head-to-head collision
+				local playerHead = snakeModel:FindFirstChild("Segment0_Head")
+				if playerHead and playerHead:IsA("BasePart") then
+					local distance = (playerHead.Position - myHeadPos).Magnitude
+					if distance <= 10 then -- Head collision radius
+						-- AI snake dies in head-to-head collision
+						warn("AI Snake died from head-to-head collision with", player.Name)
+						self:Destroy()
+						return
 					end
 				end
 				
-				if snakeModel and snakeModel:IsA("Model") then
-					-- Check head-to-head collision
-					local playerHead = snakeModel:FindFirstChild("Segment0_Head")
-					if playerHead and playerHead:IsA("BasePart") then
-						local distance = (playerHead.Position - myHeadPos).Magnitude
-						if distance <= 10 then -- Head collision radius
-							-- AI snake dies in head-to-head collision
-							warn("AI Snake died from head-to-head collision with", player.Name)
+				-- Check collision with player body segments (optimized)
+				local segmentCheck = math.random(4, 10) -- Random starting point for variety
+				for segmentNum = segmentCheck, segmentCheck + 20, 3 do -- Check every 3rd segment
+					local segment = snakeModel:FindFirstChild("Segment" .. segmentNum)
+					if segment and segment:IsA("BasePart") then
+						local distance = (segment.Position - myHeadPos).Magnitude
+						if distance <= 5 then -- Body collision radius
+							-- AI snake dies when hitting player body
+							warn("AI Snake died from hitting", player.Name, "'s body")
 							self:Destroy()
+							return
+						end
+					else
+						break -- No more segments
+					end
+				end
+			end
+		end
+		
+		-- Check collision with other AI snakes (less frequently)
+		if self._collisionCheckFrame % 2 == 0 then -- Every other collision check
+			for _, otherSnake in ipairs(AISnake._activeSnakes) do
+				if otherSnake ~= self and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
+					-- Skip if other snake is spawn protected
+					if otherSnake._isSpawnProtected then
+						continue
+					end
+					
+					local otherHead = otherSnake.HeadParts.head
+					if otherHead.Parent then
+						local distance = (otherHead.Position - myHeadPos).Magnitude
+						if distance <= 10 then -- Head-to-head collision
+							-- Both AI snakes die in head-to-head collision
+							warn("AI Snakes died from head-to-head collision")
+							self:Destroy()
+							otherSnake:Destroy()
 							return
 						end
 					end
 					
-					-- Check collision with player body segments (optimized)
-					local segmentCheck = math.random(4, 10) -- Random starting point for variety
-					for segmentNum = segmentCheck, segmentCheck + 20, 3 do -- Check every 3rd segment
-						local segment = snakeModel:FindFirstChild("Segment" .. segmentNum)
-						if segment and segment:IsA("BasePart") then
-							local distance = (segment.Position - myHeadPos).Magnitude
-							if distance <= 5 then -- Body collision radius
-								-- AI snake dies when hitting player body
-								warn("AI Snake died from hitting", player.Name, "'s body")
-								self:Destroy()
-								return
-							end
-						else
-							break -- No more segments
-						end
-					end
-				end
-			end
-			
-			-- Check collision with other AI snakes (less frequently)
-			if self._collisionCheckFrame % 2 == 0 then -- Every other collision check
-				for _, otherSnake in ipairs(AISnake._activeSnakes) do
-					if otherSnake ~= self and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
-						local otherHead = otherSnake.HeadParts.head
-						if otherHead.Parent then
-							local distance = (otherHead.Position - myHeadPos).Magnitude
-							if distance <= 10 then -- Head-to-head collision
-								-- Both AI snakes die in head-to-head collision
-								warn("AI Snakes died from head-to-head collision")
-								self:Destroy()
-								otherSnake:Destroy()
-								return
-							end
-						end
-						
-						-- Check collision with other AI snake body (simplified)
-						if otherSnake.Segments and #otherSnake.Segments > 10 then
-							-- Only check a few segments for performance
-							local checkIndices = {10, 20, 30, 40, 50}
-							for _, i in ipairs(checkIndices) do
-								if i <= #otherSnake.Segments then
-									local segment = otherSnake.Segments[i]
-									if segment and segment.Parent then
-										local distance = (segment.Position - myHeadPos).Magnitude
-										if distance <= 5 then -- Body collision
-											warn("AI Snake died from hitting another AI snake's body")
-											self:Destroy()
-											return
-										end
+					-- Check collision with other AI snake body (simplified)
+					if otherSnake.Segments and #otherSnake.Segments > 10 then
+						-- Only check a few segments for performance
+						local checkIndices = {10, 20, 30, 40, 50}
+						for _, i in ipairs(checkIndices) do
+							if i <= #otherSnake.Segments then
+								local segment = otherSnake.Segments[i]
+								if segment and segment.Parent then
+									local distance = (segment.Position - myHeadPos).Magnitude
+									if distance <= 5 then -- Body collision
+										warn("AI Snake died from hitting another AI snake's body")
+										self:Destroy()
+										return
 									end
 								end
 							end

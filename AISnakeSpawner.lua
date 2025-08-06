@@ -10,7 +10,7 @@ local SPAWN_HEIGHT = 5
 local MIN_SPAWN_DELAY = 3      -- Minimum time between death and respawn
 local CHECK_INTERVAL = 1       -- Check for dead snakes every 1 second
 local SPAWN_PROTECTION = 5     -- Seconds before checking if newly spawned snake is alive
-local SPAWN_SPACING = 100      -- Minimum distance between spawn points
+local SPAWN_SPACING = 150      -- Increased from 100 to 150 studs minimum distance
 local INITIAL_SPAWN_DELAY = 10 -- Delay before starting death checks
 
 -- === STATE TRACKING ===
