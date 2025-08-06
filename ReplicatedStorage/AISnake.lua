@@ -3468,7 +3468,8 @@ function AISnake:getSegmentSize(index, baseSize)
 	else
 		-- For the rest of the body, we apply a VERY SUBTLE taper
 		-- only to the last few segments.
-		local segmentsFromTail = self.actualSegmentCount - index
+		local totalSegments = self.actualSegmentCount or self.CurrentLength
+		local segmentsFromTail = totalSegments - index
 		local taperSegments = 15 -- Only the last 15 segments will get smaller.
 		
 		if segmentsFromTail < taperSegments then
