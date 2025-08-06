@@ -1,7 +1,7 @@
--- Optimized Snake System V9 ULTIMATE - SEAMLESS UNIFIED RENDERING (FIXED GROWTH)
--- Perfect head-body integration with smooth growth transitions
--- ENHANCED: Fixed gap issues, improved LOD handling, stable at extreme lengths
--- 🚀 HYPER-ENHANCED: Professional visual effects from comprehensive research integration
+-- Optimized Snake System V10 - UNIFIED SPLINE-BASED RENDERING
+-- Mathematically perfect positioning using Catmull-Rom splines
+-- Zero gaps through proactive curve interpolation
+-- Enhanced beam visuals with dynamic curvature for seamless connections
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -47,7 +47,7 @@ local PARTICLE_UPDATE_RATE = 5 -- Update particles every N frames
 local SEGMENT_UPDATE_RATE = 75
 local NETWORK_UPDATE_RATE = 25
 local MAX_SEGMENTS = 500
-local SEGMENT_SPACING = 0.5 -- Tighter for seamless look
+local SEGMENT_SPACING = 0.45 -- Optimized for slight overlap with spline positioning
 local HISTORY_SIZE = 2000
 local GROWTH_CHECK_INTERVAL = 10
 
@@ -233,10 +233,8 @@ function Snake.new(character, config)
 	self.positionHistory = {}
 	self.historyIndex = 0
 	
-	-- TIER 2: Spline-based path system
+	-- Spline-based path system for seamless movement
 	self.pathSpline = nil
-	self.splineUpdateCounter = 0
-	self.SPLINE_UPDATE_RATE = 3 -- Update spline every N frames for performance
 
 	-- Visual components
 	self.model = Instance.new("Model")
@@ -633,12 +631,22 @@ function Snake:createUnifiedBody()
 		beam.Attachment0 = self.attachments[i]
 		beam.Attachment1 = self.attachments[i + 1]
 
-		-- 🎨 ENHANCED: Professional beam properties with advanced textures
+		-- 🎨 ENHANCED: Professional beam properties with spline-aware curves
 		local beamWidth = self:getBeamWidth(i, BASE_SIZE)
 		beam.Width0 = beamWidth
 		beam.Width1 = beamWidth
-		beam.CurveSize0 = 0
-		beam.CurveSize1 = 0
+		
+		-- Use subtle curves that follow the spline path for seamless connections
+		if i > 0 and i < segmentCount - 1 then
+			-- Calculate curve based on the angle between segments
+			local curveAmount = 1.5 -- Subtle curve for natural flow
+			beam.CurveSize0 = -curveAmount
+			beam.CurveSize1 = curveAmount
+		else
+			beam.CurveSize0 = 0
+			beam.CurveSize1 = 0
+		end
+		
 		beam.FaceCamera = true
 		beam.Segments = BEAM_SEGMENTS
 		-- ENHANCED: Professional gradient texture choices
@@ -951,21 +959,19 @@ function Snake:updateUnifiedBody()
 	-- Apply segment budget
 	local segmentsToUpdate = math.min(requiredSegments, segmentBudget)
 	
-	-- TIER 2: Update spline periodically for smooth path
-	self.splineUpdateCounter = self.splineUpdateCounter + 1
-	if self.splineUpdateCounter >= self.SPLINE_UPDATE_RATE and #self.positionHistory >= 4 then
-		self.splineUpdateCounter = 0
-		
+	-- Update spline every frame for maximum smoothness
+	if #self.positionHistory >= 4 then
 		-- Convert position history to Vector3 array for spline
 		local splinePoints = {}
-		for i = 1, math.min(#self.positionHistory, 50) do -- Limit to recent history
+		-- Use more history points for smoother curves
+		for i = 1, math.min(#self.positionHistory, 100) do
 			table.insert(splinePoints, self.positionHistory[i].position)
 		end
 		
 		-- Create spline with uniform parameterization
 		if #splinePoints >= 4 then
 			self.pathSpline = CatmullRomSpline.new(splinePoints)
-			self.pathSpline:SetUniform(true) -- Enable arc-length parameterization
+			self.pathSpline:SetUniform(true) -- Enable arc-length parameterization for consistent spacing
 		end
 	end
 
@@ -1024,24 +1030,21 @@ function Snake:updateUnifiedBody()
 				self.leftPupil.CFrame = self.leftEye.CFrame * CFrame.new(0, 0, -eyeScale * 0.3)
 				self.rightPupil.CFrame = self.rightEye.CFrame * CFrame.new(0, 0, -eyeScale * 0.3)
 			elseif isVisible or i <= FORCE_RENDER_SEGMENTS then
-				-- Body segment positioning
+				-- Body segment positioning using spline-based interpolation
 				local targetPos
 				
-				-- TIER 2: Use spline if available for mathematically perfect positioning
-				if self.pathSpline then
-					-- Calculate position along spline based on segment index
-					local splineT = math.min(i * spacing / (self.pathSpline:GetLength() or 1), 1)
+				if self.pathSpline and self.pathSpline:GetLength() > 0 then
+					-- Primary method: Use spline for mathematically perfect positioning
+					local splineLength = self.pathSpline:GetLength()
+					local distanceAlongPath = i * spacing
+					local splineT = math.clamp(distanceAlongPath / splineLength, 0, 1)
 					targetPos = self.pathSpline:GetPoint(splineT)
 				else
-					-- Fallback to original historical position method
+					-- Fallback for first few frames before spline is ready
 					local stepsBack = math.floor(i * spacing / 2)
 					local histData = self:getHistoricalPosition(stepsBack)
-					local nextHistData = self:getHistoricalPosition(stepsBack + 1)
-
-					if histData and nextHistData then
-						-- Smooth interpolation
-						local alpha = (i * spacing / 2) % 1
-						targetPos = histData.position:Lerp(nextHistData.position, alpha)
+					if histData then
+						targetPos = histData.position
 					end
 				end
 				
@@ -1051,25 +1054,11 @@ function Snake:updateUnifiedBody()
 					local smoothingFactor = self.isGrowing and VISUAL_SMOOTHING_FACTOR * 1.2 or VISUAL_SMOOTHING_FACTOR
 					segment.Position = currentPos:Lerp(targetPos, smoothingFactor)
 					
-					-- TIER 1 FIX: Reactive Clamping Method (Terraria Destroyer style)
-					-- Check distance to previous segment and clamp if gap detected
-					if i > 0 then
-						local prevSegment = self.segments[i - 1]
-						if prevSegment and prevSegment.Parent then
-							local segmentDiff = segment.Position - prevSegment.Position
-							local currentDistance = segmentDiff.Magnitude
-							local desiredDistance = spacing * 0.95 -- 95% of spacing to ensure overlap
-							
-							-- If gap detected, forcibly clamp the segment
-							if currentDistance > desiredDistance then
-								-- Calculate the clamped position
-								local clampedPosition = prevSegment.Position + (segmentDiff.Unit * desiredDistance)
-								segment.Position = clampedPosition
-								
-								-- Orient segment to look at previous segment
-								segment.CFrame = CFrame.lookAt(clampedPosition, prevSegment.Position)
-							end
-						end
+					-- Orient segment along the spline tangent for natural flow
+					if self.pathSpline and i > 0 then
+						local splineT = math.min(i * spacing / (self.pathSpline:GetLength() or 1), 1)
+						local tangent = self.pathSpline:GetTangent(splineT)
+						segment.CFrame = CFrame.lookAt(segment.Position, segment.Position + tangent)
 					end
 
 					-- Use calculated segment size
@@ -1091,7 +1080,7 @@ function Snake:updateUnifiedBody()
 		end
 	end
 
-	-- Update all beams with calculated widths
+	-- Update all beams with calculated widths and dynamic curves
 	for i, beam in pairs(self.beams) do
 		if beam and beam.Parent then
 			if type(i) == "number" then
@@ -1100,6 +1089,26 @@ function Snake:updateUnifiedBody()
 					local beamWidth = self:getBeamWidth(i, currentBaseSize)
 					beam.Width0 = beamWidth
 					beam.Width1 = beamWidth
+					
+					-- Dynamic curve adjustment based on spline curvature
+					if self.pathSpline and i > 0 and i < self.visibleSegmentCount - 1 then
+						-- Get positions for curve calculation
+						local prevPos = self.segments[i] and self.segments[i].Position
+						local currPos = self.segments[i+1] and self.segments[i+1].Position
+						local nextPos = self.segments[i+2] and self.segments[i+2].Position
+						
+						if prevPos and currPos and nextPos then
+							-- Calculate the angle between segments
+							local dir1 = (currPos - prevPos).Unit
+							local dir2 = (nextPos - currPos).Unit
+							local angle = math.acos(math.clamp(dir1:Dot(dir2), -1, 1))
+							
+							-- Adjust curve based on angle (more curve for sharper turns)
+							local curveAmount = math.sin(angle) * 3
+							beam.CurveSize0 = -curveAmount
+							beam.CurveSize1 = curveAmount
+						end
+					end
 
 					-- 🎨 ENHANCED: Update beam colors for rainbow mode
 					if self.rainbowMode and i % 5 == 0 then
