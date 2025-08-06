@@ -11,51 +11,20 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
--- *** FASTER MODULE LOADER ***
-local snakeSystemsToTry = {
-	"OptimizedSnakeSystemV9",
-	"OptimizedSnakeSystemV4",
-	"OptimizedSnakeSystemV3",
-	"OptimizedSnakeSystemV2",
-	"OptimizedSnakeSystem" -- V1
-}
-local OptimizedSnakeSystem = nil
+-- SERVER DOES NOT LOAD VISUAL SYSTEMS
+-- The client handles all visual rendering
+-- This server script only manages game data and state
 
-for _, name in ipairs(snakeSystemsToTry) do
-	local module = ReplicatedStorage:FindFirstChild(name)
-	if module then
-		local success, result = pcall(require, module)
-		if success and result then
-			OptimizedSnakeSystem = result
-			print("✅ Loaded Snake System:", name)
-			break
-		else
-			warn("⚠️ Found snake system '"..name.."' but failed to require it:", result)
-		end
-	end
-end
-
-if not OptimizedSnakeSystem then
-	error("❌ FATAL: Could not find or load any OptimizedSnakeSystem module in ReplicatedStorage!")
-end
-
--- Initialize the system (creates networking folder)
-OptimizedSnakeSystem.init()
-
--- Wait a moment for folder creation
-wait(0.1)
-
--- NOW load the network handler
-local SnakeNetworkHandler = nil
-pcall(function()
-	SnakeNetworkHandler = require(ServerScriptService:WaitForChild("SnakeNetworkHandler"))
-	if SnakeNetworkHandler and SnakeNetworkHandler.init then
-		SnakeNetworkHandler.init()
-	end
-end)
-
--- Store active snakes
+-- Store active snakes (server-side data only)
 local activeSnakes = {}
+
+-- Create networking folder if needed
+local networkingFolder = ReplicatedStorage:FindFirstChild("SnakeNetworking")
+if not networkingFolder then
+	networkingFolder = Instance.new("Folder")
+	networkingFolder.Name = "SnakeNetworking"
+	networkingFolder.Parent = ReplicatedStorage
+end
 
 -- Create/Get RemoteEvents for menu integration
 local remoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents") or Instance.new("Folder", ReplicatedStorage)
@@ -189,57 +158,40 @@ local function onCharacterAdded(character)
 		player:SetAttribute("ReviveSnakeLength", nil)
 	end
 
-	print("Creating snake with config - InitialLength:", config.InitialLength, "MaxSegments:", config.MaxSegments)
-
-	-- Create optimized snake
-	print("🐍 Creating snake for", player.Name, "with config:", config.InitialLength, "length")
-	local success, snake = pcall(function()
-		return OptimizedSnakeSystem.createSnake(character, config)
+	-- SERVER ONLY MANAGES DATA - NO VISUAL SNAKE CREATION!
+	print("[Server] Setting up snake data for", player.Name)
+	
+	-- Store configuration as attributes for the client to read
+	character:SetAttribute("SnakeConfig", game:GetService("HttpService"):JSONEncode(config))
+	character:SetAttribute("SnakeLength", config.InitialLength)
+	character:SetAttribute("SnakeActive", true)
+	
+	-- Create a simple data structure for server-side tracking (NOT a visual snake!)
+	local snakeData = {
+		player = player,
+		character = character,
+		length = config.InitialLength,
+		isAlive = true,
+		config = config
+	}
+	
+	activeSnakes[player] = snakeData
+	
+	-- Setup boost state tracking
+	local boostEvent = remoteEvents:FindFirstChild("UpdateBoostState")
+	if not boostEvent then
+		boostEvent = Instance.new("RemoteEvent")
+		boostEvent.Name = "UpdateBoostState"
+		boostEvent.Parent = remoteEvents
+	end
+	
+	-- Listen for boost state changes from client
+	local boostConnection = boostEvent.OnServerEvent:Connect(function(eventPlayer, isBoosting)
+		if eventPlayer == player and activeSnakes[player] then
+			activeSnakes[player].isBoosting = isBoosting
+			character:SetAttribute("IsBoosting", isBoosting)
+		end
 	end)
-
-	if not success then
-		warn("❌ Error creating snake:", snake)
-		return
-	end
-
-	if not snake then
-		warn("❌ Failed to create snake for", player.Name)
-		return
-	end
-
-	print("✅ Snake created successfully for", player.Name)
-	activeSnakes[player] = snake
-
-	-- Add to global table for collision handler
-	if not _G.PlayerSnakes then
-		_G.PlayerSnakes = {}
-	end
-	_G.PlayerSnakes[player] = snake
-
-	-- Setup boost tracking
-	if snake.setBoosting then
-		-- Create RemoteEvent for boost state
-		local boostEvent = remoteEvents:FindFirstChild("UpdateBoostState")
-		if not boostEvent then
-			boostEvent = Instance.new("RemoteEvent")
-			boostEvent.Name = "UpdateBoostState"
-			boostEvent.Parent = remoteEvents
-		end
-
-		-- Listen for boost state changes
-		local boostConnection
-		boostConnection = boostEvent.OnServerEvent:Connect(function(eventPlayer, isBoosting)
-			if eventPlayer == player and activeSnakes[player] then
-				activeSnakes[player]:setBoosting(isBoosting)
-			end
-		end)
-
-		-- Store connection for cleanup
-		if not snake._connections then
-			snake._connections = {}
-		end
-		snake._connections.boost = boostConnection
-	end
 
 	-- Ensure leaderstats exist
 	local leaderstats = player:FindFirstChild("leaderstats")
@@ -260,81 +212,71 @@ local function onCharacterAdded(character)
 		lengthValue.Value = config.InitialLength or 55
 	end
 
-	-- Handle length updates
+	-- Handle length updates (server-side data only)
 	if lengthValue then
-		-- Initial length
-		snake:updateLength(lengthValue.Value)
-
-		-- Listen for changes
+		-- Set initial length
+		lengthValue.Value = config.InitialLength or 55
+		
+		-- Listen for changes and update attributes for client
 		lengthValue.Changed:Connect(function(newLength)
-			if snake and activeSnakes[player] == snake then
-				snake:updateLength(newLength)
+			if activeSnakes[player] then
+				activeSnakes[player].length = newLength
+				character:SetAttribute("SnakeLength", newLength)
 			end
 		end)
 	end
 
-	-- Note: OptimizedSnakeSystemV9 handles its own update loop internally via RunService.Heartbeat
-	-- We don't need to create an update loop here
-
-	-- Clean up any connections when character is removed
+	-- Clean up when character is removed
 	character.AncestryChanged:Connect(function()
 		if not character.Parent then
-			-- Clean up the snake
-			if activeSnakes[player] == snake then
+			if activeSnakes[player] then
 				activeSnakes[player] = nil
 			end
 		end
 	end)
 
 	-- Handle skin changes
-	local skinConnection
-	skinConnection = player:GetAttributeChangedSignal("SelectedSkin"):Connect(function()
-		if snake and activeSnakes[player] == snake then
-			-- Update snake appearance
+	local skinConnection = player:GetAttributeChangedSignal("SelectedSkin"):Connect(function()
+		if activeSnakes[player] then
+			-- Update config and notify client
 			local newConfig = getSkinConfig(player)
-			-- Apply new skin to snake
-			if snake.head then
-				snake.head.Color = newConfig.HeadColor
-				snake.head.Material = newConfig.HeadMaterial
-			end
-			snake.config = newConfig
+			activeSnakes[player].config = newConfig
+			character:SetAttribute("SnakeConfig", game:GetService("HttpService"):JSONEncode(newConfig))
 		end
 	end)
-
-	-- Store connections on snake object for cleanup
-	snake.skinConnection = skinConnection
+	
+	-- Store connections for cleanup
+	snakeData.connections = {
+		boost = boostConnection,
+		skin = skinConnection
+	}
 
 	-- Handle death
-	local deathConnection
-	deathConnection = humanoid.Died:Connect(function()
+	local deathConnection = humanoid.Died:Connect(function()
 		if activeSnakes[player] then
-			-- Disconnect all connections immediately
-			if skinConnection then
-				skinConnection:Disconnect()
+			local snakeData = activeSnakes[player]
+			
+			-- Disconnect all connections
+			if snakeData.connections then
+				for _, conn in pairs(snakeData.connections) do
+					if conn then conn:Disconnect() end
+				end
 			end
 			if deathConnection then
 				deathConnection:Disconnect()
 			end
 
-			-- Cleanup boost connection
-			if snake._connections and snake._connections.boost then
-				snake._connections.boost:Disconnect()
-			end
-
-			-- NO DEATH ORB SPAWNING HERE - SnakeCollisionHandler handles this!
-			-- The collision handler already spawns death orbs properly distributed along the snake
-			-- Removing duplicate spawning that was causing both red and rainbow orbs to appear
-
-			-- Clean up snake
-			activeSnakes[player]:destroy()
+			-- Mark as dead
+			snakeData.isAlive = false
+			character:SetAttribute("SnakeActive", false)
+			
+			-- Clean up data
 			activeSnakes[player] = nil
-
-			-- Remove from global table
-			if _G.PlayerSnakes then
-				_G.PlayerSnakes[player] = nil
-			end
 		end
 	end)
+	
+	-- Add death connection to cleanup list
+	snakeData.connections.death = deathConnection
 end
 
 -- Handle players
@@ -364,7 +306,15 @@ end)
 -- Cleanup on player leaving
 Players.PlayerRemoving:Connect(function(player)
 	if activeSnakes[player] then
-		activeSnakes[player]:destroy()
+		local snakeData = activeSnakes[player]
+		
+		-- Disconnect all connections
+		if snakeData.connections then
+			for _, conn in pairs(snakeData.connections) do
+				if conn then conn:Disconnect() end
+			end
+		end
+		
 		activeSnakes[player] = nil
 	end
 end)
