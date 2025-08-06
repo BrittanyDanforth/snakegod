@@ -75,10 +75,24 @@ function ClientSnake.new(model)
 	local self = setmetatable({}, ClientSnake)
 
 	self.model = model
-	self.head = model:WaitForChild("Segment0_Head", 5)
+	
+	-- Try to find head with retries
+	local head = nil
+	local attempts = 0
+	local maxAttempts = 10
+	
+	while attempts < maxAttempts and not head do
+		head = model:FindFirstChild("Segment0_Head")
+		if not head then
+			attempts = attempts + 1
+			task.wait(0.5) -- Wait half a second between attempts
+		end
+	end
+	
+	self.head = head
 
 	if not self.head then
-		warn("ClientSnake.new: Could not find head for model", model)
+		-- Silently fail - snake probably died during initialization
 		return nil
 	end
 

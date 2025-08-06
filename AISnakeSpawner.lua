@@ -1,4 +1,4 @@
--- POLISHED AI SNAKE SPAWNER V2.0 - RELIABLE AND EFFICIENT
+-- POLISHED AI SNAKE SPAWNER V3.0 - FIXED INITIAL DEATH DETECTION
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
@@ -11,9 +11,13 @@ local MIN_SPAWN_DELAY = 3      -- Minimum time between death and respawn
 local CHECK_INTERVAL = 1       -- Check for dead snakes every 1 second
 local SPAWN_PROTECTION = 5     -- Seconds before checking if newly spawned snake is alive
 local SPAWN_SPACING = 100      -- Minimum distance between spawn points
+local INITIAL_SPAWN_DELAY = 10 -- Delay before starting death checks
 
 -- === STATE TRACKING ===
 local snakeSlots = {}  -- Track each snake slot
+local spawnerStartTime = tick()
+local initialSpawnComplete = false
+
 for i = 1, NUM_SNAKES do
 	snakeSlots[i] = {
 		snake = nil,
@@ -180,6 +184,11 @@ local function spawnSnake(slotIndex)
 end
 
 local function isSnakeAlive(slot)
+	-- During initial spawn phase, always assume alive
+	if not initialSpawnComplete then
+		return true
+	end
+	
 	-- Don't check snakes that are still in spawn protection
 	if slot.spawnTime and tick() - slot.spawnTime < SPAWN_PROTECTION then
 		return true -- Assume alive during protection period
@@ -217,7 +226,7 @@ local function isSnakeAlive(slot)
 end
 
 -- === INITIAL SPAWN ===
-print("🐍 AI Snake Spawner V2.0 Starting...")
+print("🐍 AI Snake Spawner V3.0 Starting...")
 print("📊 Configuration: " .. NUM_SNAKES .. " snakes, " .. MIN_SPAWN_DELAY .. "s respawn delay")
 
 -- Update map bounds
@@ -237,15 +246,26 @@ task.spawn(function()
 		task.wait(0.5) -- Half second between each spawn
 	end
 	
-	print("✅ Initial spawn sequence complete!")
+	-- Wait for all snakes to fully initialize
+	task.wait(SPAWN_PROTECTION)
+	initialSpawnComplete = true
+	print("✅ Initial spawn sequence complete! Death monitoring active.")
 end)
 
 -- === RESPAWN MONITOR ===
 local lastDebugTime = 0
 
 task.spawn(function()
+	-- Wait for initial spawn delay
+	task.wait(INITIAL_SPAWN_DELAY)
+	
 	while true do
 		task.wait(CHECK_INTERVAL)
+		
+		-- Skip checks until initial spawn is complete
+		if not initialSpawnComplete then
+			continue
+		end
 		
 		local currentTime = tick()
 		local aliveCount = 0
@@ -328,24 +348,38 @@ end)
 
 -- === PERFORMANCE MONITOR ===
 task.spawn(function()
+	-- Wait for system to stabilize
+	task.wait(30)
+	
 	while true do
 		task.wait(60) -- Check every minute
 		
 		local totalSegments = 0
 		local totalLength = 0
+		local personalities = {}
 		
 		for _, slot in pairs(snakeSlots) do
 			if slot.snake and slot.snake._active then
 				totalSegments = totalSegments + (slot.snake.CurrentLength or 0)
 				totalLength = totalLength + 1
+				
+				local personality = slot.snake.Personality and slot.snake.Personality.Type or "Unknown"
+				personalities[personality] = (personalities[personality] or 0) + 1
 			end
 		end
 		
 		if totalLength > 0 then
 			print(string.format("📈 Performance: %d total segments across %d snakes (avg: %.1f)", 
 				totalSegments, totalLength, totalSegments / totalLength))
+			
+			-- Print personality distribution
+			local personalityStr = ""
+			for personality, count in pairs(personalities) do
+				personalityStr = personalityStr .. personality .. ": " .. count .. " | "
+			end
+			print("🧠 Personalities: " .. personalityStr)
 		end
 	end
 end)
 
-print("✅ AI Snake Spawner V2.0 initialized successfully!")
+print("✅ AI Snake Spawner V3.0 initialized successfully!")
