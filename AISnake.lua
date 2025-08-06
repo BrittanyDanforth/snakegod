@@ -2440,12 +2440,16 @@ end
 
 -- === SMOOTHER MOVEMENT (FIXED) ===
 function AISnake:updateMovement(dt)
-	if self._destroyed then return end
-
-	if not self._active or not self.HeadParts or not self.HeadParts.head or not self.HeadParts.head.Parent then
-		if self._active and not self._destroyed then
-			self:Destroy()
-		end
+	if not self._active or self._destroyed then
+		return
+	end
+	
+	-- Safety check for required components
+	if not self.HeadParts or not self.HeadParts.head or not self.HeadParts.head.Parent then
+		return
+	end
+	
+	if not self.Segments then
 		return
 	end
 
@@ -3396,6 +3400,11 @@ end
 
 -- Dynamically create segments if they don't exist yet
 function AISnake:ensureSegmentExists(index)
+	-- Safety checks
+	if not self.Segments then
+		return nil
+	end
+	
 	if index > DYNAMIC_SEGMENT_LIMIT or index > self.CurrentLength then
 		return nil
 	end
