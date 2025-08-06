@@ -751,39 +751,31 @@ end
 
 function DyingState:_disableMagnetEffect()
     local player = self.controller.player
-    local character = player.Character
-    if not character then return end
     
-    -- Clear magnet attributes - this should stop the magnet effect
-    player:SetAttribute("MagnetRange", 0)
-    player:SetAttribute("HasMagnet", false)
+    -- Reset magnet attributes to disable the magnet effect
+    player:SetAttribute("MagnetRange", 0)  -- Set to 0 to fully disable
+    player:SetAttribute("MagnetActive", false)
+    player:SetAttribute("ActiveMagnet", false)  -- From boost system
+    player:SetAttribute("TempMagnetRange", 1)  -- Reset temp multiplier
     
-    -- Find and destroy any magnet-related effects in the character
-    local function cleanEffects(parent)
-        for _, desc in ipairs(parent:GetDescendants()) do
-            if desc:IsA("ParticleEmitter") or desc:IsA("Beam") then
-                local name = desc.Name:lower()
-                -- Destroy any magnet/orb attraction effects
-                if name:find("magnet") or name:find("attract") or name:find("pull") or name:find("orb") then
-                    desc.Enabled = false
-                    desc:Destroy()
-                end
-            elseif desc:IsA("Attachment") and desc.Name:lower():find("magnet") then
-                desc:Destroy()
-            end
+    -- Fire a remote event to tell any client scripts to clean up magnet visuals
+    local remotes = ReplicatedStorage:WaitForChild("Remotes", 2)
+    if remotes then
+        -- Use the existing ToggleMagnet remote to turn it off
+        local toggleMagnetRemote = remotes:FindFirstChild("ToggleMagnet")
+        if toggleMagnetRemote then
+            -- Fire to all clients to ensure visual cleanup
+            toggleMagnetRemote:FireAllClients(player, false)
+        end
+        
+        -- Also fire a general cleanup event if one exists
+        local cleanupRemote = remotes:FindFirstChild("CleanupEffects")
+        if cleanupRemote then
+            cleanupRemote:FireClient(player, "magnet")
         end
     end
     
-    -- Clean effects from character
-    cleanEffects(character)
-    
-    -- Also clean from snake model if it exists
-    local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[player]
-    if snakeSystem and snakeSystem.model then
-        cleanEffects(snakeSystem.model)
-    end
-    
-    warn("[DyingState] Cleared magnet effects for", player.Name)
+    warn("[DyingState] Disabled magnet attributes for", player.Name, "- MagnetRange set to 0")
 end
 
 return DyingState
