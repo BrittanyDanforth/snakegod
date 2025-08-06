@@ -3247,28 +3247,44 @@ AISnake._movementConnection = RunService.Heartbeat:Connect(function(dt)
 		end
 	end
 	
-	for i = 1, #AISnake._activeSnakes do
-		local snake = AISnake._activeSnakes[i]
-		if snake and snake._active then
-			-- Check distance to nearest player
-			local nearPlayer = false
-			if snake.HeadParts and snake.HeadParts.head then
-				local snakePos = snake.HeadParts.head.Position
-				for _, playerPos in ipairs(playerPositions) do
-					if (snakePos - playerPos).Magnitude < AI_UPDATE_DISTANCE then
-						nearPlayer = true
-						break
+	-- If there are no players, update all snakes. Otherwise, use optimization.
+	if #playerPositions == 0 then
+		-- No players in game, update all active snakes
+		for i = 1, #AISnake._activeSnakes do
+			local snake = AISnake._activeSnakes[i]
+			if snake and snake._active then
+				table.insert(snakesToUpdate, snake)
+			end
+		end
+		-- Debug message (remove later)
+		if #snakesToUpdate > 0 and brainUpdateCounter % 300 == 0 then -- Every 10 seconds
+			print("🤖 Updating", #snakesToUpdate, "AI snakes (no players present)")
+		end
+	else
+		-- Players are present, use the distance-based optimization
+		for i = 1, #AISnake._activeSnakes do
+			local snake = AISnake._activeSnakes[i]
+			if snake and snake._active then
+				-- Check distance to nearest player
+				local nearPlayer = false
+				if snake.HeadParts and snake.HeadParts.head then
+					local snakePos = snake.HeadParts.head.Position
+					for _, playerPos in ipairs(playerPositions) do
+						if (snakePos - playerPos).Magnitude < AI_UPDATE_DISTANCE then
+							nearPlayer = true
+							break
+						end
 					end
 				end
-			end
-			
-			-- Only update snakes near players
-			if nearPlayer then
-				table.insert(snakesToUpdate, snake)
-			else
-				-- Still do minimal updates for far snakes
-				if i % 5 == 0 then -- Update 1 in 5 far snakes per frame
+				
+				-- Only update snakes near players
+				if nearPlayer then
 					table.insert(snakesToUpdate, snake)
+				else
+					-- Still do minimal updates for far snakes
+					if i % 5 == 0 then -- Update 1 in 5 far snakes per frame
+						table.insert(snakesToUpdate, snake)
+					end
 				end
 			end
 		end
