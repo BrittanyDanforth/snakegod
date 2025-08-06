@@ -25,14 +25,14 @@ local mouse = player:GetMouse()
 local snakeVisuals = nil -- Variable to hold our snake instance
 
 -- Create/get remote for sending input to server
-local remoteEvents = ReplicatedStorage:WaitForChild("RemoteEvents", 10)
+local remoteEvents = ReplicatedStorage:WaitForChild("Remotes", 10)
 local mouseDirectionRemote = nil
 local boostRemote = nil
 if remoteEvents then
     mouseDirectionRemote = remoteEvents:FindFirstChild("UpdateMouseDirection") or remoteEvents:WaitForChild("UpdateMouseDirection", 5)
     boostRemote = remoteEvents:FindFirstChild("UpdateBoostState")
 else
-    warn("[Client] RemoteEvents folder not found!")
+    warn("[Client] Remotes folder not found!")
 end
 
 -- ===================================================================
