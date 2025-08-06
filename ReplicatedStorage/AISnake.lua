@@ -1907,7 +1907,9 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			return
 		end
 		
-		-- Add spawn protection visual effect
+		-- Add spawn protection visual effect (DISABLED - causing issues)
+		-- Commenting out ForceField creation to prevent visual glitches
+		--[[
 		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
 			local protectionField = Instance.new("ForceField")
 			protectionField.Parent = self.Model
@@ -1920,6 +1922,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 				end
 			end)
 		end
+		--]]
 		
 		-- Make segments visible gradually
 		for i = 0, self.actualSegmentCount do
