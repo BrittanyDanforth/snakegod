@@ -1797,6 +1797,11 @@ function AISnake.new(startPosition, preservedPersonalityType)
 
 	-- Store head as segment 0 for consistency with OptimizedSnakeSystem
 	self.Segments[0] = self.HeadParts.head
+	
+	-- Set attributes for client identification
+	self.Model:SetAttribute("IsAISnake", true)
+	self.Model:SetAttribute("AISnakeReady", false) -- Will set to true when ready
+	self.HeadParts.head:SetAttribute("IsSnakeHead", true)
 
 	-- Calculate base size with growth factor
 	local currentBaseSize = BASE_SIZE * self.growthFactor
@@ -2021,6 +2026,9 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		end
 		
 		print("✅ AI Snake activated with", visibleCount, "visible segments")
+		
+		-- Mark as ready for client
+		self.Model:SetAttribute("AISnakeReady", true)
 		
 		-- Now activate
 		self._active = true
