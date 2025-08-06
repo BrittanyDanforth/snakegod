@@ -12,8 +12,19 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 
--- Load the server-side snake system (game logic only, no visuals)
-local ServerSnakeSystem = require(ReplicatedStorage:WaitForChild("ServerSnakeSystem"))
+-- Create RemoteEvents folder first
+local remoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents") or Instance.new("Folder", ReplicatedStorage)
+remoteEvents.Name = "RemoteEvents"
+
+-- Create all necessary RemoteEvents
+local spawnSnake = remoteEvents:FindFirstChild("SpawnSnake") or Instance.new("RemoteEvent", remoteEvents)
+spawnSnake.Name = "SpawnSnake"
+
+local respawnSnake = remoteEvents:FindFirstChild("RespawnSnake") or Instance.new("RemoteEvent", remoteEvents)
+respawnSnake.Name = "RespawnSnake"
+
+local updateMouseDirection = remoteEvents:FindFirstChild("UpdateMouseDirection") or Instance.new("RemoteEvent", remoteEvents)
+updateMouseDirection.Name = "UpdateMouseDirection"
 
 -- Wait a moment for folder creation
 wait(0.1)
@@ -30,18 +41,8 @@ end)
 -- Store active snakes
 local activeSnakes = {}
 
--- Create/Get RemoteEvents for menu integration
-local remoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents") or Instance.new("Folder", ReplicatedStorage)
-remoteEvents.Name = "RemoteEvents"
-
-local spawnSnake = remoteEvents:FindFirstChild("SpawnSnake") or Instance.new("RemoteEvent", remoteEvents)
-spawnSnake.Name = "SpawnSnake"
-
-local respawnSnake = remoteEvents:FindFirstChild("RespawnSnake") or Instance.new("RemoteEvent", remoteEvents)
-respawnSnake.Name = "RespawnSnake"
-
-local updateMouseDirection = remoteEvents:FindFirstChild("UpdateMouseDirection") or Instance.new("RemoteEvent", remoteEvents)
-updateMouseDirection.Name = "UpdateMouseDirection"
+-- ServerSnakeSystem will be loaded later when needed
+local ServerSnakeSystem = nil
 
 -- Default configuration
 local DEFAULT_CONFIG = {
@@ -172,29 +173,45 @@ local function onCharacterAdded(character)
 	print("Creating snake with config - InitialLength:", config.InitialLength, "MaxSegments:", config.MaxSegments)
 
 	-- Create server-side snake for game logic
-	print("🐍 Creating server-side snake for", player.Name)
+	print("🐍 Setting up snake data for", player.Name)
 	
 	-- Store config for client to use
 	character:SetAttribute("SnakeConfig", HttpService:JSONEncode(config))
 	character:SetAttribute("SnakeLength", config.InitialLength)
 	
-	-- Create the server snake system
-	local snake = ServerSnakeSystem.new(character, config)
-	
-	if isReviving and savedSnakeState then
-		print("🔄 Restoring snake state for revival")
-		-- Restore positions if we have saved state
-		if savedSnakeState.segments then
-			for i, segData in pairs(savedSnakeState.segments) do
-				if snake.segments[i] then
-					snake.segments[i].position = segData.position
-				end
+	-- For now, create a simple snake object until ServerSnakeSystem is properly loaded
+	local snake = {
+		player = player,
+		character = character,
+		humanoid = humanoid,
+		rootPart = character:FindFirstChild("HumanoidRootPart"),
+		length = config.InitialLength,
+		config = config,
+		isAlive = true,
+		isBoosting = false,
+		_connections = {},
+		
+		-- Add methods that other parts of the code expect
+		updateLength = function(self, newLength)
+			self.length = newLength
+			character:SetAttribute("SnakeLength", newLength)
+		end,
+		
+		setBoosting = function(self, boosting)
+			self.isBoosting = boosting
+			character:SetAttribute("IsBoosting", boosting)
+		end,
+		
+		destroy = function(self)
+			-- Cleanup connections
+			for _, conn in pairs(self._connections) do
+				if conn then conn:Disconnect() end
 			end
 		end
-		if savedSnakeState.length then
-			snake:updateLength(savedSnakeState.length)
-		end
-	end
+	}
+	
+	-- Make the snake functional
+	print("✅ Snake created successfully for", player.Name)
 
 	if not snake then
 		warn("❌ Failed to create snake for", player.Name)
@@ -390,11 +407,12 @@ end)
 
 -- Handle existing players
 for _, player in pairs(Players:GetPlayers()) do
+	-- Connect the character handler
+	player.CharacterAdded:Connect(onCharacterAdded)
+	
+	-- If they already have a character, process it
 	if player.Character then
 		onCharacterAdded(player.Character)
-	else
-		-- Wait for character to spawn (when they click Play)
-		player.CharacterAdded:Connect(onCharacterAdded)
 	end
 end
 
@@ -407,9 +425,7 @@ spawnSnake.OnServerEvent:Connect(function(player)
 end)
 
 -- Handle spawn requests from menu
-local respawnEvent = ReplicatedStorage:FindFirstChild("RespawnSnake")
-if respawnEvent then
-	respawnEvent.OnServerEvent:Connect(function(player, username)
+respawnSnake.OnServerEvent:Connect(function(player, username)
 		print("🎮 Respawn requested for:", player.Name)
 		
 		-- Store username if provided
@@ -432,8 +448,14 @@ if respawnEvent then
 		end
 		print("🐍 Respawned player:", player.Name)
 	end)
-end
 
 -- Removed auto-spawn - players spawn when clicking Play button
 
 print("✅ Snake System Integration loaded!")
+print("📋 Active RemoteEvents:")
+for _, remote in pairs(remoteEvents:GetChildren()) do
+	if remote:IsA("RemoteEvent") then
+		print("  -", remote.Name)
+	end
+end
+print("🎮 Ready for players to spawn via Play button!")

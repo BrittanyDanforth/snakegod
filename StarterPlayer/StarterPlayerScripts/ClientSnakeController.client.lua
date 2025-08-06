@@ -17,11 +17,12 @@ local player = Players.LocalPlayer
 local snakeVisuals = nil -- Variable to hold our snake instance
 
 -- Create/get remote for sending input to server
-local remoteEvents = ReplicatedStorage:WaitForChild("RemoteEvents")
-local mouseDirectionRemote = remoteEvents:FindFirstChild("UpdateMouseDirection")
-if not mouseDirectionRemote then
-    -- Wait for server to create it
-    mouseDirectionRemote = remoteEvents:WaitForChild("UpdateMouseDirection", 5)
+local remoteEvents = ReplicatedStorage:WaitForChild("RemoteEvents", 10) -- 10 second timeout
+local mouseDirectionRemote = nil
+if remoteEvents then
+    mouseDirectionRemote = remoteEvents:FindFirstChild("UpdateMouseDirection") or remoteEvents:WaitForChild("UpdateMouseDirection", 5)
+else
+    warn("[Client] RemoteEvents folder not found!")
 end
 
 -- This function creates the snake. We will call it whenever the player spawns.
@@ -92,11 +93,22 @@ local function setupSnake(character)
 end
 
 -- Run the setup function when the player's character first appears
-local character = player.Character or player.CharacterAdded:Wait()
-setupSnake(character)
+print("[Client] Waiting for character...")
+local character = player.Character
+if character then
+    print("[Client] Character already exists!")
+    setupSnake(character)
+else
+    print("[Client] Waiting for CharacterAdded event...")
+    character = player.CharacterAdded:Wait()
+    setupSnake(character)
+end
 
 -- Also run the setup function every time the player RESPAWNS
-player.CharacterAdded:Connect(setupSnake)
+player.CharacterAdded:Connect(function(char)
+    print("[Client] Character respawned!")
+    setupSnake(char)
+end)
 
 -- Handle mouse input
 local UserInputService = game:GetService("UserInputService")
