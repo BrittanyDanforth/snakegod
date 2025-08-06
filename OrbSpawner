@@ -174,15 +174,15 @@ local function getPlayerHeads()
 
 		-- Also check for SnakeHead parts
 		if p.Character then
-			-- Look for SnakeHead in character
-			local snakeHead = p.Character:FindFirstChild("SnakeHead")
+			-- Look for SnakeHead or Segment0_Head in character
+			local snakeHead = p.Character:FindFirstChild("SnakeHead") or p.Character:FindFirstChild("Segment0_Head")
 			if snakeHead then
 				table.insert(heads, {player = p, part = snakeHead})
 			end
 
-			-- Also check descendants for SnakeHead
+			-- Also check descendants for SnakeHead or Segment0_Head
 			for _, desc in pairs(p.Character:GetDescendants()) do
-				if desc:IsA("BasePart") and desc.Name == "SnakeHead" then
+				if desc:IsA("BasePart") and (desc.Name == "SnakeHead" or desc.Name == "Segment0_Head") then
 					table.insert(heads, {player = p, part = desc})
 					break -- Only need one head per player
 				end
@@ -591,7 +591,7 @@ local function getPlayerFromTouchedPart(part)
 	end
 
 	-- Check if it's a snake head or segment
-	if part.Name == "SnakeHead" or part:GetAttribute("IsSnakeSegment") then
+	if part.Name == "SnakeHead" or part.Name == "Segment0_Head" or part:GetAttribute("IsSnakeSegment") then
 		-- Find the owner player
 		local model = part.Parent
 		while model and model.Parent do

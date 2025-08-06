@@ -219,30 +219,12 @@ local function onPlayerAdded(player)
                             -- The OrbSpawner system has all the logic
                             local orb = collisionData  -- The orb is passed directly
                             if orb and orb.Parent then
-                                -- Get orb value
+                                -- Get orb value for debug
                                 local orbValue = orb:GetAttribute("OrbValue") or 1
                                 local isDeathOrb = orb:GetAttribute("IsDeathOrb") or false
                                 
-                                -- Debug log
-                                print("[MainServer] Player collecting orb:", player.Name, "Value:", orbValue, "IsDeathOrb:", isDeathOrb)
-                                
-                                -- Grow the snake
-                                local snake = controller:getSnake()
-                                if snake and snake.grow then
-                                    snake:grow(orbValue)
-                                end
-                                
-                                -- Update stats
-                                local stats = player:FindFirstChild("leaderstats")
-                                if stats then
-                                    local score = stats:FindFirstChild("Score")
-                                    if score then
-                                        score.Value = score.Value + orbValue
-                                    end
-                                end
-                                
-                                -- Destroy the orb
-                                orb:Destroy()
+                                -- Debug log only - OrbSpawner handles actual collection
+                                print("[MainServer] Orb collision detected:", player.Name, "Value:", orbValue, "IsDeathOrb:", isDeathOrb)
                             end
                         end
                     end)
