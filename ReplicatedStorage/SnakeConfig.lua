@@ -32,7 +32,7 @@ return {
 	PathSmoothness = 0.9,
 
 	-- MATERIALS
-	HeadMaterial = Enum.Material.ForceField,
+	HeadMaterial = Enum.Material.Neon,
 	BodyMaterial = Enum.Material.Neon,
 
 	-- VISUAL ENHANCEMENTS
