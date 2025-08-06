@@ -16,145 +16,164 @@ local CollisionModule = require(ServerModules.CollisionModule)
 -- Shared configuration  
 local Config = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Config"))
 
--- Player controller storage
+-- Module references
 local playerControllers = {}
--- Expose for debugging
-_G.PlayerControllers = playerControllers
-
--- Collision system
 local collisionSystem = nil
-
--- Track existing snakes from SnakeSystemIntegration
 local snakeSystemIntegration = nil
 local existingSnakes = {} -- Track snakes created by the old system
+local deathOrbHandler = nil -- Will be initialized later
 
--- Wait for SnakeSystemIntegration to load
-local function waitForSnakeSystem()
-    -- Find the SnakeSystemIntegration script
-    for _, script in pairs(game:GetDescendants()) do
-        if script.Name == "SnakeSystemIntegration" and script:IsA("Script") then
-            snakeSystemIntegration = script
-            break
+-- Initialize death orb handler
+task.spawn(function()
+    -- Try to load SnakeCollisionHandler for death orb spawning
+    local collisionHandler = workspace:WaitForChild("SnakeCollisionHandler_FINAL", 5)
+    if collisionHandler then
+        local success, handler = pcall(require, collisionHandler)
+        if success and handler then
+            deathOrbHandler = handler
         end
     end
+end)
+
+-- Wait for snake system to be available
+local function waitForSnakeSystem()
+    -- SnakeSystemIntegration should already be loaded
+    -- Just verify it exists
+    local integration = game.ServerScriptService:FindFirstChild("SnakeSystemIntegration") or 
+                       workspace:FindFirstChild("SnakeSystemIntegration")
+    
+    if integration then
+        local success, module = pcall(require, integration)
+        if success then
+            snakeSystemIntegration = module
+            return true
+        end
+    end
+    
+    return false
+end
+
+-- Create/verify remote events
+local function createRemoteEvents()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        remotes = Instance.new("Folder")
+        remotes.Name = "Remotes"
+        remotes.Parent = ReplicatedStorage
+    end
+    
+    -- Create necessary remote events if they don't exist
+    local requiredRemotes = {
+        "PromptRevive",
+        "ReviveResponse",
+        "UpdateReviveCountdown",
+        "CancelRevive",
+        "ControlDeathUI",
+        "FreezeCamera",
+        "UpdateBoostState"
+    }
+    
+    for _, remoteName in ipairs(requiredRemotes) do
+        if not remotes:FindFirstChild(remoteName) then
+            local remote = Instance.new("RemoteEvent")
+            remote.Name = remoteName
+            remote.Parent = remotes
+        end
+    end
+    
+    -- warn("[MainServer] Created/verified remote events")
 end
 
 -- Initialize systems
 local function initializeSystems()
-    warn("[MainServer] Initializing game systems...")
+    print("[MainServer] Initializing game systems...")
     
-    -- Wait for existing systems
-    waitForSnakeSystem()
+    -- Create RemoteEvents
+    createRemoteEvents()
     
     -- Initialize collision system
-    collisionSystem = CollisionModule.new(playerControllers)
+    collisionSystem = CollisionModule.new()
     collisionSystem:start()
     
-    -- Disable the old InitializeCollisionHandler if it exists
-    local collisionHandler = workspace:FindFirstChild("SnakeCollisionHandlerV1")
-    if not collisionHandler then
-        collisionHandler = workspace:FindFirstChild("SnakeCollisionHandler_FINAL")
-    end
-    if not collisionHandler then
-        -- Try to find it in ServerScriptService
-        collisionHandler = game.ServerScriptService:FindFirstChild("SnakeCollisionHandler_FINAL")
-    end
-    
-    if collisionHandler and collisionHandler:IsA("Script") then
-        collisionHandler.Disabled = true
-        warn("[MainServer] Disabled InitializeCollisionHandler")
-    end
-    
-    warn("[MainServer] Systems initialized successfully")
+    -- Other initialization can go here
 end
 
 -- Handle player joining
-local function onPlayerAdded(player)
-    warn("[MainServer] Player joined:", player.Name)
+local function setupPlayer(player)
+    -- warn("[MainServer] Player joined:", player.Name)
     
     -- Check if controller already exists (for respawn cases)
     if playerControllers[player] then
-        warn("[MainServer] Controller already exists for", player.Name, "- cleaning up old controller")
+        -- warn("[MainServer] Controller already exists for", player.Name, "- cleaning up old controller")
         local oldController = playerControllers[player]
         oldController:destroy()
         playerControllers[player] = nil
     end
     
-    -- Create player controller
+    -- Create controller
     local controller = PlayerController.new(player, Config)
     playerControllers[player] = controller
+    
+    -- Register with collision system
+    if collisionSystem then
+        collisionSystem:registerController(player, controller)
+    end
+    
+    -- Expose controller for debugging
+    if not _G.PlayerControllers then
+        _G.PlayerControllers = {}
+    end
+    _G.PlayerControllers[player] = controller
     
         -- Listen for snake creation from SnakeSystemIntegration
     local function checkForSnake()
         -- Get current controller
         local currentController = playerControllers[player]
-        if not currentController then
-            warn("[MainServer] No controller found in checkForSnake")
-            return false
+        if not currentController then return end
+        
+        -- Check for snake in multiple locations
+        local snakeModel = nil
+        
+        -- Check character
+        if player.Character then
+            snakeModel = player.Character:FindFirstChild("Snake_" .. player.Name)
         end
         
-        -- First check if snake exists directly in workspace (older system)
-        local snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
-        if snakeModel and snakeModel:IsA("Model") then
-            -- Verify it has the head segment
+        -- Check workspace Snakes folder
+        if not snakeModel then
+            local snakesFolder = workspace:FindFirstChild("Snakes")
+            if snakesFolder then
+                snakeModel = snakesFolder:FindFirstChild("Snake_" .. player.Name)
+            end
+        end
+        
+        -- Check global PlayerSnakes table
+        if not snakeModel and _G.PlayerSnakes and _G.PlayerSnakes[player] then
+            local globalSnake = _G.PlayerSnakes[player]
+            if globalSnake.model then
+                snakeModel = globalSnake.model
+            end
+        end
+        
+        if snakeModel then
+            -- Store snake object reference
+            currentController.snakeObject = snakeModel
+            currentController.snakeModel = snakeModel
+            
+            -- Find the head
             local head = snakeModel:FindFirstChild("Segment0_Head")
             if head then
-                warn("[MainServer] Found snake for", player.Name, "with head:", head.Name)
-                currentController.snakeObject = snakeModel
-                currentController.snakeModel = snakeModel  -- Set both for compatibility
-                existingSnakes[player] = snakeModel
-
-                -- Ensure FSM states are initialized
-                currentController:ensureFSMStates()
+                print("[MainServer] Found snake for", player.Name, "with head:", head.Name)
                 
-                -- Safely set initial state to Alive when snake is created
-                local success, err = pcall(function()
-                    currentController.fsm:changeState("Alive")
-                end)
+                -- Player is ready, set to Alive state
+                currentController.fsm:changeState("Alive")
                 
-                if success then
-                    warn("[MainServer] State set to Alive with 3 second spawn protection")
-                    -- Apply spawn invincibility
-                    currentController:setInvincible(3)
-                else
-                    warn("[MainServer] Failed to set Alive state:", err)
-                end
-                
-                return true
+                -- Stop tracking this snake
+                existingSnakes[player] = true
+            else
+                warn("[MainServer] Snake found but no head for", player.Name)
             end
         end
-        
-        -- Also check in SnakeFolder (newer system compatibility)
-        local snakeFolder = workspace:FindFirstChild("SnakeFolder")
-        if snakeFolder then
-            local snakeInFolder = snakeFolder:FindFirstChild(player.Name)
-            if snakeInFolder and snakeInFolder:IsA("Model") then
-                local head = snakeInFolder:FindFirstChild("Segment0_Head")
-                if head then
-                    warn("[MainServer] Found snake in SnakeFolder for", player.Name)
-                    currentController.snakeObject = snakeInFolder
-                    currentController.snakeModel = snakeInFolder
-                    existingSnakes[player] = snakeInFolder
-                    
-                    -- Safely set initial state to Alive when snake is created
-                    local success, err = pcall(function()
-                        currentController.fsm:changeState("Alive")
-                    end)
-                    
-                    if success then
-                        warn("[MainServer] State set to Alive with 3 second spawn protection")
-                        -- Apply spawn invincibility
-                        currentController:setInvincible(3)
-                    else
-                        warn("[MainServer] Failed to set Alive state:", err)
-                    end
-                    
-                    return true
-                end
-            end
-        end
-        
-        return false
     end
     
     -- Check periodically for snake creation
@@ -169,73 +188,25 @@ local function onPlayerAdded(player)
     
     -- Connect controller events to handle collision results
     for eventName, event in pairs(controller.events) do
-                            -- Death handling via new collision system
-                    event:Connect(function(collisionData)
-                        if eventName == "onFatalHit" then
-                            -- Check if already dying or in death process
-                            local currentState = controller.fsm:getCurrentState()
-                            if currentState == "Dying" or currentState == "Reviving" or currentState == "Spectating" then
-                                warn("[MainServer] Already in death process, ignoring collision")
-                                return
-                            end
-                            
-                            warn("[MainServer] FATAL COLLISION for", player.Name, "Type:", 
-                                collisionData.isHeadCollision and "Head" or 
-                                collisionData.isWallCollision and "Wall" or 
-                                collisionData.isBodyCollision and "Body" or "Unknown")
-                            
-                            -- Get killer info
-                            if collisionData.killerPlayer then
-                                warn("[MainServer] Killed by player:", collisionData.killerPlayer.Name)
-                            elseif collisionData.isAI then
-                                warn("[MainServer] Killed by AI Snake")
-                            end
-                            
-                            -- Store killer info first
-                            if collisionData.killerPlayer then
-                                player:SetAttribute("KilledBy", collisionData.killerPlayer.Name)
-                            elseif collisionData.isAI then
-                                player:SetAttribute("KilledBy", "AI Snake")
-                            else
-                                player:SetAttribute("KilledBy", "Wall")
-                            end
-                            
-                            -- Change to Dying state - this will handle revive prompt
-                            controller.fsm:changeState("Dying", collisionData)
-                            
-                            -- DO NOT kill the humanoid here - let DyingState handle it
-                            -- The DyingState will either:
-                            -- 1. Show revive prompt and wait for response
-                            -- 2. Transition to Spectating if no revives
-                            -- After that, we can kill the humanoid
-                        elseif eventName == "onOrbCollision" then
-                            -- Let existing orb system handle collection
-                            -- The OrbSpawner system has all the logic
-                        end
-                    end)
+        -- We only need to handle orb collection here
+        -- Fatal hits are already handled by PlayerController
+        event:Connect(function(data)
+            if eventName == "onOrbCollision" then
+                -- Let existing orb system handle collection
+                -- The OrbSpawner system has all the logic
+            end
+        end)
     end
     
     -- Monitor character spawning
     local characterAddedConnection = player.CharacterAdded:Connect(function(character)
-        warn("[MainServer] Character added for", player.Name)
+        -- warn("[MainServer] Character added for", player.Name)
         
-        -- Get current controller
-        local currentController = playerControllers[player]
-        if not currentController then
-            warn("[MainServer] No controller found for character added")
-            return
-        end
-        
-        -- Check if this is a revive spawn
-        local isReviving = player:GetAttribute("RevivingNow") or player:GetAttribute("JustRevived")
+        -- Only handle if this is NOT a revive
+        local isReviving = player:GetAttribute("IsReviving")
         if isReviving then
-            warn("[MainServer] This is a revive spawn, letting SnakeSystemIntegration handle snake creation")
-            -- Don't reset controller state or change FSM state for revives
-            -- SnakeSystemIntegration will create the snake with the saved length
-        else
-            -- Normal spawn - reset controller state
-            currentController.snakeObject = nil
-            currentController.snakeModel = nil
+            -- warn("[MainServer] This is a revive spawn, letting SnakeSystemIntegration handle snake creation")
+            return
         end
         
         -- Set up death handler for orb spawning
@@ -267,49 +238,48 @@ local function onPlayerAdded(player)
         -- Also set up monitoring for snake creation
         local checkCount = 0
         task.spawn(function()
-            while not currentController.snakeObject and checkCount < 10 do
+            while checkCount < 10 do
                 task.wait(0.5)
+                -- Make sure player and controller still exist
+                local controller = playerControllers[player]
+                if not controller or controller.isDestroyed or controller.snakeObject then
+                    break
+                end
                 checkForSnake()
                 checkCount = checkCount + 1
             end
         end)
     end)
     
-    -- Store connection for cleanup
-    controller.characterAddedConnection = characterAddedConnection
+    -- Store cleanup connections
+    controller.cleanupConnections = {characterAddedConnection}
     
-    -- Handle character removal
     player.CharacterRemoving:Connect(function()
-        warn("[MainServer] Character removing for", player.Name)
-        
-        -- Clear snake references
-        if controller.snakeObject then
-            controller.snakeObject = nil
-        end
-        if existingSnakes[player] then
-            existingSnakes[player] = nil
-        end
-        
-        -- Reset invincibility when character is removed
-        controller.collisionState.invincibleUntil = 0
+        -- warn("[MainServer] Character removing for", player.Name)
     end)
 end
 
 -- Handle player leaving
-local function onPlayerRemoving(player)
-    warn("[MainServer] Player leaving:", player.Name)
+Players.PlayerRemoving:Connect(function(player)
+    print("[MainServer] Player leaving:", player.Name)
     
+    -- Clean up controller
     local controller = playerControllers[player]
     if controller then
-        -- Destroy controller (handles all cleanup)
         controller:destroy()
         playerControllers[player] = nil
+        
+        -- Unregister from collision system
+        if collisionSystem then
+            collisionSystem:unregisterController(player)
+        end
+        
+        -- Clean up global reference
+        if _G.PlayerControllers then
+            _G.PlayerControllers[player] = nil
+        end
     end
-    
-    if existingSnakes[player] then
-        existingSnakes[player] = nil
-    end
-end
+end)
 
 -- Remote event handlers
 local function setupRemoteHandlers()
@@ -389,8 +359,7 @@ end
 
 -- Main initialization
 local function main()
-    warn("[MainServer] Starting Modular Snake Controller...")
-    warn("[MainServer] This works WITH SnakeSystemIntegration")
+    print("[MainServer] Starting Modular Snake Controller...")
     
     -- Initialize core systems
     initializeSystems()
@@ -399,16 +368,15 @@ local function main()
     setupRemoteHandlers()
     
     -- Connect player events
-    Players.PlayerAdded:Connect(onPlayerAdded)
-    Players.PlayerRemoving:Connect(onPlayerRemoving)
+    Players.PlayerAdded:Connect(setupPlayer)
+    -- PlayerRemoving is already connected above
     
     -- Handle existing players (studio testing)
     for _, player in ipairs(Players:GetPlayers()) do
-        onPlayerAdded(player)
+        setupPlayer(player)
     end
     
-    warn("[MainServer] Modular controller ready!")
-    warn("[MainServer] Collision system active")
+    print("[MainServer] Modular controller ready!")
 end
 
 -- Run main

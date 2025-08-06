@@ -13,180 +13,258 @@ CollisionModule.__index = CollisionModule
 
 -- Constants for collision detection
 local COLLISION_CONFIG = {
-    HEAD_RADIUS = 3.5,
-    BODY_DISTANCE = 2.8,
+    HEAD_RADIUS = 2.5,  -- Tighter radius for head collisions
+    BODY_DISTANCE = 3.5,  -- Distance for body collision
     ORB_COLLECTION_RADIUS = 5,
-    SELF_COLLISION_IGNORE_SEGMENTS = 10,
-    FRAME_SKIP = 3, -- Check collisions every N frames for performance
-    MAX_CHECKS_PER_FRAME = 50
+    SELF_COLLISION_IGNORE_SEGMENTS = 10,  -- Ignore first 10 segments for self
+    MAX_CHECKS_PER_FRAME = 50,
+    LOG_VERBOSE = false,  -- Set to true for debugging
+    DEBUG_COLLISIONS = true  -- Enable collision debugging
 }
 
-function CollisionModule.new(playerControllers)
+function CollisionModule.new()
     local self = setmetatable({}, CollisionModule)
     
-    self.controllers = playerControllers -- Reference to table of all PlayerControllers
+    self.playerControllers = {}
+    self.collisionHandlers = {}
     self.frameCount = 0
-    self.collisionConnection = nil
+    self.lastCacheUpdate = 0
     
-    -- Cache for performance
+    -- Performance settings
+    self.CACHE_UPDATE_INTERVAL = 0.5
+    self.MAX_CHECKS_PER_FRAME = COLLISION_CONFIG.MAX_CHECKS_PER_FRAME or 50
+    
+    -- Caches
+    self.snakeCache = {}
     self.orbCache = {}
     self.obstacleCache = {}
-    self.snakeCache = {} -- All snake data
-    self.lastCacheUpdate = 0
-    self.CACHE_UPDATE_INTERVAL = 1 -- Update cache every second
     
-    warn("[CollisionModule] Created new collision module")
+    print("[CollisionModule] Created new collision module")
     return self
 end
 
 function CollisionModule:start()
-    warn("[CollisionModule] Starting collision detection system")
-    -- Connect to heartbeat for collision checks
-    self.collisionConnection = RunService.Heartbeat:Connect(function(dt)
-        self:update(dt)
-    end)
+    print("[CollisionModule] Starting collision detection system")
+    
+    -- Initialize caches
+    self:_updateCaches()
+    
+    -- Connect heartbeat for collision checking
+    if not self.heartbeatConnection then
+        self.heartbeatConnection = RunService.Heartbeat:Connect(function(dt)
+            self:update(dt)
+        end)
+    end
 end
 
 function CollisionModule:stop()
-    if self.collisionConnection then
-        self.collisionConnection:Disconnect()
-        self.collisionConnection = nil
+    if self.heartbeatConnection then
+        self.heartbeatConnection:Disconnect()
+        self.heartbeatConnection = nil
     end
 end
 
 function CollisionModule:update(dt)
-    self.frameCount = self.frameCount + 1
+    self.frameCount = (self.frameCount or 0) + 1
     
-    -- Skip frames for performance
-    if self.frameCount % COLLISION_CONFIG.FRAME_SKIP ~= 0 then
-        return
-    end
-    
-    -- Update caches periodically
-    local now = os.clock()
-    if now - self.lastCacheUpdate > self.CACHE_UPDATE_INTERVAL then
+    -- Update cache periodically
+    if tick() - self.lastCacheUpdate > self.CACHE_UPDATE_INTERVAL then
         self:_updateCaches()
-        self.lastCacheUpdate = now
+        self.lastCacheUpdate = tick()
+        
+        if COLLISION_CONFIG.DEBUG_COLLISIONS and self.frameCount % 60 == 0 then
+            local playerSnakeCount = 0
+            for _ in pairs(self.snakeCache.playerSnakes or {}) do
+                playerSnakeCount = playerSnakeCount + 1
+            end
+            print("[CollisionModule] Cache updated - Player snakes:", 
+                  playerSnakeCount, 
+                  "AI snakes:", #self.snakeCache.aiSnakes)
+        end
     end
     
-    -- Check collisions for alive players
+    -- Perform collision checks for each player controller
     local checksThisFrame = 0
+    local controllersChecked = 0
     
-    for player, controller in pairs(self.controllers) do
-        if checksThisFrame >= COLLISION_CONFIG.MAX_CHECKS_PER_FRAME then
-            break
-        end
+    for _, controller in pairs(self.playerControllers) do
+        controllersChecked = controllersChecked + 1
         
-        -- Only check alive players who can collide
-        local currentState = controller.fsm:getCurrentState()
-        local canCollide = controller:canCollide()
-        
-        if currentState == "Alive" and canCollide then
-            self:_checkPlayerCollisions(controller)
-            checksThisFrame = checksThisFrame + 1
-        end
-    end
-end
-
-function CollisionModule:_checkPlayerCollisions(controller)
-    local head = controller:getSnakeHead()
-    if not head then 
-        warn("[CollisionModule] No head found for", controller.player.Name)
-        return 
-    end
-    
-    -- Check for orb collection
-    self:_checkOrbCollection(controller, head)
-    
-    -- Check for fatal collisions
-    self:_checkFatalCollisions(controller, head)
-end
-
-function CollisionModule:_checkOrbCollection(controller, head)
-    -- Check all orbs manually since they might not be tagged
-    local orbFolder = workspace:FindFirstChild("Orbs")
-    if not orbFolder then return end
-    
-    for _, orb in pairs(orbFolder:GetChildren()) do
-        if orb:IsA("BasePart") and (orb.Position - head.Position).Magnitude <= COLLISION_CONFIG.ORB_COLLECTION_RADIUS then
-            -- Fire orb collection event
-            controller.events.onOrbCollision:Fire(orb)
+        if controller and not controller.isDestroyed and controller.fsm then
+            local state = controller.fsm:getCurrentState()
             
-            -- Let the existing system handle the orb collection
-            -- since it has special logic for different orb types
-        end
-    end
-end
-
-function CollisionModule:_checkFatalCollisions(controller, head)
-    -- Check collision with other snakes
-    for _, snakeData in ipairs(self.snakeCache) do
-        -- Skip self
-        if snakeData.Player == controller.player then
-            continue
-        end
-        
-        -- Check head-to-head collision
-        if snakeData.Head and (snakeData.Head.Position - head.Position).Magnitude <= COLLISION_CONFIG.HEAD_RADIUS then
-            local collisionData = {
-                isFatal = true,
-                hitPart = snakeData.Head,
-                hitPosition = head.Position,
-                preventOrbs = false,
-                isHeadCollision = true,
-                killerPlayer = snakeData.Player,
-                isAI = snakeData.IsAI
-            }
-            
-            warn("[CollisionModule] HEAD COLLISION DETECTED between", controller.player.Name, "and", snakeData.IsAI and "AI Snake" or snakeData.Player.Name)
-            controller.events.onFatalHit:Fire(collisionData)
-            return
-        end
-        
-        -- Check collision with snake body segments
-        if snakeData.Segments then
-            for i, segment in ipairs(snakeData.Segments) do
-                if segment and segment:IsA("BasePart") then
-                    -- For self collision, skip first N segments
-                    if snakeData.Player == controller.player and i <= COLLISION_CONFIG.SELF_COLLISION_IGNORE_SEGMENTS then
-                        continue
-                    end
-                    
-                    if (segment.Position - head.Position).Magnitude <= COLLISION_CONFIG.BODY_DISTANCE then
-                        local collisionData = {
-                            isFatal = true,
-                            hitPart = segment,
-                            hitPosition = head.Position,
-                            preventOrbs = false,
-                            isBodyCollision = true,
-                            killerPlayer = snakeData.Player,
-                            isAI = snakeData.IsAI
-                        }
-                        
-                        warn("[CollisionModule] BODY COLLISION DETECTED between", controller.player.Name, "and", snakeData.IsAI and "AI Snake" or (snakeData.Player and snakeData.Player.Name or "Unknown"))
-                        controller.events.onFatalHit:Fire(collisionData)
-                        return
-                    end
+            -- Only check collisions for alive players
+            if state == "Alive" and checksThisFrame < self.MAX_CHECKS_PER_FRAME then
+                local head = controller:getSnakeHead()
+                if head then
+                    checksThisFrame = checksThisFrame + self:_checkPlayerCollisions(controller.player, controller, head)
+                elseif COLLISION_CONFIG.DEBUG_COLLISIONS and self.frameCount % 60 == 0 then
+                    warn("[CollisionModule] No head found for", controller.player.Name)
                 end
             end
         end
     end
     
-    -- Check collision with obstacles/walls
-    for _, obstacle in ipairs(self.obstacleCache) do
-        if obstacle and obstacle:IsA("BasePart") and (obstacle.Position - head.Position).Magnitude <= COLLISION_CONFIG.HEAD_RADIUS * 2 then
-            local collisionData = {
-                isFatal = true,
-                hitPart = obstacle,
-                hitPosition = head.Position,
-                preventOrbs = false,
-                isWallCollision = true
-            }
-            
-            warn("[CollisionModule] WALL COLLISION DETECTED for", controller.player.Name)
-            controller.events.onFatalHit:Fire(collisionData)
-            return
+    if COLLISION_CONFIG.DEBUG_COLLISIONS and self.frameCount % 180 == 0 then
+        print("[CollisionModule] Controllers checked:", controllersChecked, "Collision checks:", checksThisFrame)
+    end
+end
+
+-- Main collision check function for a player
+function CollisionModule:_checkPlayerCollisions(player, controller, head)
+    local checksPerformed = 0
+    
+    -- Check head-to-head collisions with other snakes
+    for otherPlayer, otherSnake in pairs(self.snakeCache.playerSnakes) do
+        if otherPlayer ~= player and otherSnake.head then
+            local distance = (head.Position - otherSnake.head.Position).Magnitude
+            if distance < COLLISION_CONFIG.HEAD_RADIUS * 2 then
+                if COLLISION_CONFIG.DEBUG_COLLISIONS then
+                    warn("[CollisionModule] HEAD-TO-HEAD COLLISION:", player.Name, "vs", otherPlayer.Name)
+                end
+                self:_handleCollision(controller, {
+                    type = "HeadToHead",
+                    otherPlayer = otherPlayer,
+                    position = head.Position,
+                    isFatal = true
+                })
+                checksPerformed = checksPerformed + 1
+            end
         end
+    end
+    
+    -- Check body collisions
+    if checksPerformed < 10 then  -- Limit checks per player
+        checksPerformed = checksPerformed + self:_checkBodyCollisions(player, controller, head)
+    end
+    
+    -- Check wall collisions
+    self:_checkWallCollision(controller, head)
+    
+    -- Check orb collections
+    self:_checkOrbCollections(controller, head)
+    
+    return checksPerformed
+end
+
+-- Check body collisions with other snakes
+function CollisionModule:_checkBodyCollisions(player, controller, head)
+    local checksPerformed = 0
+    
+    -- Check against all snake segments
+    for otherPlayer, otherSnake in pairs(self.snakeCache.playerSnakes) do
+        if otherSnake.segments then
+            -- Skip first few segments for self
+            local startIndex = (otherPlayer == player) and COLLISION_CONFIG.SELF_COLLISION_IGNORE_SEGMENTS or 1
+            
+            for i = startIndex, #otherSnake.segments do
+                local segment = otherSnake.segments[i]
+                if segment then
+                    local distance = (head.Position - segment.Position).Magnitude
+                    if distance < COLLISION_CONFIG.BODY_DISTANCE then
+                        if COLLISION_CONFIG.DEBUG_COLLISIONS then
+                            warn("[CollisionModule] BODY COLLISION:", player.Name, "hit", 
+                                 otherPlayer == player and "SELF" or otherPlayer.Name, "segment", i)
+                        end
+                        self:_handleCollision(controller, {
+                            type = "Body",
+                            otherPlayer = otherPlayer,
+                            position = head.Position,
+                            isFatal = true
+                        })
+                        return checksPerformed + 1
+                    end
+                end
+                checksPerformed = checksPerformed + 1
+                if checksPerformed >= 10 then break end
+            end
+        end
+    end
+    
+    -- Check AI snake collisions
+    for _, aiSnake in pairs(self.snakeCache.aiSnakes) do
+        if aiSnake.segments then
+            for i, segment in ipairs(aiSnake.segments) do
+                if segment then
+                    local distance = (head.Position - segment.Position).Magnitude
+                    if distance < COLLISION_CONFIG.BODY_DISTANCE then
+                        if COLLISION_CONFIG.DEBUG_COLLISIONS then
+                            warn("[CollisionModule] AI BODY COLLISION:", player.Name, "hit AI snake")
+                        end
+                        self:_handleCollision(controller, {
+                            type = "Body",
+                            otherPlayer = "AI",
+                            position = head.Position,
+                            isFatal = true
+                        })
+                        return checksPerformed + 1
+                    end
+                end
+                checksPerformed = checksPerformed + 1
+                if checksPerformed >= 10 then break end
+            end
+        end
+    end
+    
+    return checksPerformed
+end
+
+-- Check wall collisions
+function CollisionModule:_checkWallCollision(controller, head)
+    local mapSize = 500 -- Should get from config
+    local x, z = head.Position.X, head.Position.Z
+    
+    if math.abs(x) > mapSize or math.abs(z) > mapSize then
+        self:_handleCollision(controller, {
+            type = "Wall",
+            position = head.Position,
+            isFatal = true
+        })
+    end
+end
+
+-- Check orb collections (renamed from _checkOrbCollection)
+function CollisionModule:_checkOrbCollections(controller, head)
+    for _, orb in pairs(self.orbCache) do
+        if orb and orb.Parent then
+            local distance = (head.Position - orb.Position).Magnitude
+            if distance < COLLISION_CONFIG.ORB_COLLECTION_RADIUS then
+                self:_handleCollision(controller, {
+                    type = "Orb",
+                    orb = orb,
+                    position = orb.Position,
+                    isFatal = false
+                })
+            end
+        end
+    end
+end
+
+-- Handle collision event
+function CollisionModule:_handleCollision(controller, collisionData)
+    -- Check debouncing for fatal collisions
+    if collisionData.isFatal then
+        local lastCollisionTime = controller.player:GetAttribute("LastCollisionTime") or 0
+        local currentTime = tick()
+        
+        if currentTime - lastCollisionTime < 0.5 then
+            if COLLISION_CONFIG.DEBUG_COLLISIONS then
+                print("[CollisionModule] Collision ignored - too soon after last collision")
+            end
+            return -- Ignore collision if too soon after last one
+        end
+        
+        controller.player:SetAttribute("LastCollisionTime", currentTime)
+    end
+    
+    -- Fire appropriate event based on collision type
+    if collisionData.type == "Orb" then
+        controller.events.onOrbCollision:Fire(collisionData)
+    elseif collisionData.isFatal then
+        if COLLISION_CONFIG.DEBUG_COLLISIONS then
+            warn("[CollisionModule] FIRING FATAL HIT EVENT for", controller.player.Name, "- Type:", collisionData.type)
+        end
+        controller.events.onFatalHit:Fire(collisionData)
     end
 end
 
@@ -202,104 +280,119 @@ function CollisionModule:_updateCaches()
         end
     end
     
-    -- Update obstacle cache (walls, boundaries)
+    -- Update obstacle cache (walls)
     self.obstacleCache = {}
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and (obj.Name == "Obstacle" or obj.Name == "Boundary" or obj.Name == "Wall") then
-            table.insert(self.obstacleCache, obj)
-        end
-    end
-    
-    -- Update snake cache - find all snakes
-    self.snakeCache = {}
-    
-    -- Find player snakes - they can be in workspace or in SnakeFolder
-    for _, player in pairs(Players:GetPlayers()) do
-        local snakeModel = nil
-        
-        -- First check workspace directly (older system)
-        snakeModel = workspace:FindFirstChild("Snake_" .. player.Name)
-        
-        -- If not found, check SnakeFolder (newer system)
-        if not snakeModel then
-            local snakeFolder = workspace:FindFirstChild("SnakeFolder")
-            if snakeFolder then
-                snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
-            end
-        end
-        
-        if snakeModel and snakeModel:IsA("Model") then
-            -- Player snakes from OptimizedSnakeSystemV9 have head as Segment0_Head
-            local head = snakeModel:FindFirstChild("Segment0_Head")
-            
-            if head and head:IsA("BasePart") then
-                local segments = {}
-                
-                -- First add the head (Segment0_Head)
-                table.insert(segments, head)
-                
-                -- Then collect all body segments (Segment1, Segment2, etc.)
-                local i = 1
-                while true do
-                    local segment = snakeModel:FindFirstChild("Segment" .. i)
-                    if segment and segment:IsA("BasePart") then
-                        table.insert(segments, segment)
-                        i = i + 1
-                    else
-                        break
-                    end
-                end
-                
-                warn("[CollisionModule] Found player snake:", snakeModel.Name, "with", #segments, "segments for", player.Name)
-                
-                table.insert(self.snakeCache, {
-                    Head = head,
-                    Model = snakeModel,
-                    Segments = segments,
-                    IsAI = false,
-                    Player = player
-                })
+    local mapBorders = workspace:FindFirstChild("MapBorders")
+    if mapBorders then
+        for _, border in pairs(mapBorders:GetChildren()) do
+            if border:IsA("BasePart") then
+                table.insert(self.obstacleCache, border)
             end
         end
     end
     
-    -- Find AI snakes (they're directly in workspace with names like "AISnakeModel_")
-    for _, child in pairs(workspace:GetChildren()) do
-        if child:IsA("Model") and child.Name:match("^AISnakeModel_") then
-            -- This is an AI snake
-            local head = child:FindFirstChild("Segment0_Head")
-            if head and head:IsA("BasePart") then
-                -- AI snakes have segments named "AISegment1", "AISegment2", etc.
-                local segments = {}
-                
-                -- First add the head as segment 0
-                table.insert(segments, head)
-                
-                -- Then find all body segments
-                for _, part in pairs(child:GetChildren()) do
-                    if part:IsA("BasePart") and part.Name:match("^AISegment%d+") then
-                        local segmentNumber = tonumber(part.Name:match("AISegment(%d+)"))
-                        if segmentNumber then
-                            segments[segmentNumber + 1] = part -- +1 because head is at index 1
+    -- Update snake cache
+    self.snakeCache = {
+        playerSnakes = {},
+        aiSnakes = {}
+    }
+    
+    -- Cache player snakes - look for actual snake models
+    local snakeFolder = workspace:FindFirstChild("Snakes")
+    if snakeFolder then
+        for _, snakeModel in pairs(snakeFolder:GetChildren()) do
+            if snakeModel:IsA("Model") then
+                -- Check if it's a player snake
+                local playerName = snakeModel.Name:match("Snake_(.+)")
+                if playerName then
+                    local player = game.Players:FindFirstChild(playerName)
+                    if player then
+                        local head = snakeModel:FindFirstChild("Segment0_Head") or snakeModel:FindFirstChild("Head")
+                        if head then
+                            local segments = {}
+                            -- Collect all segments
+                            for _, part in pairs(snakeModel:GetChildren()) do
+                                if part:IsA("BasePart") and part.Name:match("Segment%d+") and part ~= head then
+                                    local segmentNum = tonumber(part.Name:match("Segment(%d+)"))
+                                    if segmentNum then
+                                        segments[segmentNum] = part
+                                    end
+                                end
+                            end
+                            
+                            self.snakeCache.playerSnakes[player] = {
+                                head = head,
+                                segments = segments,
+                                player = player,
+                                model = snakeModel
+                            }
+                            
+                            if COLLISION_CONFIG.DEBUG_COLLISIONS then
+                                print("[CollisionModule] Found player snake:", player.Name, "with", #segments, "segments")
+                            end
                         end
                     end
                 end
-                
-                -- Also check if it's tagged as AISnake
-                local isAI = CollectionService:HasTag(child, "AISnake")
-                
-                table.insert(self.snakeCache, {
-                    Head = head,
-                    Model = child,
-                    Segments = segments,
-                    IsAI = true,
-                    Player = nil
-                })
             end
         end
     end
     
-    warn("[CollisionModule] Cache updated - Orbs:", #self.orbCache, "Obstacles:", #self.obstacleCache, "Snakes:", #self.snakeCache)
+    -- Also check character models for snakes
+    for player, controller in pairs(self.playerControllers) do
+        if not self.snakeCache.playerSnakes[player] and controller and not controller.isDestroyed then
+            local character = player.Character
+            if character then
+                local snakeModel = character:FindFirstChild("Snake_" .. player.Name)
+                if snakeModel then
+                    local head = snakeModel:FindFirstChild("Segment0_Head") or snakeModel:FindFirstChild("Head")
+                    if head then
+                        local segments = {}
+                        for _, part in pairs(snakeModel:GetChildren()) do
+                            if part:IsA("BasePart") and part.Name:match("Segment%d+") and part ~= head then
+                                local segmentNum = tonumber(part.Name:match("Segment(%d+)"))
+                                if segmentNum then
+                                    segments[segmentNum] = part
+                                end
+                            end
+                        end
+                        
+                        self.snakeCache.playerSnakes[player] = {
+                            head = head,
+                            segments = segments,
+                            player = player,
+                            model = snakeModel
+                        }
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Cache AI snakes
+    local aiSnakeFolder = workspace:FindFirstChild("AISnakes")
+    if aiSnakeFolder then
+        for _, aiModel in pairs(aiSnakeFolder:GetChildren()) do
+            if aiModel:IsA("Model") then
+                local head = aiModel:FindFirstChild("Head") or aiModel:FindFirstChild("Segment0_Head")
+                if head then
+                    local segments = {}
+                    for _, part in pairs(aiModel:GetChildren()) do
+                        if part:IsA("BasePart") and part.Name:match("Segment") and part ~= head then
+                            table.insert(segments, part)
+                        end
+                    end
+                    
+                    table.insert(self.snakeCache.aiSnakes, {
+                        head = head,
+                        segments = segments,
+                        model = aiModel
+                    })
+                end
+            end
+        end
+    end
+    
+    self.lastCacheUpdate = tick()
 end
 
 -- Helper to get player from part
@@ -313,6 +406,14 @@ function CollisionModule:_getPlayerFromPart(part)
         end
     end
     return nil
+end
+
+function CollisionModule:registerController(player, controller)
+    self.playerControllers[player] = controller
+end
+
+function CollisionModule:unregisterController(player)
+    self.playerControllers[player] = nil
 end
 
 return CollisionModule

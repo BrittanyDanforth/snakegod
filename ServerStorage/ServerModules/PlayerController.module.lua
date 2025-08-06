@@ -161,23 +161,6 @@ function PlayerController:setSpeed(speed)
     self.data.speed = speed
 end
 
-function PlayerController:hasReviveToken()
-    -- Read from GamepassHandler's attribute
-    return (self.player:GetAttribute("RevivesAvailable") or 0) > 0
-end
-
-function PlayerController:useReviveToken()
-    -- Decrement GamepassHandler's attribute
-    local currentRevives = self.player:GetAttribute("RevivesAvailable") or 0
-    if currentRevives > 0 then
-        self.player:SetAttribute("RevivesAvailable", currentRevives - 1)
-        -- Also update internal data for consistency
-        self.data.reviveTokens = currentRevives - 1
-        return true
-    end
-    return false
-end
-
 -- Collision state management
 function PlayerController:isInvincible()
     return os.clock() < self.collisionState.invincibleUntil
@@ -209,51 +192,44 @@ function PlayerController:setSnakeObject(snakeObject)
 end
 
 function PlayerController:getSnakeHead()
-    -- First try to use stored snake object/model
+    -- First try to get from character
+    if self.player.Character then
+        -- Look for snake model in character
+        local snakeModel = self.player.Character:FindFirstChild("Snake_" .. self.player.Name)
+        if snakeModel then
+            local head = snakeModel:FindFirstChild("Segment0_Head")
+            if head and head:IsA("BasePart") then
+                return head
+            end
+        end
+    end
+    
+    -- Try workspace Snakes folder
+    local snakesFolder = workspace:FindFirstChild("Snakes")
+    if snakesFolder then
+        local snakeModel = snakesFolder:FindFirstChild("Snake_" .. self.player.Name)
+        if snakeModel then
+            local head = snakeModel:FindFirstChild("Segment0_Head")
+            if head and head:IsA("BasePart") then
+                return head
+            end
+        end
+    end
+    
+    -- Try stored snake object
     if self.snakeObject then
         if self.snakeObject:IsA("Model") then
-            -- Direct model reference
             local head = self.snakeObject:FindFirstChild("Segment0_Head")
             if head and head:IsA("BasePart") then
                 return head
             end
         elseif self.snakeObject.model then
-            -- Snake object with model property
-            local head = self.snakeObject.model:FindFirstChild("Segment0_Head") or
-                         self.snakeObject.model:FindFirstChild("Head")
+            local head = self.snakeObject.model:FindFirstChild("Segment0_Head")
             if head and head:IsA("BasePart") then
                 return head
             end
-        end
-    end
-    
-    -- Search workspace directly
-    local snakeModel = workspace:FindFirstChild("Snake_" .. self.player.Name)
-    if snakeModel and snakeModel:IsA("Model") then
-        local head = snakeModel:FindFirstChild("Segment0_Head")
-        if head and head:IsA("BasePart") then
-            return head
-        end
-    end
-    
-    -- Also check SnakeFolder
-    local snakeFolder = workspace:FindFirstChild("SnakeFolder")
-    if snakeFolder then
-        local playerSnake = snakeFolder:FindFirstChild(self.player.Name) or 
-                           snakeFolder:FindFirstChild("Snake_" .. self.player.Name)
-        if playerSnake and playerSnake:IsA("Model") then
-            local head = playerSnake:FindFirstChild("Segment0_Head")
-            if head and head:IsA("BasePart") then
-                return head
-            end
-        end
-    end
-    
-    -- Fallback to character if no snake
-    if self.player.Character then
-        local humanoidRootPart = self.player.Character:FindFirstChild("HumanoidRootPart")
-        if humanoidRootPart then
-            return humanoidRootPart
+        elseif self.snakeObject.head then
+            return self.snakeObject.head
         end
     end
     
@@ -300,17 +276,6 @@ function PlayerController:requestReviveFromClient()
     end)
 end
 
-function PlayerController:hideReviveUI()
-    local remotes = ReplicatedStorage:WaitForChild("Remotes")
-    local promptRevive = remotes:FindFirstChild("PromptRevive")
-    
-    if promptRevive then
-        promptRevive:FireClient(self.player, {
-            show = false
-        })
-    end
-end
-
 function PlayerController:playDeathEffects(collisionData)
     -- This will handle death VFX, sounds, etc.
     -- For now, just a placeholder
@@ -324,7 +289,32 @@ function PlayerController:notifyStateChange(newState)
     self.events.onStateChanged:Fire(newState)
 end
 
--- Cleanup
+-- Revive token management
+function PlayerController:hasReviveToken()
+    -- Check if player has revives from gamepass or default
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    return revivesAvailable > 0
+end
+
+function PlayerController:useReviveToken()
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    if revivesAvailable > 0 then
+        self.player:SetAttribute("RevivesAvailable", revivesAvailable - 1)
+        return true
+    end
+    return false
+end
+
+-- Hide revive UI helper
+function PlayerController:hideReviveUI()
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local hideRevive = remotes:FindFirstChild("HideReviveUI")
+    if hideRevive then
+        hideRevive:FireClient(self.player)
+    end
+end
+
+-- Cleanup and destruction
 function PlayerController:destroy()
     if self.isDestroyed then
         return

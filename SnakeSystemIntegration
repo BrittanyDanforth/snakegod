@@ -40,7 +40,9 @@ if not OptimizedSnakeSystem then
 end
 
 -- Initialize the system (creates networking folder)
-OptimizedSnakeSystem.init()
+if OptimizedSnakeSystem and OptimizedSnakeSystem.init then
+	OptimizedSnakeSystem.init()
+end
 
 -- Wait a moment for folder creation
 wait(0.1)
@@ -54,8 +56,16 @@ pcall(function()
 	end
 end)
 
--- Store active snakes
-local activeSnakes = {}
+-- Keep track of player connections
+local PlayerConnections = {}
+
+-- Keep track of snakes
+local PlayerSnakes = {}
+
+-- Gamepass multipliers (will be set by GamepassHandler)
+local GrowthMultiplier = 1
+local SpeedMultiplier = 1
+local CoinMultiplier = 1
 
 -- Create/Get RemoteEvents for menu integration
 local remoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents") or Instance.new("Folder", ReplicatedStorage)
@@ -85,7 +95,10 @@ local DEFAULT_CONFIG = {
 	HeadMaterial = Enum.Material.Neon,
 	BodyMaterial = Enum.Material.Neon,
 	GlowIntensity = 2,
-	GlowRange = 6
+	GlowRange = 6,
+	BaseSpeed = 16,  -- Normal speed
+	BoostSpeed = 24, -- Boost speed
+	TurnSpeed = 7    -- Turn speed
 }
 
 -- Get skin configuration
@@ -111,6 +124,109 @@ local function getSkinConfig(player)
 	end
 
 	return DEFAULT_CONFIG
+end
+
+-- Create snake for player
+local function createSnakeForPlayer(player, snakeLength)
+	-- Ensure character exists
+	local character = player.Character
+	if not character then
+		warn("❌ No character found for", player.Name)
+		return
+	end
+	
+	-- Create the snake config
+	local config = {
+		InitialLength = snakeLength or DEFAULT_CONFIG.InitialLength,
+		MaxSegments = 50000,
+		SegmentSize = DEFAULT_CONFIG.SegmentSize,
+		GapSize = 0,
+		TurnSpeed = 7,
+		BaseSpeed = DEFAULT_CONFIG.BaseSpeed,
+		BoostSpeed = DEFAULT_CONFIG.BoostSpeed,
+		PlayerName = player.Name,
+		SkinName = player:GetAttribute("SelectedSkin") or "Default"
+	}
+	
+	-- Apply gamepass multipliers
+	if GrowthMultiplier > 1 then
+		config.InitialLength = math.floor(config.InitialLength * GrowthMultiplier)
+		print("✅ Applying", GrowthMultiplier, "x growth multiplier! New length:", config.InitialLength)
+	end
+	
+	-- Log config (less verbose)
+	-- print("Creating snake with config - InitialLength:", config.InitialLength, "MaxSegments:", config.MaxSegments)
+	print("🐍 Creating snake for", player.Name, "with length:", config.InitialLength)
+	
+	-- Create the snake
+	local snake = OptimizedSnakeSystem.createSnake(character, config)
+	if snake then
+		-- print("✅ Snake created successfully for", player.Name)
+		
+		-- Store snake reference
+		PlayerSnakes[player] = snake
+		
+		-- Add to global table for collision handler
+		if not _G.PlayerSnakes then
+			_G.PlayerSnakes = {}
+		end
+		_G.PlayerSnakes[player] = snake
+		
+		-- Setup boost tracking
+		if snake.setBoosting then
+			-- Create RemoteEvent for boost state
+			local boostEvent = remoteEvents:FindFirstChild("UpdateBoostState")
+			if not boostEvent then
+				boostEvent = Instance.new("RemoteEvent")
+				boostEvent.Name = "UpdateBoostState"
+				boostEvent.Parent = remoteEvents
+			end
+			
+			-- Listen for boost state changes
+			local boostConnection
+			boostConnection = boostEvent.OnServerEvent:Connect(function(eventPlayer, isBoosting)
+				if eventPlayer == player and PlayerSnakes[player] then
+					PlayerSnakes[player]:setBoosting(isBoosting)
+				end
+			end)
+			
+			-- Store connection for cleanup
+			if not PlayerConnections[player] then
+				PlayerConnections[player] = {}
+			end
+			PlayerConnections[player].boostConnection = boostConnection
+		end
+		
+		-- Ensure leaderstats exist
+		local leaderstats = player:FindFirstChild("leaderstats")
+		if not leaderstats then
+			leaderstats = Instance.new("Folder")
+			leaderstats.Name = "leaderstats"
+			leaderstats.Parent = player
+		end
+		
+		-- Create or update Length value
+		local lengthValue = leaderstats:FindFirstChild("Length")
+		if not lengthValue then
+			lengthValue = Instance.new("IntValue")
+			lengthValue.Name = "Length"
+			lengthValue.Value = config.InitialLength or 55
+			lengthValue.Parent = leaderstats
+		else
+			-- Set to initial length from config
+			lengthValue.Value = config.InitialLength or 55
+		end
+		
+		-- Set initial length value
+		if lengthValue then
+			lengthValue.Value = snakeLength
+		end
+		
+		return snake
+	else
+		warn("❌ Failed to create snake for", player.Name)
+		return nil
+	end
 end
 
 -- Handle character spawning
@@ -144,9 +260,9 @@ local function onCharacterAdded(character)
 	end
 
 	-- Clean up old snake
-	if activeSnakes[player] then
-		activeSnakes[player]:destroy()
-		activeSnakes[player] = nil
+	if PlayerSnakes[player] then
+		PlayerSnakes[player]:destroy()
+		PlayerSnakes[player] = nil
 	end
 
 	-- Wait for character to load
@@ -185,152 +301,152 @@ local function onCharacterAdded(character)
 		player:SetAttribute("ReviveSnakeLength", nil)
 	end
 
-	print("Creating snake with config - InitialLength:", config.InitialLength, "MaxSegments:", config.MaxSegments)
-
-	-- Create optimized snake
-	print("🐍 Creating snake for", player.Name, "with config:", config.InitialLength, "length")
-	local success, snake = pcall(function()
-		return OptimizedSnakeSystem.createSnake(character, config)
-	end)
-
-	if not success then
-		warn("❌ Error creating snake:", snake)
-		return
+	-- Apply gamepass multipliers
+	if GrowthMultiplier > 1 then
+		config.InitialLength = math.floor(config.InitialLength * GrowthMultiplier)
+		print("✅ Applying", GrowthMultiplier, "x growth multiplier! New length:", config.InitialLength)
 	end
+	
+	-- Log config (less verbose)
+	-- print("Creating snake with config - InitialLength:", config.InitialLength, "MaxSegments:", config.MaxSegments)
+	print("🐍 Creating snake for", player.Name, "with length:", config.InitialLength)
+	
+	-- Create the snake
+	local snake = OptimizedSnakeSystem.createSnake(character, config)
+	if snake then
+		-- print("✅ Snake created successfully for", player.Name)
+		
+		-- Store snake reference
+		PlayerSnakes[player] = snake
 
-	if not snake then
-		warn("❌ Failed to create snake for", player.Name)
-		return
-	end
+		-- Add to global table for collision handler
+		if not _G.PlayerSnakes then
+			_G.PlayerSnakes = {}
+		end
+		_G.PlayerSnakes[player] = snake
 
-	print("✅ Snake created successfully for", player.Name)
-	activeSnakes[player] = snake
+		-- Setup boost tracking
+		if snake.setBoosting then
+			-- Create RemoteEvent for boost state
+			local boostEvent = remoteEvents:FindFirstChild("UpdateBoostState")
+			if not boostEvent then
+				boostEvent = Instance.new("RemoteEvent")
+				boostEvent.Name = "UpdateBoostState"
+				boostEvent.Parent = remoteEvents
+			end
 
-	-- Add to global table for collision handler
-	if not _G.PlayerSnakes then
-		_G.PlayerSnakes = {}
-	end
-	_G.PlayerSnakes[player] = snake
+			-- Listen for boost state changes
+			local boostConnection
+			boostConnection = boostEvent.OnServerEvent:Connect(function(eventPlayer, isBoosting)
+				if eventPlayer == player and PlayerSnakes[player] then
+					PlayerSnakes[player]:setBoosting(isBoosting)
+				end
+			end)
 
-	-- Setup boost tracking
-	if snake.setBoosting then
-		-- Create RemoteEvent for boost state
-		local boostEvent = remoteEvents:FindFirstChild("UpdateBoostState")
-		if not boostEvent then
-			boostEvent = Instance.new("RemoteEvent")
-			boostEvent.Name = "UpdateBoostState"
-			boostEvent.Parent = remoteEvents
+			-- Store connection for cleanup
+			if not PlayerConnections[player] then
+				PlayerConnections[player] = {}
+			end
+			PlayerConnections[player].boostConnection = boostConnection
 		end
 
-		-- Listen for boost state changes
-		local boostConnection
-		boostConnection = boostEvent.OnServerEvent:Connect(function(eventPlayer, isBoosting)
-			if eventPlayer == player and activeSnakes[player] then
-				activeSnakes[player]:setBoosting(isBoosting)
+		-- Ensure leaderstats exist
+		local leaderstats = player:FindFirstChild("leaderstats")
+		if not leaderstats then
+			leaderstats = Instance.new("Folder")
+			leaderstats.Name = "leaderstats"
+			leaderstats.Parent = player
+		end
+
+		local lengthValue = leaderstats:FindFirstChild("Length")
+		if not lengthValue then
+			lengthValue = Instance.new("IntValue")
+			lengthValue.Name = "Length"
+			lengthValue.Value = config.InitialLength or 55
+			lengthValue.Parent = leaderstats
+		else
+			-- Set to initial length from config
+			lengthValue.Value = config.InitialLength or 55
+		end
+
+		-- Handle length updates
+		if lengthValue then
+			-- Initial length
+			snake:updateLength(lengthValue.Value)
+
+			-- Listen for changes
+			lengthValue.Changed:Connect(function(newLength)
+				if snake and PlayerSnakes[player] == snake then
+					snake:updateLength(newLength)
+				end
+			end)
+		end
+
+		-- Note: OptimizedSnakeSystemV9 handles its own update loop internally via RunService.Heartbeat
+		-- We don't need to create an update loop here
+
+		-- Clean up any connections when character is removed
+		character.AncestryChanged:Connect(function()
+			if not character.Parent then
+				-- Clean up the snake
+				if PlayerSnakes[player] == snake then
+					PlayerSnakes[player] = nil
+				end
 			end
 		end)
 
-		-- Store connection for cleanup
-		if not snake._connections then
-			snake._connections = {}
-		end
-		snake._connections.boost = boostConnection
-	end
+		-- Handle skin changes
+		local skinConnection
+		skinConnection = player:GetAttributeChangedSignal("SelectedSkin"):Connect(function()
+			if snake and PlayerSnakes[player] == snake then
+				-- Update snake appearance
+				local newConfig = getSkinConfig(player)
+				-- Apply new skin to snake
+				if snake.head then
+					snake.head.Color = newConfig.HeadColor
+					snake.head.Material = newConfig.HeadMaterial
+				end
+				snake.config = newConfig
+			end
+		end)
 
-	-- Ensure leaderstats exist
-	local leaderstats = player:FindFirstChild("leaderstats")
-	if not leaderstats then
-		leaderstats = Instance.new("Folder")
-		leaderstats.Name = "leaderstats"
-		leaderstats.Parent = player
-	end
+		-- Store connections on snake object for cleanup
+		snake.skinConnection = skinConnection
 
-	local lengthValue = leaderstats:FindFirstChild("Length")
-	if not lengthValue then
-		lengthValue = Instance.new("IntValue")
-		lengthValue.Name = "Length"
-		lengthValue.Value = config.InitialLength or 55
-		lengthValue.Parent = leaderstats
+		-- Handle death
+		local deathConnection
+		deathConnection = humanoid.Died:Connect(function()
+			if PlayerSnakes[player] then
+				-- Disconnect all connections immediately
+				if skinConnection then
+					skinConnection:Disconnect()
+				end
+				if deathConnection then
+					deathConnection:Disconnect()
+				end
+
+				-- Cleanup boost connection
+				if snake._connections and snake._connections.boost then
+					snake._connections.boost:Disconnect()
+				end
+
+				-- NO DEATH ORB SPAWNING HERE - SnakeCollisionHandler handles this!
+				-- The collision handler already spawns death orbs properly distributed along the snake
+				-- Removing duplicate spawning that was causing both red and rainbow orbs to appear
+
+				-- Clean up snake
+				PlayerSnakes[player]:destroy()
+				PlayerSnakes[player] = nil
+
+				-- Remove from global table
+				if _G.PlayerSnakes then
+					_G.PlayerSnakes[player] = nil
+				end
+			end
+		end)
 	else
-		-- Set to initial length from config
-		lengthValue.Value = config.InitialLength or 55
+		warn("❌ Failed to create snake for", player.Name)
 	end
-
-	-- Handle length updates
-	if lengthValue then
-		-- Initial length
-		snake:updateLength(lengthValue.Value)
-
-		-- Listen for changes
-		lengthValue.Changed:Connect(function(newLength)
-			if snake and activeSnakes[player] == snake then
-				snake:updateLength(newLength)
-			end
-		end)
-	end
-
-	-- Note: OptimizedSnakeSystemV9 handles its own update loop internally via RunService.Heartbeat
-	-- We don't need to create an update loop here
-
-	-- Clean up any connections when character is removed
-	character.AncestryChanged:Connect(function()
-		if not character.Parent then
-			-- Clean up the snake
-			if activeSnakes[player] == snake then
-				activeSnakes[player] = nil
-			end
-		end
-	end)
-
-	-- Handle skin changes
-	local skinConnection
-	skinConnection = player:GetAttributeChangedSignal("SelectedSkin"):Connect(function()
-		if snake and activeSnakes[player] == snake then
-			-- Update snake appearance
-			local newConfig = getSkinConfig(player)
-			-- Apply new skin to snake
-			if snake.head then
-				snake.head.Color = newConfig.HeadColor
-				snake.head.Material = newConfig.HeadMaterial
-			end
-			snake.config = newConfig
-		end
-	end)
-
-	-- Store connections on snake object for cleanup
-	snake.skinConnection = skinConnection
-
-	-- Handle death
-	local deathConnection
-	deathConnection = humanoid.Died:Connect(function()
-		if activeSnakes[player] then
-			-- Disconnect all connections immediately
-			if skinConnection then
-				skinConnection:Disconnect()
-			end
-			if deathConnection then
-				deathConnection:Disconnect()
-			end
-
-			-- Cleanup boost connection
-			if snake._connections and snake._connections.boost then
-				snake._connections.boost:Disconnect()
-			end
-
-			-- NO DEATH ORB SPAWNING HERE - SnakeCollisionHandler handles this!
-			-- The collision handler already spawns death orbs properly distributed along the snake
-			-- Removing duplicate spawning that was causing both red and rainbow orbs to appear
-
-			-- Clean up snake
-			activeSnakes[player]:destroy()
-			activeSnakes[player] = nil
-
-			-- Remove from global table
-			if _G.PlayerSnakes then
-				_G.PlayerSnakes[player] = nil
-			end
-		end
-	end)
 end
 
 -- Handle players
@@ -359,9 +475,9 @@ end)
 
 -- Cleanup on player leaving
 Players.PlayerRemoving:Connect(function(player)
-	if activeSnakes[player] then
-		activeSnakes[player]:destroy()
-		activeSnakes[player] = nil
+	if PlayerSnakes[player] then
+		PlayerSnakes[player]:destroy()
+		PlayerSnakes[player] = nil
 	end
 end)
 
@@ -404,6 +520,50 @@ if respawnEvent then
 	end)
 end
 
+-- Remove snake for player
+local function removeSnakeForPlayer(player)
+	if PlayerSnakes[player] then
+		PlayerSnakes[player]:destroy()
+		PlayerSnakes[player] = nil
+		
+		-- Remove from global table
+		if _G.PlayerSnakes then
+			_G.PlayerSnakes[player] = nil
+		end
+	end
+end
+
+-- Respawn snake with specific length
+local function respawnSnakeWithLength(player, length)
+	-- Remove existing snake
+	removeSnakeForPlayer(player)
+	
+	-- Create new snake with specified length
+	return createSnakeForPlayer(player, length)
+end
+
+-- Handle player respawn with stored length
+local function handlePlayerRespawn(player)
+	local reviveLength = player:GetAttribute("ReviveSnakeLength")
+	if reviveLength and reviveLength > 0 then
+		print("🔄 Respawning with revive length:", reviveLength)
+		respawnSnakeWithLength(player, reviveLength)
+		-- Clear the attribute
+		player:SetAttribute("ReviveSnakeLength", nil)
+	else
+		-- Normal respawn
+		createSnakeForPlayer(player, DEFAULT_CONFIG.InitialLength)
+	end
+end
+
 -- Removed auto-spawn - players spawn when clicking Play button
 
-print("✅ Snake System Integration loaded!")
+-- Return the public API
+return {
+	createSnake = createSnakeForPlayer,
+	removeSnake = removeSnakeForPlayer,
+	respawnSnake = respawnSnakeWithLength,
+	handleRespawn = handlePlayerRespawn
+}
+
+-- print("✅ Snake System Integration loaded!")
