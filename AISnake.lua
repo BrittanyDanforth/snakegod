@@ -267,7 +267,7 @@ local function getOrCreateSnakeModel(aiId)
 	end
 	local model = Instance.new("Model")
 	model.Name = modelName
-	model.Parent = Workspace
+	-- Don't parent to workspace yet
 	return model
 end
 
@@ -354,11 +354,11 @@ end
 local function createVisualHead(config, parentModel)
 	-- HEAD IS NOW SEGMENT 0 - Part of the unified body
 	local headPart = Instance.new("Part")
-	headPart.Name = "Segment0_Head" -- Match OptimizedSnakeSystem naming
+	headPart.Name = "Segment0_Head" -- Match the naming convention expected by client
+	headPart.Shape = Enum.PartType.Ball -- Using Ball like OptimizedSnakeSystem
 	headPart.Size = Vector3.new(BASE_SIZE * HEAD_SIZE_MULTIPLIER, BASE_SIZE * HEAD_SIZE_MULTIPLIER, BASE_SIZE * HEAD_SIZE_MULTIPLIER)
 	headPart.Material = Enum.Material.Neon -- Consistent with OptimizedSnakeSystem
 	headPart.Color = config.HeadColor
-	headPart.Shape = Enum.PartType.Ball
 	headPart.CanCollide = false
 	headPart.CanTouch = true -- CRITICAL: Enable touch detection for orb collection
 	headPart.CanQuery = true -- Enable for raycasts
@@ -1574,6 +1574,27 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		print("AI Snake limit reached:", MAX_AI_SNAKES)
 		return nil
 	end
+	
+	-- Ensure spawn position is safe (not too close to other snakes)
+	local safePosition = startPosition
+	if safePosition then
+		-- Check distance to other AI snakes
+		for _, otherSnake in ipairs(AISnake._activeSnakes) do
+			if otherSnake and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
+				local otherPos = otherSnake.HeadParts.head.Position
+				local distance = (safePosition - otherPos).Magnitude
+				if distance < 50 then -- Too close, adjust position
+					local offset = Vector3.new(
+						math.random(-100, 100),
+						0,
+						math.random(-100, 100)
+					)
+					safePosition = safePosition + offset
+					break
+				end
+			end
+		end
+	end
 
 	local self = setmetatable({}, AISnake)
 
@@ -1590,7 +1611,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	-- Update map bounds if needed (in case map was created after script started)
 	updateMapBounds()
 
-	self.Position = startPosition or Vector3new(0, 5, 0)
+	self.Position = safePosition or Vector3new(0, 5, 0)
 	self.Direction = Vector3new(0, 0, 1)
 
 	-- Use AI-specific settings if available
@@ -1637,6 +1658,9 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	self._orbCheckFrame = 0
 	self._visibilityCheckFrame = 0
 	self._segmentUpdateFrame = 0
+	
+	-- Spawn protection
+	self._spawnProtectionTime = tick() + 3 -- 3 seconds of spawn protection
 
 	-- Use preserved personality or assign random one
 	local pType
@@ -1667,6 +1691,9 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	for _, obj in ipairs(self.Model:GetChildren()) do
 		obj:Destroy()
 	end
+	
+	-- Debug print
+	print("🐍 Creating AI Snake model:", self.Model.Name)
 
 	game:GetService("CollectionService"):AddTag(self.Model, "AISnake")
 
@@ -1680,6 +1707,26 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	self.RootPart.Parent = self.Model
 
 	self.HeadParts = createVisualHead(self.Config, self.Model)
+	
+	-- Position the head at spawn position
+	if self.HeadParts.head then
+		self.HeadParts.head.Position = self.Position
+		self.HeadParts.head.CFrame = CFrame.new(self.Position)
+		
+		-- Update eye positions
+		if self.HeadParts.leftEye then
+			self.HeadParts.leftEye.CFrame = self.HeadParts.head.CFrame * CFrame.new(-0.4, 0.2, 0.8)
+		end
+		if self.HeadParts.rightEye then
+			self.HeadParts.rightEye.CFrame = self.HeadParts.head.CFrame * CFrame.new(0.4, 0.2, 0.8)
+		end
+		if self.HeadParts.leftPupil then
+			self.HeadParts.leftPupil.CFrame = self.HeadParts.leftEye.CFrame * CFrame.new(0, 0, 0.15)
+		end
+		if self.HeadParts.rightPupil then
+			self.HeadParts.rightPupil.CFrame = self.HeadParts.rightEye.CFrame * CFrame.new(0, 0, 0.15)
+		end
+	end
 
 	self.Segments = {}
 
@@ -1830,6 +1877,9 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	-- Initialize model attributes for client LOD
 	self.Model:SetAttribute("CurrentLength", self.CurrentLength)
 	self.Model:SetAttribute("HeadPosition", self.Position)
+	
+	-- Parent the model to workspace after setup
+	self.Model.Parent = workspace
 
 	-- Spawn sequence to prevent gaps
 	task.defer(function()
@@ -1839,6 +1889,14 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		-- Check if snake was destroyed during wait
 		if self._destroyed or not self.Segments then
 			return
+		end
+		
+		-- Make segments visible gradually
+		for i = 0, self.actualSegmentCount do
+			local segment = i == 0 and self.HeadParts.head or self.Segments[i]
+			if segment and segment.Parent then
+				segment.Transparency = 0
+			end
 		end
 
 		-- Gradually move forward to create proper segment spacing
@@ -1914,17 +1972,16 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		end
 	end)
 
-	table.insert(AISnake._activeSnakes, self)
+	-- Wait a frame to ensure everything is initialized
+	self._active = false
+	task.wait()
+	
+	-- Final activation after everything is set up
 	self._active = true
-
-	-- Stuck detection
-	self._lastPositions = {}
-	self._stuckCheckTime = 0
-	self._lastStuckCheck = tick()
-
-	-- Spawn protection
-	self._spawnProtection = tick() + 3 -- 3 second spawn protection
-	self._spawnStabilizing = tick() + 0.5 -- Half second to let segments arrange
+	table.insert(AISnake._activeSnakes, self)
+	
+	-- Add a small random delay to prevent all snakes from updating at once
+	task.wait(math.random() * 0.5)
 
 	return self
 end
@@ -2935,87 +2992,90 @@ function AISnake:updateMovement(dt)
 	if self._collisionCheckFrame >= COLLISION_CHECK_INTERVAL then
 		self._collisionCheckFrame = 0
 		
-		-- Check collision with player snakes
-		local Players = game:GetService("Players")
-		local myHead = self.HeadParts.head
-		local myHeadPos = myHead.Position
-		
-		-- Check collision with player snakes
-		for _, player in pairs(Players:GetPlayers()) do
-			local snakeModel = nil
+		-- Skip collision checks during spawn protection
+		if not (self._spawnProtectionTime and tick() < self._spawnProtectionTime) then
+			-- Check collision with player snakes
+			local Players = game:GetService("Players")
+			local myHead = self.HeadParts.head
+			local myHeadPos = myHead.Position
 			
-			-- First check workspace directly
-			snakeModel = Workspace:FindFirstChild("Snake_" .. player.Name)
-			
-			-- If not found, check SnakeFolder
-			if not snakeModel then
-				local snakeFolder = Workspace:FindFirstChild("SnakeFolder")
-				if snakeFolder then
-					snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
-				end
-			end
-			
-			if snakeModel and snakeModel:IsA("Model") then
-				-- Check head-to-head collision
-				local playerHead = snakeModel:FindFirstChild("Segment0_Head")
-				if playerHead and playerHead:IsA("BasePart") then
-					local distance = (playerHead.Position - myHeadPos).Magnitude
-					if distance <= 10 then -- Head collision radius
-						-- AI snake dies in head-to-head collision
-						warn("AI Snake died from head-to-head collision with", player.Name)
-						self:Destroy()
-						return
+			-- Check collision with player snakes
+			for _, player in pairs(Players:GetPlayers()) do
+				local snakeModel = nil
+				
+				-- First check workspace directly
+				snakeModel = Workspace:FindFirstChild("Snake_" .. player.Name)
+				
+				-- If not found, check SnakeFolder
+				if not snakeModel then
+					local snakeFolder = Workspace:FindFirstChild("SnakeFolder")
+					if snakeFolder then
+						snakeModel = snakeFolder:FindFirstChild(player.Name) or snakeFolder:FindFirstChild("Snake_" .. player.Name)
 					end
 				end
 				
-				-- Check collision with player body segments (optimized)
-				local segmentCheck = math.random(4, 10) -- Random starting point for variety
-				for segmentNum = segmentCheck, segmentCheck + 20, 3 do -- Check every 3rd segment
-					local segment = snakeModel:FindFirstChild("Segment" .. segmentNum)
-					if segment and segment:IsA("BasePart") then
-						local distance = (segment.Position - myHeadPos).Magnitude
-						if distance <= 5 then -- Body collision radius
-							-- AI snake dies when hitting player body
-							warn("AI Snake died from hitting", player.Name, "'s body")
+				if snakeModel and snakeModel:IsA("Model") then
+					-- Check head-to-head collision
+					local playerHead = snakeModel:FindFirstChild("Segment0_Head")
+					if playerHead and playerHead:IsA("BasePart") then
+						local distance = (playerHead.Position - myHeadPos).Magnitude
+						if distance <= 10 then -- Head collision radius
+							-- AI snake dies in head-to-head collision
+							warn("AI Snake died from head-to-head collision with", player.Name)
 							self:Destroy()
-							return
-						end
-					else
-						break -- No more segments
-					end
-				end
-			end
-		end
-		
-		-- Check collision with other AI snakes (less frequently)
-		if self._collisionCheckFrame % 2 == 0 then -- Every other collision check
-			for _, otherSnake in ipairs(AISnake._activeSnakes) do
-				if otherSnake ~= self and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
-					local otherHead = otherSnake.HeadParts.head
-					if otherHead.Parent then
-						local distance = (otherHead.Position - myHeadPos).Magnitude
-						if distance <= 10 then -- Head-to-head collision
-							-- Both AI snakes die in head-to-head collision
-							warn("AI Snakes died from head-to-head collision")
-							self:Destroy()
-							otherSnake:Destroy()
 							return
 						end
 					end
 					
-					-- Check collision with other AI snake body (simplified)
-					if otherSnake.Segments and #otherSnake.Segments > 10 then
-						-- Only check a few segments for performance
-						local checkIndices = {10, 20, 30, 40, 50}
-						for _, i in ipairs(checkIndices) do
-							if i <= #otherSnake.Segments then
-								local segment = otherSnake.Segments[i]
-								if segment and segment.Parent then
-									local distance = (segment.Position - myHeadPos).Magnitude
-									if distance <= 5 then -- Body collision
-										warn("AI Snake died from hitting another AI snake's body")
-										self:Destroy()
-										return
+					-- Check collision with player body segments (optimized)
+					local segmentCheck = math.random(4, 10) -- Random starting point for variety
+					for segmentNum = segmentCheck, segmentCheck + 20, 3 do -- Check every 3rd segment
+						local segment = snakeModel:FindFirstChild("Segment" .. segmentNum)
+						if segment and segment:IsA("BasePart") then
+							local distance = (segment.Position - myHeadPos).Magnitude
+							if distance <= 5 then -- Body collision radius
+								-- AI snake dies when hitting player body
+								warn("AI Snake died from hitting", player.Name, "'s body")
+								self:Destroy()
+								return
+							end
+						else
+							break -- No more segments
+						end
+					end
+				end
+			end
+			
+			-- Check collision with other AI snakes (less frequently)
+			if self._collisionCheckFrame % 2 == 0 then -- Every other collision check
+				for _, otherSnake in ipairs(AISnake._activeSnakes) do
+					if otherSnake ~= self and otherSnake._active and otherSnake.HeadParts and otherSnake.HeadParts.head then
+						local otherHead = otherSnake.HeadParts.head
+						if otherHead.Parent then
+							local distance = (otherHead.Position - myHeadPos).Magnitude
+							if distance <= 10 then -- Head-to-head collision
+								-- Both AI snakes die in head-to-head collision
+								warn("AI Snakes died from head-to-head collision")
+								self:Destroy()
+								otherSnake:Destroy()
+								return
+							end
+						end
+						
+						-- Check collision with other AI snake body (simplified)
+						if otherSnake.Segments and #otherSnake.Segments > 10 then
+							-- Only check a few segments for performance
+							local checkIndices = {10, 20, 30, 40, 50}
+							for _, i in ipairs(checkIndices) do
+								if i <= #otherSnake.Segments then
+									local segment = otherSnake.Segments[i]
+									if segment and segment.Parent then
+										local distance = (segment.Position - myHeadPos).Magnitude
+										if distance <= 5 then -- Body collision
+											warn("AI Snake died from hitting another AI snake's body")
+											self:Destroy()
+											return
+										end
 									end
 								end
 							end
