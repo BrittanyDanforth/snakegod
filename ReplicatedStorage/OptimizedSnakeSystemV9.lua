@@ -964,7 +964,7 @@ function Snake:updateUnifiedBody()
 
 	-- Calculate sizes based on growth
 	local currentBaseSize = BASE_SIZE * self.growthFactor
-	local spacing = currentBaseSize * SEGMENT_SPACING
+	-- REMOVED: local spacing = currentBaseSize * SEGMENT_SPACING (this was causing gaps)
 
 	-- Update all segments including head (segment 0) - LIMITED BY BUDGET
 	for i = 0, segmentsToUpdate do
@@ -1008,18 +1008,20 @@ function Snake:updateUnifiedBody()
 				self.leftPupil.CFrame = self.leftEye.CFrame * CFrame.new(0, 0, -eyeScale * 0.3)
 				self.rightPupil.CFrame = self.rightEye.CFrame * CFrame.new(0, 0, -eyeScale * 0.3)
 			elseif isVisible or i <= FORCE_RENDER_SEGMENTS then
-				-- Body segment positioning
-				local stepsBack = math.floor(i * spacing / 2)
-				local histData = self:getHistoricalPosition(stepsBack)
-				local nextHistData = self:getHistoricalPosition(stepsBack + 1)
+				-- Body segment positioning with CONSTANT spacing
+				-- Each segment looks a fixed number of steps behind the one in front of it.
+				-- You can tune the "3" to make the snake feel tighter (2) or looser (4).
+				local DELAY_MULTIPLIER = 3 
+				local stepsBack = i * DELAY_MULTIPLIER
 
-				if histData and nextHistData then
-					-- Smooth interpolation
-					local alpha = (i * spacing / 2) % 1
-					local targetPos = histData.position:Lerp(nextHistData.position, alpha)
+				local histData = self:getHistoricalPosition(stepsBack)
+
+				if histData then
+					-- No complex interpolation needed because our history is already dense!
+					local targetPos = histData.position
 					local currentPos = segment.Position
 
-					-- Use higher smoothing during growth for smoother transitions
+					-- The existing smoothing factor will work perfectly here.
 					local smoothingFactor = self.isGrowing and VISUAL_SMOOTHING_FACTOR * 1.2 or VISUAL_SMOOTHING_FACTOR
 					segment.Position = currentPos:Lerp(targetPos, smoothingFactor)
 
