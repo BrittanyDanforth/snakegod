@@ -37,11 +37,11 @@ function DyingState:OnEnter(collisionData)
         self.currentLength = 55 -- default
     end
     
-    -- SAVE SNAKE BODY CONFIGURATION BEFORE FADING
+    -- Save snake body configuration before fading
     self:_saveSnakeBodyConfiguration()
     
-    -- DISABLE MAGNET EFFECT ON DEATH
-    self:_disableMagnetEffect()
+    -- Clean up any visual effects (ghost mode particles, etc)
+    self:_cleanupVisualEffects()
     
     -- Store character reference for later
     local character = self.controller.player.Character
@@ -261,304 +261,6 @@ function DyingState:OnExit()
     self.controller:notifyStateChange("DeathComplete")
 end
 
-function DyingState:_spawnDeathOrbs()
-    local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[self.controller.player]
-    if not snakeSystem then return end
-    
-    -- Collect segment positions before fading
-    local segmentPositions = {}
-    if snakeSystem.segments then
-        for i, segment in ipairs(snakeSystem.segments) do
-            if segment and segment.Parent then
-                table.insert(segmentPositions, segment.Position)
-            end
-        end
-    end
-    
-    -- Create fade effect with tweens for smoother animation
-    task.spawn(function()
-        local parts = {}
-        local tweens = {}
-        
-        -- Collect all parts including segments and visual elements
-        if snakeSystem.segments then
-            for _, segment in ipairs(snakeSystem.segments) do
-                if segment and segment:IsA("BasePart") then
-                    segment.CanCollide = false
-                    table.insert(parts, segment)
-                end
-            end
-        end
-        
-        -- Also fade the head if it exists
-        if snakeSystem.head and snakeSystem.head:IsA("BasePart") then
-            snakeSystem.head.CanCollide = false
-            table.insert(parts, snakeSystem.head)
-        end
-        
-        -- Fade out beams quickly
-        if snakeSystem.beams then
-            for _, beam in pairs(snakeSystem.beams) do
-                if beam and beam:IsA("Beam") then
-                    local tween = TweenService:Create(beam, 
-                        TweenInfo.new(0.3, Enum.EasingStyle.Linear),
-                        {
-                            Transparency = NumberSequence.new(1),
-                            Width0 = 0,
-                            Width1 = 0
-                        }
-                    )
-                    tween:Play()
-                    table.insert(tweens, tween)
-                end
-            end
-        end
-        
-        -- Fade out glows
-        if snakeSystem.glows then
-            for _, glow in pairs(snakeSystem.glows) do
-                if glow and glow:IsA("PointLight") then
-                    local tween = TweenService:Create(glow,
-                        TweenInfo.new(0.2, Enum.EasingStyle.Linear),
-                        {
-                            Brightness = 0,
-                            Range = 0
-                        }
-                    )
-                    tween:Play()
-                    table.insert(tweens, tween)
-                end
-            end
-        end
-        
-        -- Create quick fade for all parts
-        for _, part in ipairs(parts) do
-            if part and part.Parent then
-                local tween = TweenService:Create(part,
-                    TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-                    {
-                        Transparency = 1,
-                        Size = part.Size * 0.8 -- Slight shrink effect
-                    }
-                )
-                tween:Play()
-                table.insert(tweens, tween)
-            end
-        end
-        
-        -- Wait for tweens to complete
-        task.wait(0.3)
-        
-        -- Hide the model but don't destroy it (we need it for revival)
-        if snakeSystem.model then
-            snakeSystem.model.Parent = nil
-        end
-    end)
-    
-    -- Spawn death orbs along the snake body
-    task.wait(0.15) -- Wait for fade to start before spawning orbs
-    self:_spawnDeathOrbs(segmentPositions)
-end
-
-function DyingState:_spawnDeathOrbs(segmentPositions)
-    -- Spawn death orbs along the snake body
-    warn("[DyingState] Spawning death orbs")
-    
-    -- Reduce orb count for better performance
-    local maxOrbs = 30 -- Reduced from 50 for performance
-    local orbCount = math.min(math.floor(self.currentLength * 0.3), maxOrbs)
-    local orbValue = math.max(1, math.floor(self.currentLength * 0.4 / orbCount)) -- Higher value per orb
-    
-    -- If we have segment positions, spawn orbs along the body
-    if segmentPositions and #segmentPositions > 0 then
-        local spawnedOrbs = 0
-        local skipInterval = math.max(1, math.floor(#segmentPositions / orbCount))
-        
-        -- Batch spawn for better performance
-        local orbsToSpawn = {}
-        
-        for i = 1, #segmentPositions do
-            if spawnedOrbs >= orbCount then break end
-            
-            if (i - 1) % skipInterval == 0 or i == #segmentPositions then
-                local pos = segmentPositions[i]
-                if pos then
-                    local spread = 1.2 -- Slightly more spread
-                    local offset = Vector3.new(
-                        (math.random() - 0.5) * spread,
-                        math.random() * 0.5, -- Slight upward bias
-                        (math.random() - 0.5) * spread
-                    )
-                    
-                    table.insert(orbsToSpawn, {position = pos + offset, value = orbValue})
-                    spawnedOrbs = spawnedOrbs + 1
-                end
-            end
-        end
-        
-        -- Spawn orbs in small batches to avoid lag spike
-        for i, orbData in ipairs(orbsToSpawn) do
-            self:_createDeathOrb(orbData.position, orbData.value)
-            
-            -- Small delay every few orbs to prevent lag
-            if i % 5 == 0 then
-                task.wait()
-            end
-        end
-        
-        print(string.format("✅ Spawned %d death orbs along snake body", spawnedOrbs))
-    else
-        -- Fallback: spawn in a spread pattern
-        warn("[DyingState] No segment positions, using fallback pattern")
-        for i = 1, orbCount do
-            local angle = (i / orbCount) * math.pi * 2 * 3
-            local distance = (i / orbCount) * math.min(self.currentLength * 0.5, 30)
-            
-            local offset = Vector3.new(
-                math.cos(angle) * distance,
-                0,
-                math.sin(angle) * distance
-            )
-            
-            self:_createDeathOrb(self.deathPosition + offset, orbValue)
-            
-            if i % 8 == 0 then
-                task.wait(0.02)
-            end
-        end
-    end
-end
-
-function DyingState:_createDeathOrb(position, value)
-    -- Ensure Orbs folder exists
-    local orbsFolder = workspace:FindFirstChild("Orbs")
-    if not orbsFolder then
-        orbsFolder = Instance.new("Folder")
-        orbsFolder.Name = "Orbs"
-        orbsFolder.Parent = workspace
-    end
-    
-    -- Create death orb matching the game's orb style
-    local orb = Instance.new("Part")
-    orb.Name = "Orb" -- Use "Orb" name so AI snakes recognize it
-    orb.Shape = Enum.PartType.Ball
-    orb.Material = Enum.Material.Neon
-    orb.Size = Vector3.new(2.5, 2.5, 2.5)
-    orb.TopSurface = Enum.SurfaceType.Smooth
-    orb.BottomSurface = Enum.SurfaceType.Smooth
-    orb.CanCollide = false
-    orb.Anchored = true
-    orb.Position = position
-    orb.Color = Color3.fromRGB(255, 200, 0) -- Start golden
-    
-    -- Set attributes for the orb system
-    orb:SetAttribute("OrbValue", value)
-    orb:SetAttribute("IsDeathOrb", true)
-    orb:SetAttribute("OrbType", "normal") -- Use "normal" so AI can eat them
-    
-    -- Add glow
-    local glow = Instance.new("PointLight")
-    glow.Brightness = 2.5
-    glow.Range = 12
-    glow.Color = orb.Color
-    glow.Parent = orb
-    
-    -- Parent to Orbs folder
-    orb.Parent = orbsFolder
-    
-    -- Rainbow effect
-    task.spawn(function()
-        local hue = math.random()
-        while orb and orb.Parent do
-            hue = (hue + 0.01) % 1
-            local color = Color3.fromHSV(hue, 1, 1)
-            orb.Color = color
-            glow.Color = color
-            task.wait(0.05)
-        end
-    end)
-    
-    -- Smooth floating animation (like real orbs)
-    task.spawn(function()
-        local startY = position.Y
-        local time = 0
-        local rotSpeed = math.random() * 2 - 1 -- Random rotation speed
-        
-        while orb and orb.Parent do
-            time = time + 0.03
-            -- Gentle floating motion
-            local floatOffset = math.sin(time * 2) * 0.5
-            -- Slow rotation
-            local rotation = time * rotSpeed
-            
-            orb.CFrame = CFrame.new(position.X, startY + floatOffset, position.Z) * CFrame.Angles(0, rotation, 0)
-            
-            task.wait()
-        end
-    end)
-    
-    -- Add particle effect for extra visual appeal
-    local particle = Instance.new("ParticleEmitter")
-    particle.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-    particle.Rate = 20
-    particle.Lifetime = NumberRange.new(0.5, 1)
-    particle.SpreadAngle = Vector2.new(360, 360)
-    particle.Speed = NumberRange.new(1)
-    particle.VelocityInheritance = 0
-    particle.Color = ColorSequence.new(Color3.fromRGB(255, 200, 0))
-    particle.Size = NumberSequence.new{
-        NumberSequenceKeypoint.new(0, 0.5),
-        NumberSequenceKeypoint.new(0.5, 0.3),
-        NumberSequenceKeypoint.new(1, 0)
-    }
-    particle.Transparency = NumberSequence.new{
-        NumberSequenceKeypoint.new(0, 0.5),
-        NumberSequenceKeypoint.new(1, 1)
-    }
-    particle.Parent = orb
-    
-    -- Clean up after 90 seconds
-    Debris:AddItem(orb, 90)
-    
-    return orb
-end
-
-function DyingState:_freezeCamera()
-    local remotes = ReplicatedStorage:WaitForChild("Remotes")
-    local freezeCamera = remotes:FindFirstChild("FreezeCamera")
-    
-    if freezeCamera then
-        freezeCamera:FireClient(self.controller.player, true)
-    end
-end
-
-function DyingState:_killPlayer()
-    -- Kill the humanoid to trigger death systems
-    local character = self.controller.player.Character
-    if character then
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if humanoid and humanoid.Health > 0 then
-            humanoid.Health = 0
-        end
-    end
-end
-
-function DyingState:_cleanupDeath()
-    -- Destroy snake model
-    if self.controller.snakeModel then
-        Debris:AddItem(self.controller.snakeModel, 0.5)
-        self.controller.snakeModel = nil
-    end
-    
-    -- Clear snake object
-    if self.controller.snakeObject then
-        if self.controller.snakeObject.destroy then
-            self.controller.snakeObject:destroy()
-        end
-        self.controller.snakeObject = nil
-    end
-end
-
 function DyingState:_saveSnakeBodyConfiguration()
     -- Get the snake system
     local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[self.controller.player]
@@ -749,7 +451,170 @@ function DyingState:_fadeOutSnakeAndSpawnOrbs()
     end)
 end
 
-function DyingState:_disableMagnetEffect()
+function DyingState:_spawnDeathOrbs(segmentPositions)
+    -- Spawn death orbs along the snake body
+    warn("[DyingState] Spawning death orbs")
+    
+    -- Reduce orb count for better performance
+    local maxOrbs = 30 -- Reduced from 50 for performance
+    local orbCount = math.min(math.floor(self.currentLength * 0.3), maxOrbs)
+    local orbValue = math.max(1, math.floor(self.currentLength * 0.4 / orbCount)) -- Higher value per orb
+    
+    -- If we have segment positions, spawn orbs along the body
+    if segmentPositions and #segmentPositions > 0 then
+        local spawnedOrbs = 0
+        local skipInterval = math.max(1, math.floor(#segmentPositions / orbCount))
+        
+        -- Batch spawn for better performance
+        local orbsToSpawn = {}
+        
+        for i = 1, #segmentPositions do
+            if spawnedOrbs >= orbCount then break end
+            
+            if (i - 1) % skipInterval == 0 or i == #segmentPositions then
+                local pos = segmentPositions[i]
+                if pos then
+                    local spread = 1.2 -- Slightly more spread
+                    local offset = Vector3.new(
+                        (math.random() - 0.5) * spread,
+                        math.random() * 0.5, -- Slight upward bias
+                        (math.random() - 0.5) * spread
+                    )
+                    
+                    table.insert(orbsToSpawn, {position = pos + offset, value = orbValue})
+                    spawnedOrbs = spawnedOrbs + 1
+                end
+            end
+        end
+        
+        -- Spawn orbs in small batches to avoid lag spike
+        for i, orbData in ipairs(orbsToSpawn) do
+            self:_createDeathOrb(orbData.position, orbData.value)
+            
+            -- Small delay every few orbs to prevent lag
+            if i % 5 == 0 then
+                task.wait()
+            end
+        end
+        
+        print(string.format("✅ Spawned %d death orbs along snake body", spawnedOrbs))
+    else
+        -- Fallback: spawn in a spread pattern
+        warn("[DyingState] No segment positions, using fallback pattern")
+        for i = 1, orbCount do
+            local angle = (i / orbCount) * math.pi * 2 * 3
+            local distance = (i / orbCount) * math.min(self.currentLength * 0.5, 30)
+            
+            local offset = Vector3.new(
+                math.cos(angle) * distance,
+                0,
+                math.sin(angle) * distance
+            )
+            
+            self:_createDeathOrb(self.deathPosition + offset, orbValue)
+            
+            if i % 8 == 0 then
+                task.wait(0.02)
+            end
+        end
+    end
+end
+
+function DyingState:_createDeathOrb(position, value)
+    -- Ensure Orbs folder exists
+    local orbsFolder = workspace:FindFirstChild("Orbs")
+    if not orbsFolder then
+        orbsFolder = Instance.new("Folder")
+        orbsFolder.Name = "Orbs"
+        orbsFolder.Parent = workspace
+    end
+    
+    -- Create death orb matching the game's orb style
+    local orb = Instance.new("Part")
+    orb.Name = "Orb" -- Use "Orb" name so AI snakes recognize it
+    orb.Shape = Enum.PartType.Ball
+    orb.Material = Enum.Material.Neon
+    orb.Size = Vector3.new(2.5, 2.5, 2.5)
+    orb.TopSurface = Enum.SurfaceType.Smooth
+    orb.BottomSurface = Enum.SurfaceType.Smooth
+    orb.CanCollide = false
+    orb.Anchored = true
+    orb.Position = position
+    orb.Color = Color3.fromRGB(255, 200, 0) -- Start golden
+    
+    -- Set attributes for the orb system
+    orb:SetAttribute("OrbValue", value)
+    orb:SetAttribute("IsDeathOrb", true)
+    orb:SetAttribute("OrbType", "normal") -- Use "normal" so AI can eat them
+    
+    -- Add glow
+    local glow = Instance.new("PointLight")
+    glow.Brightness = 2.5
+    glow.Range = 12
+    glow.Color = orb.Color
+    glow.Parent = orb
+    
+    -- Parent to Orbs folder
+    orb.Parent = orbsFolder
+    
+    -- Rainbow effect
+    task.spawn(function()
+        local hue = math.random()
+        while orb and orb.Parent do
+            hue = (hue + 0.01) % 1
+            local color = Color3.fromHSV(hue, 1, 1)
+            orb.Color = color
+            glow.Color = color
+            task.wait(0.05)
+        end
+    end)
+    
+    -- Smooth floating animation (like real orbs)
+    task.spawn(function()
+        local startY = position.Y
+        local time = 0
+        local rotSpeed = math.random() * 2 - 1 -- Random rotation speed
+        
+        while orb and orb.Parent do
+            time = time + 0.03
+            -- Gentle floating motion
+            local floatOffset = math.sin(time * 2) * 0.5
+            -- Slow rotation
+            local rotation = time * rotSpeed
+            
+            orb.CFrame = CFrame.new(position.X, startY + floatOffset, position.Z) * CFrame.Angles(0, rotation, 0)
+            
+            task.wait()
+        end
+    end)
+    
+    -- Add particle effect for extra visual appeal
+    local particle = Instance.new("ParticleEmitter")
+    particle.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+    particle.Rate = 20
+    particle.Lifetime = NumberRange.new(0.5, 1)
+    particle.SpreadAngle = Vector2.new(360, 360)
+    particle.Speed = NumberRange.new(1)
+    particle.VelocityInheritance = 0
+    particle.Color = ColorSequence.new(Color3.fromRGB(255, 200, 0))
+    particle.Size = NumberSequence.new{
+        NumberSequenceKeypoint.new(0, 0.5),
+        NumberSequenceKeypoint.new(0.5, 0.3),
+        NumberSequenceKeypoint.new(1, 0)
+    }
+    particle.Transparency = NumberSequence.new{
+        NumberSequenceKeypoint.new(0, 0.5),
+        NumberSequenceKeypoint.new(1, 1)
+    }
+    particle.Parent = orb
+    
+    -- Clean up after 90 seconds
+    Debris:AddItem(orb, 90)
+    
+    return orb
+end
+
+function DyingState:_cleanupVisualEffects()
     local player = self.controller.player
     local character = player.Character
     
@@ -758,9 +623,9 @@ function DyingState:_disableMagnetEffect()
     player:SetAttribute("MagnetActive", false)
     player:SetAttribute("ActiveMagnet", false)
     player:SetAttribute("TempMagnetRange", 1)
-    player:SetAttribute("SpawnGhostMode", false)  -- Clear ghost mode too
+    player:SetAttribute("SpawnGhostMode", false)
     
-    -- Clean up any particle effects in the character
+    -- Clean up any particle effects from GamepassHandler
     if character then
         local rootPart = character:FindFirstChild("HumanoidRootPart")
         if rootPart then
@@ -770,31 +635,52 @@ function DyingState:_disableMagnetEffect()
                 ghostEffect:Destroy()
             end
             
-            -- Remove any attachments with particles (this is where the purple effect is!)
+            -- Remove any attachments with particles (ghost mode particles)
             for _, child in ipairs(rootPart:GetChildren()) do
                 if child:IsA("Attachment") then
-                    -- Check if it has particle emitters
-                    for _, particle in ipairs(child:GetChildren()) do
-                        if particle:IsA("ParticleEmitter") then
-                            particle.Enabled = false
-                            particle:Destroy()
-                        end
-                    end
                     child:Destroy()
                 end
             end
         end
-        
-        -- Also check the whole character for any lingering effects
-        for _, desc in ipairs(character:GetDescendants()) do
-            if desc:IsA("ParticleEmitter") then
-                desc.Enabled = false
-                desc:Destroy()
-            end
-        end
     end
     
-    warn("[DyingState] Cleaned up all effects for", player.Name)
+    warn("[DyingState] Cleaned up visual effects for", player.Name)
+end
+
+function DyingState:_freezeCamera()
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local freezeCamera = remotes:FindFirstChild("FreezeCamera")
+    
+    if freezeCamera then
+        freezeCamera:FireClient(self.controller.player, true)
+    end
+end
+
+function DyingState:_killPlayer()
+    -- Kill the humanoid to trigger death systems
+    local character = self.controller.player.Character
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.Health > 0 then
+            humanoid.Health = 0
+        end
+    end
+end
+
+function DyingState:_cleanupDeath()
+    -- Destroy snake model
+    if self.controller.snakeModel then
+        Debris:AddItem(self.controller.snakeModel, 0.5)
+        self.controller.snakeModel = nil
+    end
+    
+    -- Clear snake object
+    if self.controller.snakeObject then
+        if self.controller.snakeObject.destroy then
+            self.controller.snakeObject:destroy()
+        end
+        self.controller.snakeObject = nil
+    end
 end
 
 return DyingState
