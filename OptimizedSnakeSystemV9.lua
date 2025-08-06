@@ -813,7 +813,7 @@ function Snake:startUpdateLoop()
 		
 		-- Every 5th frame: LOD and visibility
 		if self.frameCount and self.frameCount % LOD_UPDATE_RATE == 0 then
-			self:checkVisibility()
+			-- checkVisibility method doesn't exist, visibility is handled in the main update loop
 		end
 		
 		-- Every 5th frame: Particle updates
