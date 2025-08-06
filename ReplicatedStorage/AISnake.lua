@@ -1954,32 +1954,34 @@ function AISnake.new(startPosition, preservedPersonalityType)
 				local protectionDuration = 10 -- Your AI protection time in seconds
 				local TweenService = game:GetService("TweenService")
 				
-				-- Start the countdown (we'll show the last 3 seconds)
-				task.wait(protectionDuration - 3)
-
-				for i = 3, 1, -1 do
+				-- Start countdown immediately from 10
+				for i = protectionDuration, 1, -1 do
 					if not textLabel or not textLabel.Parent then break end -- Stop if snake was destroyed
-					textLabel.Text = "INVINCIBLE: " .. i
 					
-					-- Pulse animation with color change
-					if i == 3 then
+					-- Update text with appropriate styling
+					if i > 5 then
+						textLabel.Text = "PROTECTED: " .. i
 						textLabel.TextColor3 = Color3.fromRGB(170, 255, 255) -- Cyan
-					elseif i == 2 then
+					elseif i > 3 then
+						textLabel.Text = "PROTECTED: " .. i
 						textLabel.TextColor3 = Color3.fromRGB(255, 255, 170) -- Yellow
 					else
+						textLabel.Text = "VULNERABLE: " .. i
 						textLabel.TextColor3 = Color3.fromRGB(255, 170, 170) -- Red
 					end
 					
-					-- Pulse effect
-					local pulseTween = TweenService:Create(textLabel, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
-						TextTransparency = 0.3
-					})
-					pulseTween:Play()
-					pulseTween.Completed:Connect(function()
-						if textLabel and textLabel.Parent then
-							textLabel.TextTransparency = 0
-						end
-					end)
+					-- Pulse effect on last 3 seconds
+					if i <= 3 then
+						local pulseTween = TweenService:Create(textLabel, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+							TextTransparency = 0.3
+						})
+						pulseTween:Play()
+						pulseTween.Completed:Connect(function()
+							if textLabel and textLabel.Parent then
+								textLabel.TextTransparency = 0
+							end
+						end)
+					end
 					
 					task.wait(1)
 				end
@@ -3083,7 +3085,10 @@ function AISnake:updateMovement(dt)
 		end
 	end
 
-	-- Set velocity for collision detection
+	-- Set velocity for collision detection (check if still alive)
+	if self._destroyed or not self.HeadParts or not self.HeadParts.head then
+		return
+	end
 	self.HeadParts.head.AssemblyLinearVelocity = self.Direction * self.Speed
 
 	-- CHECK FOR COLLISIONS (OPTIMIZED - run less frequently)
