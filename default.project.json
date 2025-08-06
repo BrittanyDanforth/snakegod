@@ -1,0 +1,26 @@
+{
+  "name": "SnakeGame",
+  "tree": {
+    "$className": "DataModel",
+    
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$path": "ReplicatedStorage"
+    },
+    
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$path": "ServerScriptService"
+    },
+    
+    "ServerStorage": {
+      "$className": "ServerStorage", 
+      "$path": "ServerStorage"
+    },
+    
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "$path": "StarterPlayer"
+    }
+  }
+}
