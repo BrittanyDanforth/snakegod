@@ -786,13 +786,19 @@ function Snake:startUpdateLoop()
 	local lastNetworkUpdate = 0
 
 	self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
-		if not self.character.Parent or not self.rootPart.Parent then
-			self:destroy()
+		-- Robust nil checks
+		if not self or not self.character or not self.character.Parent or not self.rootPart or not self.rootPart.Parent then
+			if self and self.destroy then
+				self:destroy()
+			end
 			return
 		end
 
-		-- Ensure frameCount is always a valid number
-		self.frameCount = (self.frameCount or 0) + 1
+		-- Ensure frameCount is always a valid number (extra safety)
+		if not self.frameCount then
+			self.frameCount = 0
+		end
+		self.frameCount = self.frameCount + 1
 
 		-- 🎯 SMART UPDATE THROTTLING
 		-- Every frame: Critical movement
@@ -800,17 +806,17 @@ function Snake:startUpdateLoop()
 		self:updateUnifiedBody()
 		
 		-- Every 3rd frame: Visual effects
-		if (self.frameCount or 0) % GLOW_UPDATE_RATE == 0 then
+		if self.frameCount % GLOW_UPDATE_RATE == 0 then
 			self:updateVisualEffects()
 		end
 		
 		-- Every 5th frame: LOD and visibility
-		if (self.frameCount or 0) % LOD_UPDATE_RATE == 0 then
+		if self.frameCount % LOD_UPDATE_RATE == 0 then
 			self:checkVisibility()
 		end
 		
-		-- Every 5th frame: Particles
-		if (self.frameCount or 0) % PARTICLE_UPDATE_RATE == 0 then
+		-- Every 5th frame: Particle updates
+		if self.frameCount % PARTICLE_UPDATE_RATE == 0 then
 			self:updateParticles()
 		end
 
@@ -838,18 +844,18 @@ function Snake:startUpdateLoop()
 		end
 
 		-- Update growth factor
-		if (self.frameCount or 0) % GROWTH_CHECK_INTERVAL == 0 then
+		if self.frameCount % GROWTH_CHECK_INTERVAL == 0 then
 			self.growthFactor = self:calculateGrowthFactor()
 		end
 
 		-- ENHANCED: Update visibility checks
 		local cameraPos = self.camera and self.camera.CFrame.Position or self.rootPart.Position
-		if (self.frameCount or 0) % VISIBILITY_CHECK_INTERVAL == 0 then
+		if self.frameCount % VISIBILITY_CHECK_INTERVAL == 0 then
 			self:updateSegmentVisibility(cameraPos)
 		end
 
 		-- ENHANCED: Sync beams with segment visibility
-		if (self.frameCount or 0) % BEAM_SYNC_INTERVAL == 0 then
+		if self.frameCount % BEAM_SYNC_INTERVAL == 0 then
 			self:syncBeamVisibility()
 		end
 
@@ -881,7 +887,7 @@ function Snake:startUpdateLoop()
 		end
 
 		-- Network updates (optimized rate)
-		if (self.frameCount or 0) % NETWORK_UPDATE_RATE == 0 then
+		if self.frameCount % NETWORK_UPDATE_RATE == 0 then
 			self:sendNetworkUpdate()
 		end
 	end)
