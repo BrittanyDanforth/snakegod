@@ -791,17 +791,17 @@ function Snake:startUpdateLoop()
 		self:updateUnifiedBody()
 		
 		-- Every 3rd frame: Visual effects
-		if self.frameCount % GLOW_UPDATE_RATE == 0 then
+		if frameCount % GLOW_UPDATE_RATE == 0 then
 			self:updateVisualEffects()
 		end
 		
 		-- Every 5th frame: LOD and visibility
-		if self.frameCount % LOD_UPDATE_RATE == 0 then
+		if frameCount % LOD_UPDATE_RATE == 0 then
 			self:checkVisibility()
 		end
 		
 		-- Every 5th frame: Particles
-		if self.frameCount % PARTICLE_UPDATE_RATE == 0 then
+		if frameCount % PARTICLE_UPDATE_RATE == 0 then
 			self:updateParticles()
 		end
 
@@ -872,7 +872,7 @@ function Snake:startUpdateLoop()
 		end
 
 		-- Network updates (optimized rate)
-		if self.frameCount % NETWORK_UPDATE_RATE == 0 then
+		if frameCount % NETWORK_UPDATE_RATE == 0 then
 			self:sendNetworkUpdate()
 		end
 	end)
