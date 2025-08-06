@@ -206,6 +206,12 @@ function Snake.new(character, config)
 	
 	-- Frame counter for update throttling
 	self.frameCount = 0
+	
+	-- Verify frameCount is set (safety check)
+	if not self.frameCount then
+		warn("⚠️ OptimizedSnakeSystemV9: frameCount failed to initialize, setting to 0")
+		self.frameCount = 0
+	end
 
 	-- Movement history
 	self.positionHistory = {}
@@ -794,17 +800,17 @@ function Snake:startUpdateLoop()
 		self:updateUnifiedBody()
 		
 		-- Every 3rd frame: Visual effects
-		if self.frameCount % GLOW_UPDATE_RATE == 0 then
+		if (self.frameCount or 0) % GLOW_UPDATE_RATE == 0 then
 			self:updateVisualEffects()
 		end
 		
 		-- Every 5th frame: LOD and visibility
-		if self.frameCount % LOD_UPDATE_RATE == 0 then
+		if (self.frameCount or 0) % LOD_UPDATE_RATE == 0 then
 			self:checkVisibility()
 		end
 		
 		-- Every 5th frame: Particles
-		if self.frameCount % PARTICLE_UPDATE_RATE == 0 then
+		if (self.frameCount or 0) % PARTICLE_UPDATE_RATE == 0 then
 			self:updateParticles()
 		end
 
@@ -832,18 +838,18 @@ function Snake:startUpdateLoop()
 		end
 
 		-- Update growth factor
-		if self.frameCount % GROWTH_CHECK_INTERVAL == 0 then
+		if (self.frameCount or 0) % GROWTH_CHECK_INTERVAL == 0 then
 			self.growthFactor = self:calculateGrowthFactor()
 		end
 
 		-- ENHANCED: Update visibility checks
 		local cameraPos = self.camera and self.camera.CFrame.Position or self.rootPart.Position
-		if self.frameCount % VISIBILITY_CHECK_INTERVAL == 0 then
+		if (self.frameCount or 0) % VISIBILITY_CHECK_INTERVAL == 0 then
 			self:updateSegmentVisibility(cameraPos)
 		end
 
 		-- ENHANCED: Sync beams with segment visibility
-		if self.frameCount % BEAM_SYNC_INTERVAL == 0 then
+		if (self.frameCount or 0) % BEAM_SYNC_INTERVAL == 0 then
 			self:syncBeamVisibility()
 		end
 
@@ -875,7 +881,7 @@ function Snake:startUpdateLoop()
 		end
 
 		-- Network updates (optimized rate)
-		if self.frameCount % NETWORK_UPDATE_RATE == 0 then
+		if (self.frameCount or 0) % NETWORK_UPDATE_RATE == 0 then
 			self:sendNetworkUpdate()
 		end
 	end)
