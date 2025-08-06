@@ -161,23 +161,6 @@ function PlayerController:setSpeed(speed)
     self.data.speed = speed
 end
 
-function PlayerController:hasReviveToken()
-    -- Read from GamepassHandler's attribute
-    return (self.player:GetAttribute("RevivesAvailable") or 0) > 0
-end
-
-function PlayerController:useReviveToken()
-    -- Decrement GamepassHandler's attribute
-    local currentRevives = self.player:GetAttribute("RevivesAvailable") or 0
-    if currentRevives > 0 then
-        self.player:SetAttribute("RevivesAvailable", currentRevives - 1)
-        -- Also update internal data for consistency
-        self.data.reviveTokens = currentRevives - 1
-        return true
-    end
-    return false
-end
-
 -- Collision state management
 function PlayerController:isInvincible()
     return os.clock() < self.collisionState.invincibleUntil
@@ -300,17 +283,6 @@ function PlayerController:requestReviveFromClient()
     end)
 end
 
-function PlayerController:hideReviveUI()
-    local remotes = ReplicatedStorage:WaitForChild("Remotes")
-    local promptRevive = remotes:FindFirstChild("PromptRevive")
-    
-    if promptRevive then
-        promptRevive:FireClient(self.player, {
-            show = false
-        })
-    end
-end
-
 function PlayerController:playDeathEffects(collisionData)
     -- This will handle death VFX, sounds, etc.
     -- For now, just a placeholder
@@ -324,7 +296,32 @@ function PlayerController:notifyStateChange(newState)
     self.events.onStateChanged:Fire(newState)
 end
 
--- Cleanup
+-- Revive token management
+function PlayerController:hasReviveToken()
+    -- Check if player has revives from gamepass or default
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    return revivesAvailable > 0
+end
+
+function PlayerController:useReviveToken()
+    local revivesAvailable = self.player:GetAttribute("RevivesAvailable") or 0
+    if revivesAvailable > 0 then
+        self.player:SetAttribute("RevivesAvailable", revivesAvailable - 1)
+        return true
+    end
+    return false
+end
+
+-- Hide revive UI helper
+function PlayerController:hideReviveUI()
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local hideRevive = remotes:FindFirstChild("HideReviveUI")
+    if hideRevive then
+        hideRevive:FireClient(self.player)
+    end
+end
+
+-- Cleanup and destruction
 function PlayerController:destroy()
     if self.isDestroyed then
         return

@@ -16,17 +16,24 @@ local CollisionModule = require(ServerModules.CollisionModule)
 -- Shared configuration  
 local Config = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Config"))
 
--- Player controller storage
+-- Module references
 local playerControllers = {}
--- Expose for debugging
-_G.PlayerControllers = playerControllers
-
--- Collision system
 local collisionSystem = nil
-
--- Track existing snakes from SnakeSystemIntegration
 local snakeSystemIntegration = nil
 local existingSnakes = {} -- Track snakes created by the old system
+local deathOrbHandler = nil -- Will be initialized later
+
+-- Initialize death orb handler
+task.spawn(function()
+    -- Try to load SnakeCollisionHandler for death orb spawning
+    local collisionHandler = workspace:WaitForChild("SnakeCollisionHandler_FINAL", 5)
+    if collisionHandler then
+        local success, handler = pcall(require, collisionHandler)
+        if success and handler then
+            deathOrbHandler = handler
+        end
+    end
+end)
 
 -- Wait for snake system to be available
 local function waitForSnakeSystem()
