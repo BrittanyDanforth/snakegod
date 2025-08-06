@@ -104,13 +104,29 @@ function CollisionModule:_checkOrbCollection(controller, head)
     local orbFolder = workspace:FindFirstChild("Orbs")
     if not orbFolder then return end
     
+    local orbCount = 0
     for _, orb in pairs(orbFolder:GetChildren()) do
-        if orb:IsA("BasePart") and (orb.Position - head.Position).Magnitude <= COLLISION_CONFIG.ORB_COLLECTION_RADIUS then
-            -- Fire orb collection event
-            controller.events.onOrbCollision:Fire(orb)
-            
-            -- Let the existing system handle the orb collection
-            -- since it has special logic for different orb types
+        if orb:IsA("BasePart") then
+            orbCount = orbCount + 1
+            local distance = (orb.Position - head.Position).Magnitude
+            if distance <= COLLISION_CONFIG.ORB_COLLECTION_RADIUS then
+                -- Debug logging
+                local isDeathOrb = orb:GetAttribute("IsDeathOrb")
+                print("[CollisionModule] Orb in range:", orb.Name, "Distance:", distance, "IsDeathOrb:", isDeathOrb)
+                
+                -- Fire orb collection event
+                controller.events.onOrbCollision:Fire(orb)
+                
+                -- Let the existing system handle the orb collection
+                -- since it has special logic for different orb types
+            end
+        end
+    end
+    
+    -- Debug: log total orbs periodically
+    if self.frameCount % 60 == 0 then  -- Every 2 seconds
+        if orbCount > 0 then
+            print("[CollisionModule] Total orbs in folder:", orbCount)
         end
     end
 end
