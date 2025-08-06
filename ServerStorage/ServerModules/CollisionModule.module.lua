@@ -35,12 +35,10 @@ function CollisionModule.new(playerControllers)
     self.lastCacheUpdate = 0
     self.CACHE_UPDATE_INTERVAL = 1 -- Update cache every second
     
-    warn("[CollisionModule] Created new collision module")
     return self
 end
 
 function CollisionModule:start()
-    warn("[CollisionModule] Starting collision detection system")
     -- Connect to heartbeat for collision checks
     self.collisionConnection = RunService.Heartbeat:Connect(function(dt)
         self:update(dt)
@@ -81,11 +79,6 @@ function CollisionModule:update(dt)
         local currentState = controller.fsm:getCurrentState()
         local canCollide = controller:canCollide()
         
-        -- Debug: Log state info periodically
-        if self.frameCount % 120 == 0 then  -- Every 4 seconds
-            warn("[CollisionModule] Player:", player.Name, "State:", currentState, "CanCollide:", canCollide)
-        end
-        
         if currentState == "Alive" and canCollide then
             self:_checkPlayerCollisions(controller)
             checksThisFrame = checksThisFrame + 1
@@ -96,13 +89,7 @@ end
 function CollisionModule:_checkPlayerCollisions(controller)
     local head = controller:getSnakeHead()
     if not head then 
-        warn("[CollisionModule] No head found for", controller.player.Name)
         return 
-    end
-    
-    -- Debug: Log that we're checking collisions
-    if self.frameCount % 60 == 0 then  -- Log every 2 seconds
-        warn("[CollisionModule] Checking collisions for", controller.player.Name, "- Found", #self.snakeCache, "snakes in cache")
     end
     
     -- Check for orb collection
@@ -140,11 +127,6 @@ function CollisionModule:_checkFatalCollisions(controller, head)
         if snakeData.Head then
             local distance = (snakeData.Head.Position - head.Position).Magnitude
             
-            -- Debug: Log close encounters
-            if distance <= COLLISION_CONFIG.HEAD_RADIUS * 2 then
-                warn("[CollisionModule] CLOSE ENCOUNTER:", controller.player.Name, "distance", distance, "to", snakeData.IsAI and "AI Snake" or (snakeData.Player and snakeData.Player.Name or "Unknown"))
-            end
-            
             if distance <= COLLISION_CONFIG.HEAD_RADIUS then
                 local collisionData = {
                     isFatal = true,
@@ -156,7 +138,6 @@ function CollisionModule:_checkFatalCollisions(controller, head)
                     isAI = snakeData.IsAI
                 }
                 
-                warn("[CollisionModule] HEAD COLLISION DETECTED between", controller.player.Name, "and", snakeData.IsAI and "AI Snake" or snakeData.Player.Name)
                 controller.events.onFatalHit:Fire(collisionData)
                 return
             end
@@ -182,7 +163,6 @@ function CollisionModule:_checkFatalCollisions(controller, head)
                             isAI = snakeData.IsAI
                         }
                         
-                        warn("[CollisionModule] BODY COLLISION DETECTED between", controller.player.Name, "and", snakeData.IsAI and "AI Snake" or (snakeData.Player and snakeData.Player.Name or "Unknown"))
                         controller.events.onFatalHit:Fire(collisionData)
                         return
                     end
@@ -202,7 +182,6 @@ function CollisionModule:_checkFatalCollisions(controller, head)
                 isWallCollision = true
             }
             
-            warn("[CollisionModule] WALL COLLISION DETECTED for", controller.player.Name)
             controller.events.onFatalHit:Fire(collisionData)
             return
         end
@@ -269,8 +248,6 @@ function CollisionModule:_updateCaches()
                     end
                 end
                 
-                warn("[CollisionModule] Found player snake:", snakeModel.Name, "with", #segments, "segments for", player.Name)
-                
                 table.insert(self.snakeCache, {
                     Head = head,
                     Model = snakeModel,
@@ -278,13 +255,6 @@ function CollisionModule:_updateCaches()
                     IsAI = false,
                     Player = player
                 })
-            else
-                warn("[CollisionModule] No head found for player snake:", player.Name)
-            end
-        else
-            -- Debug: Log why snake wasn't found
-            if not snakeModel then
-                warn("[CollisionModule] No snake model found for player:", player.Name)
             end
         end
     end
@@ -315,8 +285,6 @@ function CollisionModule:_updateCaches()
                 -- Also check if it's tagged as AISnake
                 local isAI = CollectionService:HasTag(child, "AISnake")
                 
-                warn("[CollisionModule] Found AI snake:", child.Name, "with", #segments, "segments")
-                
                 table.insert(self.snakeCache, {
                     Head = head,
                     Model = child,
@@ -327,8 +295,6 @@ function CollisionModule:_updateCaches()
             end
         end
     end
-    
-    warn("[CollisionModule] Cache updated - Orbs:", #self.orbCache, "Obstacles:", #self.obstacleCache, "Snakes:", #self.snakeCache)
 end
 
 -- Helper to get player from part

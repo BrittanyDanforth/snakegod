@@ -36,10 +36,6 @@ function DyingState:OnEnter(collisionData)
         self.currentLength = 55 -- default
     end
     
-    -- Log the death
-    warn("[DyingState] Player", self.controller.player.Name, "entered dying state")
-    warn("[DyingState] Death position:", self.deathPosition, "Current length:", self.currentLength)
-    
     -- Store character reference for later
     local character = self.controller.player.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -62,10 +58,13 @@ function DyingState:OnEnter(collisionData)
             action = "hide"
         })
         
-        -- Wait a moment for death to process
-        task.wait(0.5)
+        -- IMMEDIATE death effect for visual feedback
+        local deathEffectRemote = remotes:FindFirstChild("PlayerDeathEffect")
+        if deathEffectRemote and self.deathPosition then
+            deathEffectRemote:FireAllClients(self.controller.player, self.deathPosition)
+        end
         
-        -- Disable movement but don't kill yet
+        -- Disable movement IMMEDIATELY (no wait)
         if humanoid then
             humanoid.WalkSpeed = 0
             humanoid.JumpPower = 0
@@ -75,35 +74,48 @@ function DyingState:OnEnter(collisionData)
         -- Stop snake movement by disconnecting its update loop
         local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[self.controller.player]
         if snakeSystem and snakeSystem.updateConnection then
-            warn("[DyingState] Stopping snake movement for", self.controller.player.Name)
             snakeSystem.updateConnection:Disconnect()
             snakeSystem.updateConnection = nil
         end
         
-        -- Tell client to stop snake movement
+        -- Tell client to stop snake movement IMMEDIATELY
         local stopMovementRemote = remotes:FindFirstChild("StopSnakeMovement")
         if stopMovementRemote then
             stopMovementRemote:FireClient(self.controller.player)
         end
         
-        -- Make snake invisible/non-collidable
+        -- Make snake fade out quickly for polished effect
         if self.controller.snakeObject then
             if self.controller.snakeObject:IsA("Model") then
-                for _, part in ipairs(self.controller.snakeObject:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        part.CanCollide = false
-                        part.Transparency = 0.5
+                -- Create a quick fade effect
+                task.spawn(function()
+                    local parts = {}
+                    for _, part in ipairs(self.controller.snakeObject:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.CanCollide = false
+                            table.insert(parts, part)
+                        end
                     end
-                end
+                    
+                    -- Quick fade out (0.3 seconds)
+                    local fadeSteps = 6
+                    for i = 1, fadeSteps do
+                        for _, part in ipairs(parts) do
+                            if part and part.Parent then
+                                part.Transparency = i / fadeSteps
+                            end
+                        end
+                        task.wait(0.05)
+                    end
+                end)
             end
         end
         
-        -- Short pause before showing prompt
-        task.wait(0.2)
+        -- Very short pause before showing prompt (reduced from 0.2)
+        task.wait(0.1)
         
         -- Check for revives
         if self.controller:hasReviveToken() then
-            warn("[DyingState] Player has revive tokens available")
             
             -- Get remotes
             local remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -159,16 +171,13 @@ function DyingState:OnEnter(collisionData)
                                     string.format("%f,%f,%f", self.deathPosition.X, self.deathPosition.Y, self.deathPosition.Z))
                             end
                             
-                            warn("[DyingState] Player chose to revive")
                             -- Do NOT kill the humanoid - they're reviving!
                             resolve("Reviving")
                         else
-                            warn("[DyingState] Player declined revive")
                             self.controller.player:SetAttribute("AwaitingReviveResponse", false)
                             
                             -- Player declined - kill humanoid and show death UI
                             if humanoid and humanoid.Health > 0 then
-                                warn("[DyingState] Killing player humanoid (declined revive)")
                                 humanoid.Health = 0
                             end
                             
@@ -189,13 +198,11 @@ function DyingState:OnEnter(collisionData)
                 timeoutTask = task.delay(10, function()
                     if not responded and responseConnection then
                         responseConnection:Disconnect()
-                        warn("[DyingState] Revive prompt timed out")
                         self.controller.player:SetAttribute("RevivePromptActive", false)
                         self.controller.player:SetAttribute("AwaitingReviveResponse", false)
                         
                         -- Kill humanoid on timeout
                         if humanoid and humanoid.Health > 0 then
-                            warn("[DyingState] Killing player humanoid (timeout)")
                             humanoid.Health = 0
                         end
                         
@@ -229,7 +236,6 @@ function DyingState:OnEnter(collisionData)
                 task.wait(1.0)
                 -- Kill the player since we can't prompt
                 if humanoid and humanoid.Health > 0 then
-                    warn("[DyingState] Killing player humanoid (no prompt remote)")
                     humanoid.Health = 0
                 end
                 task.wait(0.5)
@@ -237,10 +243,9 @@ function DyingState:OnEnter(collisionData)
             end
         else
             -- No revives available, go straight to spectating
-            warn("[DyingState] No revive tokens available")
             
-            -- Wait a bit before showing death UI to prevent jarring transition
-            task.wait(1.0)
+            -- Much shorter wait before showing death UI (reduced from 1.0)
+            task.wait(0.3)
             
             -- Show death UI after delay
             if deathUIRemote then
@@ -251,7 +256,6 @@ function DyingState:OnEnter(collisionData)
             
             -- Kill the player after showing UI
             if humanoid and humanoid.Health > 0 then
-                warn("[DyingState] Killing player humanoid (no revives)")
                 humanoid.Health = 0
             end
             
@@ -323,7 +327,6 @@ function DyingState:_killPlayer()
     if character then
         local humanoid = character:FindFirstChildOfClass("Humanoid")
         if humanoid and humanoid.Health > 0 then
-            warn("[DyingState] Killing player humanoid")
             humanoid.Health = 0
         end
     end

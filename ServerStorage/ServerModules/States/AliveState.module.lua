@@ -29,7 +29,7 @@ function AliveState:OnEnter()
     -- Resume server-side snake movement if it was stopped
     local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[self.controller.player]
     if snakeSystem and not snakeSystem.updateConnection then
-        warn("[AliveState] Resuming server snake movement for", self.controller.player.Name)
+
         -- Re-create the update connection
         local RunService = game:GetService("RunService")
         snakeSystem.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
@@ -48,7 +48,7 @@ function AliveState:OnEnter()
         self.controller.player:SetAttribute("IsReviving", false)
     end
     
-    warn("[AliveState] Successfully entered for", self.controller.player.Name)
+
 end
 
 function AliveState:OnExecute(dt)

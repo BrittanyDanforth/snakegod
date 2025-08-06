@@ -19,7 +19,6 @@ function SpectatingState.new(controller)
 end
 
 function SpectatingState:OnEnter()
-    warn("[SpectatingState] Player", self.controller.player.Name, "entered spectating state")
     
     -- Check if player is somehow in revive process (shouldn't happen but safety check)
     if self.controller.player:GetAttribute("IsReviving") or 
@@ -169,7 +168,6 @@ end
 function SpectatingState:_sendDeathScreenCommand()
     -- Only send death screen once per spectating session
     if self.deathScreenSent then
-        warn("[SpectatingState] Death screen already sent, skipping")
         return
     end
     
@@ -197,7 +195,6 @@ function SpectatingState:_sendDeathScreenCommand()
             timestamp = os.time()
         })
         self.deathScreenSent = true
-        warn("[SpectatingState] Death screen command sent")
     else
         warn("[SpectatingState] ShowDeathScreen remote not found")
     end
