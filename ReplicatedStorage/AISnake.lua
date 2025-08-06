@@ -1824,7 +1824,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	for i = 1, initialSegmentCount do
 		-- Start ALL segments at the SAME position to prevent gaps
 		local pos = self.Position
-		local color = self:getSegmentColor(i) -- Use the new function
+		local color = self:getSegmentColor(i, pos) -- Pass position for stable coloring
 		local segment = createSegment(i, pos, color, self.Config, self.Model, i)
 		self.Segments[i] = segment
 
@@ -1876,8 +1876,9 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		-- Color matching with smooth transitions
 		if i == 0 then
 			-- Head to first segment - smooth color transition
-			local headColor = self:getSegmentColor(0)
-			local seg1Color = self:getSegmentColor(1)
+			local headColor = self:getSegmentColor(0, self.Position) -- Head position
+			local seg1Pos = self.Segments[1] and self.Segments[1].Position or self.Position
+			local seg1Color = self:getSegmentColor(1, seg1Pos)
 			beam.Color = ColorSequence.new({
 				ColorSequenceKeypoint.new(0, headColor),
 				ColorSequenceKeypoint.new(0.3, headColor:Lerp(seg1Color, 0.3)),
@@ -1885,7 +1886,8 @@ function AISnake.new(startPosition, preservedPersonalityType)
 				ColorSequenceKeypoint.new(1, seg1Color)
 			})
 		else
-			beam.Color = ColorSequence.new(self:getSegmentColor(i))
+			local segPos = self.Segments[i] and self.Segments[i].Position or self.Position
+			beam.Color = ColorSequence.new(self:getSegmentColor(i, segPos))
 		end
 
 		beam.Parent = attachmentPart
@@ -2139,9 +2141,9 @@ function AISnake:grow(amount)
 				self.growthFactor = self:calculateGrowthFactor()
 				local currentBaseSize = BASE_SIZE * self.growthFactor
 
-				local color = self:getSegmentColor(self.CurrentLength)
 				local lastSegment = self.Segments[self.CurrentLength - 1]
 				local newPos = lastSegment and lastSegment.Position or self.Position
+				local color = self:getSegmentColor(self.CurrentLength, newPos) -- Pass position for stable coloring
 				local segment = createSegment(self.CurrentLength, newPos, color, self.Config, self.Model, self.CurrentLength)
 				self.Segments[self.CurrentLength] = segment
 
@@ -2206,8 +2208,11 @@ function AISnake:grow(amount)
 						}
 
 						-- Color matching
-						local prevColor = self:getSegmentColor(self.CurrentLength - 1)
-						local currColor = self:getSegmentColor(self.CurrentLength)
+						local prevSegment = self.Segments[self.CurrentLength - 1]
+						local prevPos = prevSegment and prevSegment.Position or self.Position
+						local prevColor = self:getSegmentColor(self.CurrentLength - 1, prevPos)
+						local currPos = newPos -- We already have the new segment position
+						local currColor = self:getSegmentColor(self.CurrentLength, currPos)
 
 						-- Safety check for colors
 						if not prevColor or not currColor then
@@ -3455,21 +3460,38 @@ AISnake._brainConnection = RunService.Stepped:Connect(function(time, deltaTime)
 	end
 end)
 
--- Get segment color matching OptimizedSnakeSystem
-function AISnake:getSegmentColor(index)
+-- Get segment color with stable world-position based pattern
+function AISnake:getSegmentColor(index, position)
 	if not self.Config or not self.Config.BodyColors or #self.Config.BodyColors == 0 then
 		return Color3.fromRGB(255, 255, 51) -- Default yellow color
 	end
 
 	if index == 0 then
+		-- Head color is always the same
 		return self.Config.HeadColor or self.Config.BodyColors[1]
 	elseif index <= 8 then -- HEAD_BLEND_SEGMENTS = 8
+		-- The smooth blend from head-to-body is also fine
 		local blendFactor = (index / 8) ^ 0.7
 		local headColor = self.Config.HeadColor or self.Config.BodyColors[1]
 		local bodyColor = self.Config.BodyColors[1]
 		return headColor:Lerp(bodyColor, blendFactor)
 	else
-		local colorIndex = ((index - 1) % #self.Config.BodyColors) + 1
+		-- *** THE NEW, STABLE COLOR LOGIC ***
+		-- The pattern is now based on the segment's actual position in the world, not its index.
+		
+		-- 1. Define the size of one full color pattern cycle (in studs)
+		local patternLength = 25 
+		
+		-- 2. Calculate a stable value based on the segment's world position
+		-- We use the dot product to measure how far "along" the snake's body the point is.
+		local distanceAlongSnake = self.Position:Dot(self.Direction) + position:Dot(self.Direction)
+		
+		-- 3. Use math.fmod to create a repeating pattern
+		local patternValue = math.fmod(distanceAlongSnake, patternLength) / patternLength
+		
+		-- 4. Map this value to the color array
+		local colorIndex = math.floor(patternValue * #self.Config.BodyColors) + 1
+		
 		return self.Config.BodyColors[colorIndex]
 	end
 end
@@ -3551,7 +3573,7 @@ function AISnake:ensureSegmentExists(index)
 		return nil
 	end
 
-	local color = self:getSegmentColor(index)
+	local color = self:getSegmentColor(index, targetData.position) -- Pass position for stable coloring
 	segment = createSegment(index, targetData.position, color, self.Config, self.Model, self.CurrentLength)
 
 	-- Apply proper size
