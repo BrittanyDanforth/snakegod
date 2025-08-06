@@ -107,7 +107,7 @@ function ClientSnake.new(model)
 			ClientSnake._warnCount = 0
 		end
 		
-		if ClientSnake._warnCount < 5 then
+		if ClientSnake._warnCount < 3 then -- Reduced from 5
 			ClientSnake._warnCount = ClientSnake._warnCount + 1
 			warn("ClientSnake: Could not find head for", model.Name, "after", attempts, "attempts")
 		end

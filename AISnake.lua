@@ -3257,7 +3257,7 @@ AISnake._movementConnection = RunService.Heartbeat:Connect(function(dt)
 			end
 		end
 		-- Debug message (remove later)
-		if #snakesToUpdate > 0 and brainUpdateCounter % 300 == 0 then -- Every 10 seconds
+		if #snakesToUpdate > 0 and brainUpdateCounter % 600 == 0 then -- Every 20 seconds
 			print("🤖 Updating", #snakesToUpdate, "AI snakes (no players present)")
 		end
 	else
@@ -3330,6 +3330,7 @@ AISnake._brainConnection = RunService.Stepped:Connect(function(time, deltaTime)
 				removed = removed + 1
 			end
 		end
+		-- Only print if we actually removed something
 		if removed > 0 then
 			print("🧹 Cleaned up", removed, "invalid AI snakes from active list")
 		end
