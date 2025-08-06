@@ -2437,3 +2437,8 @@ print("✅ FIXED: Processing queue prevents stuck states")
 print("✅ FIXED: Complete state reset on every spawn")
 print("✅ All V8.2 optimizations preserved")
 print("🔧 100% PRODUCTION READY - WILL NEVER BREAK!")
+
+-- Export module functions
+local module = {}
+module.spawnDeathOrbsForPlayer = spawnDeathOrbsForPlayer
+return module

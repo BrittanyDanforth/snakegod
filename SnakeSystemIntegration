@@ -156,6 +156,14 @@ local function onCharacterAdded(character)
 	-- Check if player is reviving and has a stored snake length BEFORE any delays
 	local reviveSnakeLength = player:GetAttribute("ReviveSnakeLength")
 	local isReviving = player:GetAttribute("RevivingNow") or player:GetAttribute("JustRevived")
+	
+	-- Check for saved snake state
+	local savedSnakeState = nil
+	local playerController = _G.PlayerControllers and _G.PlayerControllers[player]
+	if playerController and playerController.savedSnakeState then
+		savedSnakeState = playerController.savedSnakeState
+		print("🔄 Found saved snake state for revival")
+	end
 
 	if reviveSnakeLength and reviveSnakeLength > 0 then
 		print("🔄 Found revive snake length:", reviveSnakeLength, "for", player.Name)
@@ -190,7 +198,13 @@ local function onCharacterAdded(character)
 	-- Create optimized snake
 	print("🐍 Creating snake for", player.Name, "with config:", config.InitialLength, "length")
 	local success, snake = pcall(function()
-		return OptimizedSnakeSystem.createSnake(character, config)
+		-- Use saved state if reviving and available
+		if isReviving and savedSnakeState then
+			print("🔄 Creating snake from saved state for revival")
+			return OptimizedSnakeSystem.createSnakeFromSavedState(character, config, savedSnakeState)
+		else
+			return OptimizedSnakeSystem.createSnake(character, config)
+		end
 	end)
 
 	if not success then
@@ -204,6 +218,17 @@ local function onCharacterAdded(character)
 	end
 
 	print("✅ Snake created successfully for", player.Name)
+	
+	-- Clear revival flags after successful creation
+	if isReviving then
+		player:SetAttribute("JustRevived", false)
+		player:SetAttribute("RevivingNow", false)
+		-- Clear saved state after use
+		if playerController then
+			playerController.savedSnakeState = nil
+		end
+	end
+	
 	activeSnakes[player] = snake
 
 	-- Add to global table for collision handler

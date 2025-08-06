@@ -5,6 +5,7 @@
 
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 local Promise = require(script.Parent.Parent.Lib.Promise)
 
@@ -35,6 +36,9 @@ function DyingState:OnEnter(collisionData)
     else
         self.currentLength = 55 -- default
     end
+    
+    -- SAVE SNAKE BODY CONFIGURATION BEFORE FADING
+    self:_saveSnakeBodyConfiguration()
     
     -- Store character reference for later
     local character = self.controller.player.Character
@@ -84,32 +88,8 @@ function DyingState:OnEnter(collisionData)
             stopMovementRemote:FireClient(self.controller.player)
         end
         
-        -- Make snake fade out quickly for polished effect
-        if self.controller.snakeObject then
-            if self.controller.snakeObject:IsA("Model") then
-                -- Create a quick fade effect
-                task.spawn(function()
-                    local parts = {}
-                    for _, part in ipairs(self.controller.snakeObject:GetDescendants()) do
-                        if part:IsA("BasePart") then
-                            part.CanCollide = false
-                            table.insert(parts, part)
-                        end
-                    end
-                    
-                    -- Quick fade out (0.3 seconds)
-                    local fadeSteps = 6
-                    for i = 1, fadeSteps do
-                        for _, part in ipairs(parts) do
-                            if part and part.Parent then
-                                part.Transparency = i / fadeSteps
-                            end
-                        end
-                        task.wait(0.05)
-                    end
-                end)
-            end
-        end
+        -- Make snake fade out quickly and spawn death orbs
+        self:_fadeOutSnakeAndSpawnOrbs()
         
         -- Very short pause before showing prompt (reduced from 0.2)
         task.wait(0.1)
@@ -345,6 +325,255 @@ function DyingState:_cleanupDeath()
             self.controller.snakeObject:destroy()
         end
         self.controller.snakeObject = nil
+    end
+end
+
+function DyingState:_saveSnakeBodyConfiguration()
+    -- Get the snake system
+    local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[self.controller.player]
+    if not snakeSystem then 
+        warn("[DyingState] No snake system found for saving configuration")
+        return 
+    end
+    
+    -- Save the entire snake state
+    local savedState = {
+        -- Position history for body recreation
+        positionHistory = {},
+        -- Current length
+        length = snakeSystem.actualLength or snakeSystem.length or self.currentLength,
+        targetLength = snakeSystem.targetLength or self.currentLength,
+        -- Visual properties
+        config = snakeSystem.config,
+        -- Head position
+        headPosition = snakeSystem.head and snakeSystem.head.Position or self.deathPosition,
+        -- Save segment data
+        segments = {},
+        -- Save visible segment count
+        visibleSegmentCount = snakeSystem.visibleSegmentCount or 0
+    }
+    
+    -- Copy position history if it exists
+    if snakeSystem.positionHistory then
+        for i, historyEntry in ipairs(snakeSystem.positionHistory) do
+            table.insert(savedState.positionHistory, {
+                position = historyEntry.position,
+                lookVector = historyEntry.lookVector,
+                time = historyEntry.time
+            })
+        end
+    end
+    
+    -- Save segment positions and properties
+    if snakeSystem.segments then
+        for i, segment in ipairs(snakeSystem.segments) do
+            if segment and segment.Parent then
+                table.insert(savedState.segments, {
+                    position = segment.Position,
+                    size = segment.Size,
+                    color = segment.Color,
+                    transparency = segment.Transparency
+                })
+            end
+        end
+    end
+    
+    -- Store the saved state as an attribute (using JSON encoding)
+    local HttpService = game:GetService("HttpService")
+    local success, encoded = pcall(function()
+        -- We'll store just the essential data as attributes
+        self.controller.player:SetAttribute("SavedSnakeLength", savedState.length)
+        self.controller.player:SetAttribute("SavedSnakeSegmentCount", #savedState.segments)
+        
+        -- Store position history as a simpler format
+        if #savedState.positionHistory > 0 then
+            local positions = {}
+            for i = 1, math.min(100, #savedState.positionHistory) do -- Limit to recent 100 positions
+                local entry = savedState.positionHistory[i]
+                table.insert(positions, string.format("%f,%f,%f", entry.position.X, entry.position.Y, entry.position.Z))
+            end
+            self.controller.player:SetAttribute("SavedSnakePositions", table.concat(positions, ";"))
+        end
+    end)
+    
+    -- Store in controller for immediate access
+    self.controller.savedSnakeState = savedState
+    
+    warn("[DyingState] Saved snake configuration with", #savedState.segments, "segments")
+end
+
+function DyingState:_fadeOutSnakeAndSpawnOrbs()
+    local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[self.controller.player]
+    if not snakeSystem then return end
+    
+    -- Collect segment positions before fading
+    local segmentPositions = {}
+    if snakeSystem.segments then
+        for i, segment in ipairs(snakeSystem.segments) do
+            if segment and segment.Parent then
+                table.insert(segmentPositions, segment.Position)
+            end
+        end
+    end
+    
+    -- Create fade effect with tweens for smoother animation
+    task.spawn(function()
+        local parts = {}
+        local tweens = {}
+        
+        -- Collect all parts including segments and visual elements
+        if snakeSystem.segments then
+            for _, segment in ipairs(snakeSystem.segments) do
+                if segment and segment:IsA("BasePart") then
+                    segment.CanCollide = false
+                    table.insert(parts, segment)
+                end
+            end
+        end
+        
+        -- Also fade the head if it exists
+        if snakeSystem.head and snakeSystem.head:IsA("BasePart") then
+            snakeSystem.head.CanCollide = false
+            table.insert(parts, snakeSystem.head)
+        end
+        
+        -- Fade out beams quickly
+        if snakeSystem.beams then
+            for _, beam in pairs(snakeSystem.beams) do
+                if beam and beam:IsA("Beam") then
+                    local tween = TweenService:Create(beam, 
+                        TweenInfo.new(0.3, Enum.EasingStyle.Linear),
+                        {
+                            Transparency = NumberSequence.new(1),
+                            Width0 = 0,
+                            Width1 = 0
+                        }
+                    )
+                    tween:Play()
+                    table.insert(tweens, tween)
+                end
+            end
+        end
+        
+        -- Fade out glows
+        if snakeSystem.glows then
+            for _, glow in pairs(snakeSystem.glows) do
+                if glow and glow:IsA("PointLight") then
+                    local tween = TweenService:Create(glow,
+                        TweenInfo.new(0.2, Enum.EasingStyle.Linear),
+                        {
+                            Brightness = 0,
+                            Range = 0
+                        }
+                    )
+                    tween:Play()
+                    table.insert(tweens, tween)
+                end
+            end
+        end
+        
+        -- Create quick fade for all parts
+        for _, part in ipairs(parts) do
+            if part and part.Parent then
+                local tween = TweenService:Create(part,
+                    TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+                    {
+                        Transparency = 1,
+                        Size = part.Size * 0.8 -- Slight shrink effect
+                    }
+                )
+                tween:Play()
+                table.insert(tweens, tween)
+            end
+        end
+        
+        -- Wait for tweens to complete
+        task.wait(0.3)
+        
+        -- Hide the model but don't destroy it (we need it for revival)
+        if snakeSystem.model then
+            snakeSystem.model.Parent = nil
+        end
+    end)
+    
+    -- Spawn death orbs along the snake body
+    task.wait(0.15) -- Wait for fade to start before spawning orbs
+    self:_spawnDeathOrbs(segmentPositions)
+end
+
+function DyingState:_spawnDeathOrbs(segmentPositions)
+    -- Use the collision handler's death orb spawning
+    local success, SnakeCollisionHandler = pcall(function()
+        -- Try different possible locations
+        local locations = {
+            game.ServerScriptService:FindFirstChild("SnakeCollisionHandler"),
+            game.ServerScriptService:FindFirstChild("CollisionHandler"),
+            game.ServerScriptService:FindFirstChild("SnakeCollisionHandler_FINAL"),
+            workspace:FindFirstChild("SnakeCollisionHandler_FINAL")
+        }
+        
+        for _, location in ipairs(locations) do
+            if location and location:IsA("ModuleScript") then
+                return require(location)
+            end
+        end
+        
+        -- If it's a script, not a module, we can't require it
+        return nil
+    end)
+    
+    if success and SnakeCollisionHandler and SnakeCollisionHandler.spawnDeathOrbsForPlayer then
+        SnakeCollisionHandler.spawnDeathOrbsForPlayer(self.controller.player, segmentPositions or {self.deathPosition}, self.currentLength)
+    else
+        -- Fallback: spawn orbs manually
+        warn("[DyingState] Using fallback orb spawning")
+        local orbCount = math.min(math.floor(self.currentLength * 0.4), 50)
+        local orbValue = math.max(1, math.floor(self.currentLength * 0.3 / orbCount))
+        
+        for i = 1, orbCount do
+            local pos = self.deathPosition
+            if segmentPositions and segmentPositions[i] then
+                pos = segmentPositions[i]
+            end
+            
+            local offset = Vector3.new(
+                math.random(-2, 2),
+                0,
+                math.random(-2, 2)
+            )
+            
+            -- Create death orb
+            local orb = Instance.new("Part")
+            orb.Name = "DeathOrb"
+            orb.Shape = Enum.PartType.Ball
+            orb.Material = Enum.Material.Neon
+            orb.Size = Vector3.new(2, 2, 2)
+            orb.TopSurface = Enum.SurfaceType.Smooth
+            orb.BottomSurface = Enum.SurfaceType.Smooth
+            orb.CanCollide = false
+            orb.Position = pos + offset
+            orb.Color = Color3.fromRGB(255, 200, 0)
+            orb:SetAttribute("OrbValue", orbValue)
+            orb:SetAttribute("IsDeathOrb", true)
+            
+            -- Add glow
+            local glow = Instance.new("PointLight")
+            glow.Brightness = 2
+            glow.Range = 10
+            glow.Color = orb.Color
+            glow.Parent = orb
+            
+            orb.Parent = workspace
+            
+            -- Add floating animation
+            local floatTween = TweenService:Create(orb,
+                TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+                {Position = orb.Position + Vector3.new(0, 2, 0)}
+            )
+            floatTween:Play()
+            
+            task.wait(0.03)
+        end
     end
 end
 
