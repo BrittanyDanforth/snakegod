@@ -2119,106 +2119,255 @@ function AISnake:Destroy()
 	end
 	AISnake._orbTargets[self] = nil
 
-	-- Spawn orbs before destroying segments
-	local orbSpawnData = {}
+	-- Spawn death orbs before destroying segments (like players do)
+	local segmentPositions = {}
+
+	-- Collect all segment positions including head
 	if self.HeadParts and self.HeadParts.head and self.HeadParts.head.Parent then
-		local head = self.HeadParts.head
-		table.insert(orbSpawnData, {position = head.Position, size = 3.5, color = head.Color})
+		table.insert(segmentPositions, self.HeadParts.head.Position)
 	end
-
-	local ORB_SPAWN_DENSITY = 5
-	for i = 1, #self.Segments do
-		if i % ORB_SPAWN_DENSITY == 1 then
-			local segment = self.Segments[i]
-			if segment and segment.Parent then
-				table.insert(orbSpawnData, {position = segment.Position, size = 1.8, color = segment.Color})
-			end
-		end
-	end
-
-	-- Spawn orbs asynchronously
-	task.spawn(function()
-		if OrbUtils and OrbUtils.spawnOrb then
-			for i = 1, #orbSpawnData do
-				local data = orbSpawnData[i]
-				pcall(function()
-					OrbUtils.spawnOrb(data.position, data.size, data.color)
-				end)
-			end
-		end
-	end)
-
-	-- IMMEDIATE CLEANUP - Destroy all segments right away
+	
+	-- Add all segment positions
 	for i = 1, #self.Segments do
 		local segment = self.Segments[i]
-		if segment then
-			-- Don't use returnSegment for death, just destroy
-			pcall(function()
-				segment:Destroy()
-			end)
+		if segment and segment.Parent then
+			table.insert(segmentPositions, segment.Position)
 		end
 	end
-	self.Segments = {}
-
-	-- Clean up beams and attachments
-	if self.Beams then
-		for _, beam in pairs(self.Beams) do
-			if beam and beam.Parent then
-				pcall(function()
-					beam:Destroy()
-				end)
-			end
-		end
-		self.Beams = {}
-	end
-
-	if self.Attachments then
-		for _, attachment in pairs(self.Attachments) do
-			if attachment and attachment.Parent then
-				pcall(function()
-					attachment:Destroy()
-				end)
-			end
-		end
-		self.Attachments = {}
-	end
-
-	if self.AttachmentPart and self.AttachmentPart.Parent then
-		pcall(function()
-			self.AttachmentPart:Destroy()
-		end)
-		self.AttachmentPart = nil
-	end
-
-	-- Destroy head parts
-	if self.HeadParts then
-		for name, part in pairs(self.HeadParts) do
-			if typeof(part) == "Instance" and part.Parent then
-				pcall(function()
-					part:Destroy()
-				end)
-			end
-		end
-	end
-
-	-- Destroy model and all its descendants
-	if self.Model and self.Model.Parent then
-		pcall(function()
-			-- First destroy all descendants to ensure nothing is left
-			for _, descendant in ipairs(self.Model:GetDescendants()) do
-				if descendant:IsA("BasePart") then
-					descendant:Destroy()
+	
+	-- Spawn death orbs along the snake body
+	task.spawn(function()
+		local DyingState = require(game.ServerStorage.ServerModules.States.DyingState)
+		
+		-- Calculate orb count based on snake length (similar to player death)
+		local snakeLength = #self.Segments + 1 -- +1 for head
+		local baseOrbCount = 20
+		local lengthBonus = math.floor(snakeLength / 100) * 5
+		local maxOrbs = math.min(baseOrbCount + lengthBonus, 50)
+		local orbCount = math.min(math.floor(snakeLength * 0.3), maxOrbs)
+		local orbValue = math.max(1, math.floor(snakeLength * 0.4 / orbCount))
+		
+		-- Spawn death orbs
+		local spawnedOrbs = 0
+		local skipInterval = math.max(1, math.floor(#segmentPositions / orbCount))
+		
+		for i = 1, #segmentPositions do
+			if spawnedOrbs >= orbCount then break end
+			
+			if (i - 1) % skipInterval == 0 or i == #segmentPositions then
+				local pos = segmentPositions[i]
+				if pos then
+					-- Create a spread pattern like player death orbs
+					local spread = 2.5
+					local heightVariation = 1.5
+					local offset = Vector3.new(
+						(math.random() - 0.5) * spread * (1 + math.random() * 0.5),
+						math.random() * heightVariation,
+						(math.random() - 0.5) * spread * (1 + math.random() * 0.5)
+					)
+					
+					-- Vary orb values slightly
+					local valueVariation = math.random(0.8, 1.2)
+					local finalValue = math.max(1, math.floor(orbValue * valueVariation))
+					
+					-- Create death orb using the same method as players
+					pcall(function()
+						-- We'll create the death orb directly here since we can't use the instance method
+						local orbsFolder = workspace:FindFirstChild("Orbs")
+						if not orbsFolder then
+							orbsFolder = Instance.new("Folder")
+							orbsFolder.Name = "Orbs"
+							orbsFolder.Parent = workspace
+						end
+						
+						-- Create death orb
+						local orb = Instance.new("Part")
+						orb.Name = "Orb"
+						orb.Shape = Enum.PartType.Ball
+						orb.Material = Enum.Material.Neon
+						
+						-- Scale size based on value
+						local baseSize = 2.5
+						local sizeMultiplier = 1 + (math.min(finalValue, 10) - 1) * 0.1
+						local finalSize = baseSize * sizeMultiplier
+						orb.Size = Vector3.new(finalSize, finalSize, finalSize)
+						
+						orb.TopSurface = Enum.SurfaceType.Smooth
+						orb.BottomSurface = Enum.SurfaceType.Smooth
+						orb.CanCollide = false
+						orb.Anchored = true
+						orb.Position = pos + offset
+						
+						-- Rainbow effect
+						local hueStart = math.random()
+						orb.Color = Color3.fromHSV(hueStart, 1, 1)
+						
+						-- Set attributes
+						orb:SetAttribute("OrbValue", finalValue)
+						orb:SetAttribute("IsDeathOrb", true)
+						orb:SetAttribute("OrbType", "normal")
+						
+						-- Add glow
+						local glow = Instance.new("PointLight")
+						glow.Brightness = 2 + finalValue * 0.1
+						glow.Range = 10 + finalValue * 0.5
+						glow.Color = orb.Color
+						glow.Parent = orb
+						
+						-- Parent to folder
+						orb.Parent = orbsFolder
+						
+						-- Rainbow animation
+						task.spawn(function()
+							local hue = hueStart
+							while orb and orb.Parent do
+								hue = (hue + 0.01) % 1
+								local color = Color3.fromHSV(hue, 1, 1)
+								orb.Color = color
+								if glow and glow.Parent then
+									glow.Color = color
+								end
+								task.wait(0.05)
+							end
+						end)
+						
+						-- Floating animation
+						task.spawn(function()
+							local startY = orb.Position.Y
+							local time = math.random() * math.pi * 2
+							local rotSpeed = (math.random() * 2 - 1) * 2
+							local floatSpeed = math.random() * 0.5 + 1.5
+							
+							while orb and orb.Parent do
+								time = time + 0.03
+								local floatOffset = math.sin(time * floatSpeed) * 0.8
+								local rotation = time * rotSpeed
+								
+								orb.CFrame = CFrame.new(orb.Position.X, startY + floatOffset, orb.Position.Z) * CFrame.Angles(0, rotation, 0)
+								
+								task.wait()
+							end
+						end)
+						
+						-- Add particle effect
+						if orb and orb.Parent then
+							local attachment = Instance.new("Attachment")
+							attachment.Parent = orb
+							
+							local particle = Instance.new("ParticleEmitter")
+							particle.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+							particle.Rate = 15 + finalValue * 2
+							particle.Lifetime = NumberRange.new(0.3, 0.6)
+							particle.SpreadAngle = Vector2.new(360, 360)
+							particle.Speed = NumberRange.new(1, 2)
+							particle.VelocityInheritance = 0
+							particle.Color = ColorSequence.new(Color3.fromRGB(255, 200, 0))
+							particle.Size = NumberSequence.new{
+								NumberSequenceKeypoint.new(0, 0.3 * sizeMultiplier),
+								NumberSequenceKeypoint.new(0.5, 0.2 * sizeMultiplier),
+								NumberSequenceKeypoint.new(1, 0)
+							}
+							particle.Transparency = NumberSequence.new{
+								NumberSequenceKeypoint.new(0, 0.3),
+								NumberSequenceKeypoint.new(1, 1)
+							}
+							particle.Parent = attachment
+						end
+						
+						-- Attach orb collection handler
+						if OrbUtils and OrbUtils.attachOrbTouched then
+							OrbUtils.attachOrbTouched(orb)
+						end
+						
+						-- Clean up after 90 seconds
+						game:GetService("Debris"):AddItem(orb, 90)
+						
+						spawnedOrbs = spawnedOrbs + 1
+					end)
+					
+					-- Small delay between orbs to prevent lag
+					if spawnedOrbs % 5 == 0 then
+						task.wait()
+					end
 				end
 			end
-			self.Model:Destroy()
-		end)
-	end
+		end
+		
+		print(string.format("✅ AI Snake spawned %d death orbs", spawnedOrbs))
+	end)
 
-	-- Clear all references
-	self.Model = nil
-	self.HeadParts = nil
-	self.RootPart = nil
-	self.Segments = nil
+	-- Cleanup Parts, Beams, Attachments, Model
+	pcall(function()
+		-- Don't use returnSegment for death, just destroy
+		for i = 1, #self.Segments do
+			local segment = self.Segments[i]
+			if segment then
+				pcall(function()
+					segment:Destroy()
+				end)
+			end
+		end
+		self.Segments = {}
+
+		if self.Beams then
+			for _, beam in pairs(self.Beams) do
+				if beam and beam.Parent then
+					pcall(function()
+						beam:Destroy()
+					end)
+				end
+			end
+			self.Beams = {}
+		end
+
+		if self.Attachments then
+			for _, attachment in pairs(self.Attachments) do
+				if attachment and attachment.Parent then
+					pcall(function()
+						attachment:Destroy()
+					end)
+				end
+			end
+			self.Attachments = {}
+		end
+
+		if self.AttachmentPart and self.AttachmentPart.Parent then
+			pcall(function()
+				self.AttachmentPart:Destroy()
+			end)
+			self.AttachmentPart = nil
+		end
+
+		-- Destroy head parts
+		if self.HeadParts then
+			for name, part in pairs(self.HeadParts) do
+				if typeof(part) == "Instance" and part.Parent then
+					pcall(function()
+						part:Destroy()
+					end)
+				end
+			end
+		end
+
+		-- Destroy model and all its descendants
+		if self.Model and self.Model.Parent then
+			pcall(function()
+				-- First destroy all descendants to ensure nothing is left
+				for _, descendant in ipairs(self.Model:GetDescendants()) do
+					if descendant:IsA("BasePart") then
+						descendant:Destroy()
+					end
+				end
+				self.Model:Destroy()
+			end)
+		end
+
+		-- Clear all references
+		self.Model = nil
+		self.HeadParts = nil
+		self.RootPart = nil
+		self.Segments = nil
+	end)
 end
 
 -- === SMOOTHER MOVEMENT (FIXED) ===
