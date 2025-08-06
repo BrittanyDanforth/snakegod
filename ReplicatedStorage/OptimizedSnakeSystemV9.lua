@@ -717,9 +717,32 @@ function Snake:createUnifiedBody()
 end
 
 function Snake:updatePositionHistory()
+	local lastHistoryPoint = self:getHistoricalPosition(0) -- Get the most recent point
+	local newPosition = self.rootPart.Position
+	local distance = (newPosition - lastHistoryPoint.position).Magnitude
+
+	-- Define a max distance. If we move further than this in one frame, we need to fill the gap.
+	-- This should be slightly less than your effective segment spacing to be safe.
+	local maxSpacing = (BASE_SIZE * self.growthFactor * SEGMENT_SPACING) * 0.9
+
+	if distance > maxSpacing then
+		-- We moved too far. Inject extra points into the history to prevent gaps.
+		local pointsToInject = math.floor(distance / maxSpacing)
+		for i = 1, pointsToInject do
+			local alpha = i / (pointsToInject + 1)
+			local injectedPos = lastHistoryPoint.position:Lerp(newPosition, alpha)
+			local injectedLook = lastHistoryPoint.lookVector:Lerp(self.rootPart.CFrame.LookVector, alpha)
+
+			-- Add the new, interpolated point to the history buffer
+			self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
+			self.positionHistory[self.historyIndex] = { position = injectedPos, lookVector = injectedLook.Unit, time = tick() }
+		end
+	end
+
+	-- Finally, add the actual current position to the history
 	self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
 	self.positionHistory[self.historyIndex] = {
-		position = self.rootPart.Position,
+		position = newPosition,
 		lookVector = self.rootPart.CFrame.LookVector,
 		time = tick()
 	}
