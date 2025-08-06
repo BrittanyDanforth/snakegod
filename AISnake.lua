@@ -1607,6 +1607,12 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	self.Config.BodyColors = colorData.BodyColors
 	self.Config.HeadMaterial = colorData.HeadMaterial
 	self.Config.BodyMaterial = colorData.BodyMaterial
+	
+	-- Ensure InitialLength is set
+	if not self.Config.InitialLength then
+		self.Config.InitialLength = 100 -- Default AI snake length
+		print("⚠️ Setting default InitialLength to 100")
+	end
 
 	-- Update map bounds if needed (in case map was created after script started)
 	updateMapBounds()
@@ -1693,6 +1699,9 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		obj:Destroy()
 	end
 	
+	-- Parent model to workspace immediately
+	self.Model.Parent = workspace
+	
 	-- Debug print
 	print("🐍 Creating AI Snake model:", self.Model.Name)
 
@@ -1733,6 +1742,8 @@ function AISnake.new(startPosition, preservedPersonalityType)
 
 	-- Use initial length from config
 	self.CurrentLength = self.Config.InitialLength or 10
+	
+	print("🐍 AI Snake initial length:", self.CurrentLength)
 
 	-- Calculate initial growth factor
 	self.growthFactor = self:calculateGrowthFactor()
@@ -1796,6 +1807,8 @@ function AISnake.new(startPosition, preservedPersonalityType)
 
 	-- OPTIMIZED: Create segments dynamically based on length
 	local initialSegmentCount = math.min(self.CurrentLength, DYNAMIC_SEGMENT_LIMIT)
+	
+	print("🔧 Creating", initialSegmentCount, "segments (CurrentLength:", self.CurrentLength, "Limit:", DYNAMIC_SEGMENT_LIMIT, ")")
 
 	-- FIXED: Create segments at proper positions WITHOUT GAPS
 	for i = 1, initialSegmentCount do
@@ -1878,9 +1891,6 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	-- Initialize model attributes for client LOD
 	self.Model:SetAttribute("CurrentLength", self.CurrentLength)
 	self.Model:SetAttribute("HeadPosition", self.Position)
-	
-	-- Parent the model to workspace after setup
-	self.Model.Parent = workspace
 
 	-- Spawn sequence to prevent gaps
 	task.defer(function()
@@ -1913,6 +1923,8 @@ function AISnake.new(startPosition, preservedPersonalityType)
 				segment.Transparency = 0
 			end
 		end
+		
+		print("🎯 Made", self.actualSegmentCount + 1, "segments visible")
 
 		-- Gradually move forward to create proper segment spacing
 		for step = 1, 20 do
@@ -1989,10 +2001,32 @@ function AISnake.new(startPosition, preservedPersonalityType)
 
 	-- Wait a frame to ensure everything is initialized
 	self._active = false
-	task.wait()
+	
+	-- Ensure all segments are created and visible before activating
+	task.spawn(function()
+		task.wait(0.1)
+		
+		-- Double-check segments are visible
+		local visibleCount = 0
+		for i = 1, self.actualSegmentCount do
+			if self.Segments[i] and self.Segments[i].Parent then
+				self.Segments[i].Transparency = 0
+				visibleCount = visibleCount + 1
+			end
+		end
+		
+		-- Make head visible too
+		if self.HeadParts and self.HeadParts.head then
+			self.HeadParts.head.Transparency = 0
+		end
+		
+		print("✅ AI Snake activated with", visibleCount, "visible segments")
+		
+		-- Now activate
+		self._active = true
+	end)
 	
 	-- Final activation after everything is set up
-	self._active = true
 	table.insert(AISnake._activeSnakes, self)
 	
 	-- Add a small random delay to prevent all snakes from updating at once
