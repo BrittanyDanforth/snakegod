@@ -3,9 +3,27 @@
     Eliminates race conditions and ensures proper cleanup
 ]]
 
-local Debris = game:GetService("Debris")
+-- Services and dependencies
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
 local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+-- Modules
+local SnakeUpgrades = require(ReplicatedStorage:WaitForChild("SnakeUpgrades"))
+local OrbUtils = require(ReplicatedStorage:WaitForChild("OrbUtils"))
+
+-- Remotes
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local playerDeathEvent = remotes:WaitForChild("PlayerDeathEffect")
+local promptReviveRemote = remotes:WaitForChild("PromptRevive")
+local reviveResponseRemote = remotes:WaitForChild("ReviveResponse")
+local stopSnakeMovementRemote = remotes:WaitForChild("StopSnakeMovement")
+local showDeathScreenRemote = remotes:WaitForChild("ShowDeathScreen")
+local setSpectatorCameraRemote = remotes:WaitForChild("SetSpectatorCamera")
 
 local Promise = require(script.Parent.Parent.Lib.Promise)
 
@@ -610,6 +628,11 @@ function DyingState:_createDeathOrb(position, value)
     
     -- Clean up after 90 seconds
     Debris:AddItem(orb, 90)
+    
+    -- Attach touch handler for collection (this was missing!)
+    if OrbUtils.attachOrbTouched then
+        OrbUtils.attachOrbTouched(orb)
+    end
     
     return orb
 end
