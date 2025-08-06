@@ -18,7 +18,8 @@ This implementation adds the following features to the snake game:
   - Fade out parts, beams, and glows
   - Hide the model without destroying it
   - Spawn death orbs along the snake body
-- Added `_spawnDeathOrbs()` with fallback orb spawning if no handler is available
+- Added `_spawnDeathOrbs()` that spawns orbs along snake segment positions
+- Added `_createDeathOrb()` that creates death orbs in the workspace Orbs folder for the CollisionModule to detect
 
 ### 2. OptimizedSnakeSystemV9.lua
 - Added `createSnakeFromSavedState()` method to restore a snake from saved data
@@ -33,10 +34,12 @@ This implementation adds the following features to the snake game:
 - Modified to check for saved snake state when creating a snake
 - Uses `createSnakeFromSavedState()` when reviving
 - Clears revival flags after successful creation
-- Accesses saved state from the PlayerController
+- Accesses saved state from the PlayerController via `_G.PlayerControllers`
 
-### 4. SnakeCollisionHandler_FINAL.lua
-- Added module export to expose `spawnDeathOrbsForPlayer` function
+### 4. CollisionModule Integration
+- Death orbs are placed in the `workspace.Orbs` folder
+- The existing CollisionModule's `_checkOrbCollection` function handles collection
+- Death orbs have the `IsDeathOrb` attribute and `OrbValue` for their value
 
 ## How It Works
 
@@ -45,7 +48,7 @@ This implementation adds the following features to the snake game:
 2. Snake configuration is saved (positions, length, etc.)
 3. Snake movement is stopped
 4. Snake parts fade out with smooth animations
-5. Death orbs spawn at snake segment positions
+5. Death orbs spawn at snake segment positions in the Orbs folder
 6. Model is hidden but not destroyed
 
 ### Revival Process:
@@ -69,3 +72,4 @@ Use the test script commands:
 - The snake fades out in 0.3 seconds for a polished effect
 - Snake state is preserved in the PlayerController
 - Revival maintains the exact snake configuration from death
+- Death orbs are compatible with the current CollisionModule system

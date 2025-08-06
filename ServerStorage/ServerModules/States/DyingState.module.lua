@@ -259,37 +259,205 @@ function DyingState:OnExit()
 end
 
 function DyingState:_spawnDeathOrbs()
-    -- Spawn orbs at death location
-    local head = self.controller:getSnakeHead()
-    if not head then return end
+    local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[self.controller.player]
+    if not snakeSystem then return end
     
-    local OrbUtils = ReplicatedStorage:FindFirstChild("OrbUtils")
-    if not OrbUtils then return end
+    -- Collect segment positions before fading
+    local segmentPositions = {}
+    if snakeSystem.segments then
+        for i, segment in ipairs(snakeSystem.segments) do
+            if segment and segment.Parent then
+                table.insert(segmentPositions, segment.Position)
+            end
+        end
+    end
     
-    local OrbUtilsModule = require(OrbUtils)
-    
-    -- Calculate orbs to spawn based on length
-    local orbCount = math.min(
-        math.floor(self.controller:getLength() * 0.7),
-        self.controller.config.maxDeathOrbs or 50
-    )
-    
-    -- Spawn orbs asynchronously
+    -- Create fade effect with tweens for smoother animation
     task.spawn(function()
-        for i = 1, orbCount do
-            if self.controller.isDestroyed then break end
-            
-            local offset = Vector3.new(
-                math.random(-10, 10),
-                0,
-                math.random(-10, 10)
-            )
-            
-            -- OrbUtilsModule.spawnOrb(head.Position + offset, 1)
-            -- Orb spawning is handled by the existing SnakeSystemIntegration
-            task.wait(0.03) -- Small delay between orbs
+        local parts = {}
+        local tweens = {}
+        
+        -- Collect all parts including segments and visual elements
+        if snakeSystem.segments then
+            for _, segment in ipairs(snakeSystem.segments) do
+                if segment and segment:IsA("BasePart") then
+                    segment.CanCollide = false
+                    table.insert(parts, segment)
+                end
+            end
+        end
+        
+        -- Also fade the head if it exists
+        if snakeSystem.head and snakeSystem.head:IsA("BasePart") then
+            snakeSystem.head.CanCollide = false
+            table.insert(parts, snakeSystem.head)
+        end
+        
+        -- Fade out beams quickly
+        if snakeSystem.beams then
+            for _, beam in pairs(snakeSystem.beams) do
+                if beam and beam:IsA("Beam") then
+                    local tween = TweenService:Create(beam, 
+                        TweenInfo.new(0.3, Enum.EasingStyle.Linear),
+                        {
+                            Transparency = NumberSequence.new(1),
+                            Width0 = 0,
+                            Width1 = 0
+                        }
+                    )
+                    tween:Play()
+                    table.insert(tweens, tween)
+                end
+            end
+        end
+        
+        -- Fade out glows
+        if snakeSystem.glows then
+            for _, glow in pairs(snakeSystem.glows) do
+                if glow and glow:IsA("PointLight") then
+                    local tween = TweenService:Create(glow,
+                        TweenInfo.new(0.2, Enum.EasingStyle.Linear),
+                        {
+                            Brightness = 0,
+                            Range = 0
+                        }
+                    )
+                    tween:Play()
+                    table.insert(tweens, tween)
+                end
+            end
+        end
+        
+        -- Create quick fade for all parts
+        for _, part in ipairs(parts) do
+            if part and part.Parent then
+                local tween = TweenService:Create(part,
+                    TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+                    {
+                        Transparency = 1,
+                        Size = part.Size * 0.8 -- Slight shrink effect
+                    }
+                )
+                tween:Play()
+                table.insert(tweens, tween)
+            end
+        end
+        
+        -- Wait for tweens to complete
+        task.wait(0.3)
+        
+        -- Hide the model but don't destroy it (we need it for revival)
+        if snakeSystem.model then
+            snakeSystem.model.Parent = nil
         end
     end)
+    
+    -- Spawn death orbs along the snake body
+    task.wait(0.15) -- Wait for fade to start before spawning orbs
+    self:_spawnDeathOrbs(segmentPositions)
+end
+
+function DyingState:_spawnDeathOrbs(segmentPositions)
+    -- Spawn death orbs along the snake body
+    warn("[DyingState] Spawning death orbs")
+    local orbCount = math.min(math.floor(self.currentLength * 0.4), 50)
+    local orbValue = math.max(1, math.floor(self.currentLength * 0.3 / orbCount))
+    
+    -- If we have segment positions, spawn orbs along the body
+    if segmentPositions and #segmentPositions > 0 then
+        local spawnedOrbs = 0
+        local skipInterval = math.max(1, math.floor(#segmentPositions / orbCount))
+        
+        for i = 1, #segmentPositions do
+            if spawnedOrbs >= orbCount then break end
+            
+            if (i - 1) % skipInterval == 0 or i == #segmentPositions then
+                local pos = segmentPositions[i]
+                if pos then
+                    local spread = 0.8
+                    local offset = Vector3.new(
+                        (math.random() - 0.5) * spread,
+                        0,
+                        (math.random() - 0.5) * spread
+                    )
+                    
+                    self:_createDeathOrb(pos + offset, orbValue)
+                    spawnedOrbs = spawnedOrbs + 1
+                    
+                    if spawnedOrbs % 8 == 0 then
+                        task.wait(0.02)
+                    end
+                end
+            end
+        end
+        
+        print(string.format("✅ Spawned %d death orbs along snake body", spawnedOrbs))
+    else
+        -- Fallback: spawn in a spread pattern
+        warn("[DyingState] No segment positions, using fallback pattern")
+        for i = 1, orbCount do
+            local angle = (i / orbCount) * math.pi * 2 * 3
+            local distance = (i / orbCount) * math.min(self.currentLength * 0.5, 30)
+            
+            local offset = Vector3.new(
+                math.cos(angle) * distance,
+                0,
+                math.sin(angle) * distance
+            )
+            
+            self:_createDeathOrb(self.deathPosition + offset, orbValue)
+            
+            if i % 8 == 0 then
+                task.wait(0.02)
+            end
+        end
+    end
+end
+
+function DyingState:_createDeathOrb(position, value)
+    -- Ensure Orbs folder exists
+    local orbsFolder = workspace:FindFirstChild("Orbs")
+    if not orbsFolder then
+        orbsFolder = Instance.new("Folder")
+        orbsFolder.Name = "Orbs"
+        orbsFolder.Parent = workspace
+    end
+    
+    -- Create death orb
+    local orb = Instance.new("Part")
+    orb.Name = "DeathOrb"
+    orb.Shape = Enum.PartType.Ball
+    orb.Material = Enum.Material.Neon
+    orb.Size = Vector3.new(2, 2, 2)
+    orb.TopSurface = Enum.SurfaceType.Smooth
+    orb.BottomSurface = Enum.SurfaceType.Smooth
+    orb.CanCollide = false
+    orb.Position = position
+    orb.Color = Color3.fromRGB(255, 200, 0)
+    orb:SetAttribute("OrbValue", value)
+    orb:SetAttribute("IsDeathOrb", true)
+    
+    -- Add glow
+    local glow = Instance.new("PointLight")
+    glow.Brightness = 2
+    glow.Range = 10
+    glow.Color = orb.Color
+    glow.Parent = orb
+    
+    -- Parent to Orbs folder
+    orb.Parent = orbsFolder
+    
+    -- Add floating animation
+    local floatTween = TweenService:Create(orb,
+        TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+        {Position = orb.Position + Vector3.new(0, 2, 0)}
+    )
+    floatTween:Play()
+    
+    -- Clean up after 60 seconds
+    Debris:AddItem(orb, 60)
+    
+    return orb
 end
 
 function DyingState:_freezeCamera()
@@ -499,82 +667,6 @@ function DyingState:_fadeOutSnakeAndSpawnOrbs()
     -- Spawn death orbs along the snake body
     task.wait(0.15) -- Wait for fade to start before spawning orbs
     self:_spawnDeathOrbs(segmentPositions)
-end
-
-function DyingState:_spawnDeathOrbs(segmentPositions)
-    -- Use the collision handler's death orb spawning
-    local success, SnakeCollisionHandler = pcall(function()
-        -- Try different possible locations
-        local locations = {
-            game.ServerScriptService:FindFirstChild("SnakeCollisionHandler"),
-            game.ServerScriptService:FindFirstChild("CollisionHandler"),
-            game.ServerScriptService:FindFirstChild("SnakeCollisionHandler_FINAL"),
-            workspace:FindFirstChild("SnakeCollisionHandler_FINAL")
-        }
-        
-        for _, location in ipairs(locations) do
-            if location and location:IsA("ModuleScript") then
-                return require(location)
-            end
-        end
-        
-        -- If it's a script, not a module, we can't require it
-        return nil
-    end)
-    
-    if success and SnakeCollisionHandler and SnakeCollisionHandler.spawnDeathOrbsForPlayer then
-        SnakeCollisionHandler.spawnDeathOrbsForPlayer(self.controller.player, segmentPositions or {self.deathPosition}, self.currentLength)
-    else
-        -- Fallback: spawn orbs manually
-        warn("[DyingState] Using fallback orb spawning")
-        local orbCount = math.min(math.floor(self.currentLength * 0.4), 50)
-        local orbValue = math.max(1, math.floor(self.currentLength * 0.3 / orbCount))
-        
-        for i = 1, orbCount do
-            local pos = self.deathPosition
-            if segmentPositions and segmentPositions[i] then
-                pos = segmentPositions[i]
-            end
-            
-            local offset = Vector3.new(
-                math.random(-2, 2),
-                0,
-                math.random(-2, 2)
-            )
-            
-            -- Create death orb
-            local orb = Instance.new("Part")
-            orb.Name = "DeathOrb"
-            orb.Shape = Enum.PartType.Ball
-            orb.Material = Enum.Material.Neon
-            orb.Size = Vector3.new(2, 2, 2)
-            orb.TopSurface = Enum.SurfaceType.Smooth
-            orb.BottomSurface = Enum.SurfaceType.Smooth
-            orb.CanCollide = false
-            orb.Position = pos + offset
-            orb.Color = Color3.fromRGB(255, 200, 0)
-            orb:SetAttribute("OrbValue", orbValue)
-            orb:SetAttribute("IsDeathOrb", true)
-            
-            -- Add glow
-            local glow = Instance.new("PointLight")
-            glow.Brightness = 2
-            glow.Range = 10
-            glow.Color = orb.Color
-            glow.Parent = orb
-            
-            orb.Parent = workspace
-            
-            -- Add floating animation
-            local floatTween = TweenService:Create(orb,
-                TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-                {Position = orb.Position + Vector3.new(0, 2, 0)}
-            )
-            floatTween:Play()
-            
-            task.wait(0.03)
-        end
-    end
 end
 
 return DyingState
