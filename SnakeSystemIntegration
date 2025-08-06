@@ -1,9 +1,7 @@
 --[[
-SNAKE SYSTEM INTEGRATION
-This script integrates the optimized snake system with your existing CharacterSetup
-Place this in ServerScriptService
-FIXED: Loading delay at the start of the game has been eliminated.
-FIXED: Added missing SpawnSnake handler for Play button
+SNAKE SYSTEM INTEGRATION - FIXED VERSION
+This handles server-side game logic ONLY
+Visual rendering is handled by the client
 --]]
 
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -26,23 +24,11 @@ respawnSnake.Name = "RespawnSnake"
 local updateMouseDirection = remoteEvents:FindFirstChild("UpdateMouseDirection") or Instance.new("RemoteEvent", remoteEvents)
 updateMouseDirection.Name = "UpdateMouseDirection"
 
--- Wait a moment for folder creation
-wait(0.1)
-
--- NOW load the network handler
-local SnakeNetworkHandler = nil
-pcall(function()
-	SnakeNetworkHandler = require(ServerScriptService:WaitForChild("SnakeNetworkHandler"))
-	if SnakeNetworkHandler and SnakeNetworkHandler.init then
-		SnakeNetworkHandler.init()
-	end
-end)
+-- DO NOT LOAD OptimizedSnakeSystemV9 - That's for client only!
+-- The server only handles game logic, not visuals
 
 -- Store active snakes
 local activeSnakes = {}
-
--- ServerSnakeSystem will be loaded later when needed
-local ServerSnakeSystem = nil
 
 -- Default configuration
 local DEFAULT_CONFIG = {
