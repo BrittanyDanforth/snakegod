@@ -1697,27 +1697,31 @@ function AISnake:_checkCollisionsOptimized()
 	local nearbyEntities = SpatialGrid.QueryRadius(myHeadPos, checkRadius)
 	
 	for _, entity in ipairs(nearbyEntities) do
-		if entity.owner ~= self and entity.owner and entity.owner.HeadParts then
-			local otherHead = entity.owner.HeadParts.head
+		local otherSnake = entity.owner
+		
+		-- Ensure it's a snake and not ourselves
+		-- Use getmetatable to strictly check if it's an AISnake instance
+		if otherSnake and otherSnake ~= self and getmetatable(otherSnake) == AISnake and otherSnake.HeadParts and otherSnake.HeadParts.head then
+			local otherHead = otherSnake.HeadParts.head
 			if otherHead and otherHead.Parent then
 				local distance = (myHeadPos - otherHead.Position).Magnitude
 				
 				-- Head collision check
 				if distance < 4 then
 					-- We hit another snake's head - mutual destruction
-					if not self._isSpawnProtected and not entity.owner._isSpawnProtected then
+					if not self._isSpawnProtected and not otherSnake._isSpawnProtected then
 						self:die("HeadCollision")
-						if entity.owner.die then
-							entity.owner:die("HeadCollision")
+						if otherSnake.die then
+							otherSnake:die("HeadCollision")
 						end
 					end
 					return
 				end
 				
 				-- Body collision check for other snake's segments
-				if entity.owner.Segments then
-					for i = 10, #entity.owner.Segments do
-						local segment = entity.owner.Segments[i]
+				if otherSnake.Segments then
+					for i = 10, #otherSnake.Segments do
+						local segment = otherSnake.Segments[i]
 						if segment and segment.Parent then
 							local segDist = (myHeadPos - segment.Position).Magnitude
 							if segDist < 3 then
@@ -2228,6 +2232,11 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	task.spawn(function()
 		task.wait(0.1)
 		
+		-- Check if snake was destroyed during wait
+		if self._destroyed then
+			return
+		end
+		
 		-- Double-check segments are visible
 		local visibleCount = 0
 		for i = 1, self.actualSegmentCount do
@@ -2370,14 +2379,14 @@ function AISnake:grow(amount)
 					local growTime = 0.18
 					local t = 0
 					local startSize = Vector3new(0.1, 0.1, 0.1)
-					while t < growTime do
+					while t < growTime and not self._destroyed do
 						t = t + RunService.Heartbeat:Wait()
-						if not segment or not segment.Parent then return end
+						if not segment or not segment.Parent or self._destroyed then return end
 						local alpha = mathMin(t / growTime, 1)
 						segment.Size = startSize:Lerp(Vector3new(finalSize, finalSize, finalSize), alpha)
 						segment.Transparency = 1 - alpha
 					end
-					if segment and segment.Parent then
+					if segment and segment.Parent and not self._destroyed then
 						segment.Size = Vector3new(finalSize, finalSize, finalSize)
 						segment.Transparency = 0
 					end
@@ -2396,8 +2405,14 @@ function AISnake:grow(amount)
 
 		-- Smoothly update existing segment sizes and beam widths
 		task.spawn(function()
+			-- Check if snake was destroyed
+			if self._destroyed then
+				return
+			end
+			
 			-- Update segments
 			for i = 0, math.min(self.CurrentLength, FORCE_RENDER_SEGMENTS) do
+				if self._destroyed then break end
 				local segment = self.Segments[i]
 				if segment and segment.Parent then
 					local targetSize = self:getSegmentSize(i, currentBaseSize)
@@ -2413,7 +2428,14 @@ function AISnake:grow(amount)
 
 			-- Update beam widths to match new segment sizes
 			task.wait(0.1) -- Small delay to let segment tweens start
+			
+			-- Check again after wait
+			if self._destroyed then
+				return
+			end
+			
 			for i = 0, math.min(self.CurrentLength - 1, FORCE_RENDER_SEGMENTS) do
+				if self._destroyed then break end
 				local beam = self.Beams[i]
 				if beam and beam.Parent then
 					local beamWidth = self:getBeamWidth(i, currentBaseSize)
@@ -2487,6 +2509,7 @@ function AISnake:Destroy()
 	
 	-- Spawn death orbs along the snake body
 	task.spawn(function()
+		-- No need to check _destroyed here since we're already dying
 		local DyingState = require(game.ServerStorage.ServerModules.States.DyingState)
 		
 		-- Calculate orb count based on snake length (similar to player death)
