@@ -1344,7 +1344,10 @@ function OptimizedSnakeSystemV9.createSnakeFromSavedState(character, config, sav
 		-- Restore position history if available
 		if savedState.positionHistory and #savedState.positionHistory > 0 then
 			snake.positionHistory = {}
-			for i, entry in ipairs(savedState.positionHistory) do
+			-- Only restore recent history to avoid lag
+			local startIdx = math.max(1, #savedState.positionHistory - 500)
+			for i = startIdx, #savedState.positionHistory do
+				local entry = savedState.positionHistory[i]
 				table.insert(snake.positionHistory, {
 					position = entry.position,
 					lookVector = entry.lookVector,
@@ -1354,31 +1357,48 @@ function OptimizedSnakeSystemV9.createSnakeFromSavedState(character, config, sav
 			snake.historyIndex = 1
 		end
 		
-		-- Recreate segments at saved positions
+		-- Recreate segments at saved positions efficiently
 		if savedState.segments and #savedState.segments > 0 then
 			-- First, ensure we have enough segments
 			local neededSegments = math.min(#savedState.segments, MAX_SEGMENTS)
-			while snake.visibleSegmentCount < neededSegments do
-				snake:addSegments(math.min(10, neededSegments - snake.visibleSegmentCount))
-			end
 			
-			-- Position segments at saved locations
-			for i, segmentData in ipairs(savedState.segments) do
-				if i <= snake.visibleSegmentCount and snake.segments[i] then
-					snake.segments[i].Position = segmentData.position
-					snake.segments[i].Size = segmentData.size
-					snake.segments[i].Color = segmentData.color
-					snake.segments[i].Transparency = 0 -- Make visible again
-					
-					-- Update attachment positions for beams
-					if snake.attachments[i] then
-						snake.attachments[i].WorldPosition = segmentData.position
-					end
+			-- Add segments in batches for performance
+			local segmentsToAdd = neededSegments - snake.visibleSegmentCount
+			while segmentsToAdd > 0 do
+				local batchSize = math.min(20, segmentsToAdd)
+				snake:addSegments(batchSize)
+				segmentsToAdd = segmentsToAdd - batchSize
+				
+				-- Small yield to prevent lag
+				if segmentsToAdd > 0 then
+					task.wait()
 				end
 			end
 			
-			-- Update beams to match segment positions
-			snake:updateBeamConnections()
+			-- Position segments at saved locations efficiently
+			task.spawn(function()
+				for i, segmentData in ipairs(savedState.segments) do
+					if i <= snake.visibleSegmentCount and snake.segments[i] then
+						snake.segments[i].Position = segmentData.position
+						snake.segments[i].Size = segmentData.size
+						snake.segments[i].Color = segmentData.color
+						snake.segments[i].Transparency = 0 -- Make visible again
+						
+						-- Update attachment positions for beams
+						if snake.attachments[i] then
+							snake.attachments[i].WorldPosition = segmentData.position
+						end
+						
+						-- Yield every few segments to prevent lag
+						if i % 10 == 0 then
+							task.wait()
+						end
+					end
+				end
+				
+				-- Update beams after all segments are positioned
+				snake:updateBeamConnections()
+			end)
 		end
 		
 		-- Update leaderstats to reflect restored length
