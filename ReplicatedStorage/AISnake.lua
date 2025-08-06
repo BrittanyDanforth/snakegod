@@ -1905,20 +1905,6 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			return
 		end
 		
-		-- Add spawn protection visual effect
-		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
-			local protectionField = Instance.new("ForceField")
-			protectionField.Parent = self.Model
-			
-			-- Remove protection field when spawn protection expires
-			task.spawn(function()
-				task.wait(10) -- Match spawn protection time
-				if protectionField and protectionField.Parent then
-					protectionField:Destroy()
-				end
-			end)
-		end
-		
 		-- Make segments visible gradually
 		for i = 0, self.actualSegmentCount do
 			local segment = i == 0 and self.HeadParts.head or self.Segments[i]
