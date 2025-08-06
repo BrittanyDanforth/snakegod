@@ -1927,13 +1927,17 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			countdownLabel.Font = Enum.Font.SourceSansBold
 			countdownLabel.Parent = billboardGui
 			
-			-- Add shield icon
+			-- Add shield text
 			local shieldLabel = Instance.new("TextLabel")
-			shieldLabel.Size = UDim2.new(1, 0, 0.3, 0)
-			shieldLabel.Position = UDim2.new(0, 0, -0.3, 0)
+			shieldLabel.Size = UDim2.new(1, 0, 0.4, 0)
+			shieldLabel.Position = UDim2.new(0, 0, -0.4, 0)
 			shieldLabel.BackgroundTransparency = 1
-			shieldLabel.Text = "🛡️"
+			shieldLabel.Text = "PROTECTED"
 			shieldLabel.TextScaled = true
+			shieldLabel.TextColor3 = Color3.new(0.5, 0.8, 1) -- Light blue
+			shieldLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+			shieldLabel.TextStrokeTransparency = 0
+			shieldLabel.Font = Enum.Font.SourceSansBold
 			shieldLabel.Parent = billboardGui
 			
 			-- Countdown timer
