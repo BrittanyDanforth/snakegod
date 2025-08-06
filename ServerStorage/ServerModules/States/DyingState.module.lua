@@ -40,6 +40,9 @@ function DyingState:OnEnter(collisionData)
     -- SAVE SNAKE BODY CONFIGURATION BEFORE FADING
     self:_saveSnakeBodyConfiguration()
     
+    -- DISABLE MAGNET EFFECT ON DEATH
+    self:_disableMagnetEffect()
+    
     -- Store character reference for later
     local character = self.controller.player.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -435,21 +438,23 @@ function DyingState:_createDeathOrb(position, value)
         orbsFolder.Parent = workspace
     end
     
-    -- Create death orb
+    -- Create death orb matching the game's orb style
     local orb = Instance.new("Part")
-    orb.Name = "DeathOrb"
+    orb.Name = "Orb" -- Use "Orb" name so AI snakes recognize it
     orb.Shape = Enum.PartType.Ball
     orb.Material = Enum.Material.Neon
-    orb.Size = Vector3.new(2.5, 2.5, 2.5) -- Slightly larger
+    orb.Size = Vector3.new(2.5, 2.5, 2.5)
     orb.TopSurface = Enum.SurfaceType.Smooth
     orb.BottomSurface = Enum.SurfaceType.Smooth
     orb.CanCollide = false
-    orb.Anchored = true -- Anchor for smooth movement
+    orb.Anchored = true
     orb.Position = position
     orb.Color = Color3.fromRGB(255, 200, 0) -- Start golden
+    
+    -- Set attributes for the orb system
     orb:SetAttribute("OrbValue", value)
     orb:SetAttribute("IsDeathOrb", true)
-    orb:SetAttribute("OrbType", "DeathOrb")
+    orb:SetAttribute("OrbType", "normal") -- Use "normal" so AI can eat them
     
     -- Add glow
     local glow = Instance.new("PointLight")
@@ -457,14 +462,6 @@ function DyingState:_createDeathOrb(position, value)
     glow.Range = 12
     glow.Color = orb.Color
     glow.Parent = orb
-    
-    -- Add selection box for extra glow effect
-    local selectionBox = Instance.new("SelectionBox")
-    selectionBox.Adornee = orb
-    selectionBox.Color3 = orb.Color
-    selectionBox.LineThickness = 0.1
-    selectionBox.Transparency = 0.5
-    selectionBox.Parent = orb
     
     -- Parent to Orbs folder
     orb.Parent = orbsFolder
@@ -477,7 +474,6 @@ function DyingState:_createDeathOrb(position, value)
             local color = Color3.fromHSV(hue, 1, 1)
             orb.Color = color
             glow.Color = color
-            selectionBox.Color3 = color
             task.wait(0.05)
         end
     end)
@@ -751,6 +747,70 @@ function DyingState:_fadeOutSnakeAndSpawnOrbs()
         task.wait(0.1) -- Very short delay
         self:_spawnDeathOrbs(segmentPositions)
     end)
+end
+
+function DyingState:_disableMagnetEffect()
+    local player = self.controller.player
+    local character = player.Character
+    if not character then return end
+    
+    -- Clear magnet attribute
+    player:SetAttribute("MagnetRange", 0)
+    player:SetAttribute("HasMagnet", false)
+    
+    -- Find and disable any magnet effects in the character
+    for _, desc in ipairs(character:GetDescendants()) do
+        -- Look for magnet-related particles or effects
+        if desc:IsA("ParticleEmitter") then
+            local name = desc.Name:lower()
+            if name:find("magnet") or name:find("attract") or name:find("pull") then
+                desc.Enabled = false
+                desc:Destroy()
+            elseif desc.Color and tostring(desc.Color):find("128, 0, 128") then -- Purple color
+                desc.Enabled = false
+                desc:Destroy()
+            end
+        elseif desc:IsA("Beam") and desc.Name:lower():find("magnet") then
+            desc.Enabled = false
+            desc:Destroy()
+        end
+    end
+    
+    -- Also check the snake model
+    local snakeSystem = _G.PlayerSnakes and _G.PlayerSnakes[player]
+    if snakeSystem and snakeSystem.model then
+        for _, desc in ipairs(snakeSystem.model:GetDescendants()) do
+            if desc:IsA("ParticleEmitter") then
+                local name = desc.Name:lower()
+                if name:find("magnet") or name:find("attract") or name:find("pull") then
+                    desc.Enabled = false
+                    desc:Destroy()
+                end
+            elseif desc:IsA("Attachment") then
+                -- Check attachments for magnet effects
+                for _, child in ipairs(desc:GetChildren()) do
+                    if child:IsA("ParticleEmitter") and (child.Name:lower():find("magnet") or child.Color) then
+                        child.Enabled = false
+                        child:Destroy()
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Send message to client to disable magnet visuals
+    local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+    if remotes then
+        local disableMagnetRemote = remotes:FindFirstChild("DisableMagnetEffect")
+        if not disableMagnetRemote then
+            disableMagnetRemote = Instance.new("RemoteEvent")
+            disableMagnetRemote.Name = "DisableMagnetEffect"
+            disableMagnetRemote.Parent = remotes
+        end
+        disableMagnetRemote:FireClient(player)
+    end
+    
+    warn("[DyingState] Disabled magnet effects for", player.Name)
 end
 
 return DyingState
