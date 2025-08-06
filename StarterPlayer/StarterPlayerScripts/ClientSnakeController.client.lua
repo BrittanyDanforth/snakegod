@@ -16,6 +16,14 @@ end
 local player = Players.LocalPlayer
 local snakeVisuals = nil -- Variable to hold our snake instance
 
+-- Create/get remote for sending input to server
+local remoteEvents = ReplicatedStorage:WaitForChild("RemoteEvents")
+local mouseDirectionRemote = remoteEvents:FindFirstChild("UpdateMouseDirection")
+if not mouseDirectionRemote then
+    -- Wait for server to create it
+    mouseDirectionRemote = remoteEvents:WaitForChild("UpdateMouseDirection", 5)
+end
+
 -- This function creates the snake. We will call it whenever the player spawns.
 local function setupSnake(character)
     print("[Client] Character detected:", character.Name, ". Setting up snake visuals.")
@@ -89,3 +97,44 @@ setupSnake(character)
 
 -- Also run the setup function every time the player RESPAWNS
 player.CharacterAdded:Connect(setupSnake)
+
+-- Handle mouse input
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+local RunService = game:GetService("RunService")
+
+local function getMouseWorldPosition()
+    local mouse = player:GetMouse()
+    local ray = Camera:ScreenPointToRay(mouse.X, mouse.Y)
+    
+    -- Cast ray to Y=5 plane (ground level)
+    local t = (5 - ray.Origin.Y) / ray.Direction.Y
+    local hitPos = ray.Origin + ray.Direction * t
+    
+    return hitPos
+end
+
+-- Send mouse direction to server
+local lastSentTime = 0
+RunService.Heartbeat:Connect(function()
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        return
+    end
+    
+    local currentTime = tick()
+    if currentTime - lastSentTime > 0.033 then -- 30Hz update rate
+        lastSentTime = currentTime
+        
+        local mousePos = getMouseWorldPosition()
+        local rootPos = player.Character.HumanoidRootPart.Position
+        local direction = (mousePos - rootPos).Unit
+        
+        -- Store locally for client prediction
+        player.Character:SetAttribute("MouseDirection", direction)
+        
+        -- Send to server if remote exists
+        if mouseDirectionRemote then
+            mouseDirectionRemote:FireServer(direction)
+        end
+    end
+end)

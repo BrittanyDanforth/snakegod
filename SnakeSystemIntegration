@@ -12,8 +12,8 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 
--- Server should not handle visual systems - that's for the client
--- The server only manages game state, collision detection, and rules
+-- Load the server-side snake system (game logic only, no visuals)
+local ServerSnakeSystem = require(ReplicatedStorage:WaitForChild("ServerSnakeSystem"))
 
 -- Wait a moment for folder creation
 wait(0.1)
@@ -39,6 +39,9 @@ spawnSnake.Name = "SpawnSnake"
 
 local respawnSnake = remoteEvents:FindFirstChild("RespawnSnake") or Instance.new("RemoteEvent", remoteEvents)
 respawnSnake.Name = "RespawnSnake"
+
+local updateMouseDirection = remoteEvents:FindFirstChild("UpdateMouseDirection") or Instance.new("RemoteEvent", remoteEvents)
+updateMouseDirection.Name = "UpdateMouseDirection"
 
 -- Default configuration
 local DEFAULT_CONFIG = {
@@ -168,25 +171,30 @@ local function onCharacterAdded(character)
 
 	print("Creating snake with config - InitialLength:", config.InitialLength, "MaxSegments:", config.MaxSegments)
 
-	-- Server only manages game state - visuals are handled by client
-	print("🐍 Setting up server-side snake data for", player.Name)
+	-- Create server-side snake for game logic
+	print("🐍 Creating server-side snake for", player.Name)
 	
-	-- Store snake configuration on the character for the client to use
+	-- Store config for client to use
 	character:SetAttribute("SnakeConfig", HttpService:JSONEncode(config))
 	character:SetAttribute("SnakeLength", config.InitialLength)
 	
+	-- Create the server snake system
+	local snake = ServerSnakeSystem.new(character, config)
+	
 	if isReviving and savedSnakeState then
 		print("🔄 Restoring snake state for revival")
-		character:SetAttribute("SavedSnakeState", HttpService:JSONEncode(savedSnakeState))
+		-- Restore positions if we have saved state
+		if savedSnakeState.segments then
+			for i, segData in pairs(savedSnakeState.segments) do
+				if snake.segments[i] then
+					snake.segments[i].position = segData.position
+				end
+			end
+		end
+		if savedSnakeState.length then
+			snake:updateLength(savedSnakeState.length)
+		end
 	end
-	
-	-- Create a server-side snake object for game logic only
-	local snake = {
-		player = player,
-		character = character,
-		length = config.InitialLength,
-		isAlive = true
-	}
 
 	if not snake then
 		warn("❌ Failed to create snake for", player.Name)
@@ -360,6 +368,23 @@ Players.PlayerRemoving:Connect(function(player)
 	if activeSnakes[player] then
 		activeSnakes[player]:destroy()
 		activeSnakes[player] = nil
+	end
+end)
+
+-- Handle mouse direction updates
+updateMouseDirection.OnServerEvent:Connect(function(player, direction)
+	if player.Character and typeof(direction) == "Vector3" then
+		-- Validate the direction
+		local validDirection = Vector3.new(
+			math.clamp(direction.X, -1, 1),
+			0,
+			math.clamp(direction.Z, -1, 1)
+		)
+		
+		-- Make sure it's not zero
+		if validDirection.Magnitude > 0 then
+			player.Character:SetAttribute("MouseDirection", validDirection.Unit)
+		end
 	end
 end)
 
