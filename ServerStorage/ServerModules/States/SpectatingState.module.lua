@@ -14,24 +14,53 @@ function SpectatingState.new(controller)
     self.controller = controller
     self.name = "Spectating"
     self.spectateIndex = 1
+    self.deathScreenSent = false
     return self
 end
 
 function SpectatingState:OnEnter()
-    -- Set spectating attributes
-    self.controller.player:SetAttribute("IsSpectating", true)
-    self.controller.player:SetAttribute("IsDead", true)
+    warn("[SpectatingState] Player", self.controller.player.Name, "entered spectating state")
     
-    -- Ensure snake is cleaned up
-    if self.controller.snakeObject then
-        if self.controller.snakeObject.destroy then
-            self.controller.snakeObject:destroy()
-        end
-        self.controller.snakeObject = nil
+    -- Check if player is somehow in revive process (shouldn't happen but safety check)
+    if self.controller.player:GetAttribute("IsReviving") or 
+       self.controller.player:GetAttribute("RevivingNow") or
+       self.controller.player:GetAttribute("JustRevived") then
+        warn("[SpectatingState] WARNING: Player has revive attributes in spectating state, clearing them")
+        self.controller.player:SetAttribute("IsReviving", false)
+        self.controller.player:SetAttribute("RevivingNow", false)
+        self.controller.player:SetAttribute("JustRevived", false)
+        self.controller.player:SetAttribute("RevivePromptActive", false)
+        self.controller.player:SetAttribute("AwaitingReviveResponse", false)
+        
+        -- If player is in revive process, don't show death screen
+        warn("[SpectatingState] Not showing death screen - player was in revive process")
+        return
     end
     
-    -- Switch to spectator camera
-    self:_setupSpectatorCamera()
+    -- Also check if player character is somehow alive
+    if self.controller.player.Character then
+        local humanoid = self.controller.player.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.Health > 0 then
+            warn("[SpectatingState] WARNING: Player is alive in spectating state! Not showing death screen")
+            -- Force transition back to Alive state
+            task.wait(0.1)
+            self.controller.fsm:changeState("Alive")
+            return
+        end
+    end
+    
+    -- This state is entered when player is truly dead (no revives or declined)
+    -- Wait a moment to ensure all states are properly set
+    task.wait(0.1)
+    
+    -- Now we tell the client to show the death screen
+    self:_sendDeathScreenCommand()
+    
+    -- Disable controls
+    self.controller.collisionState.canCollide = false
+    
+    -- Make player spectate (implementation depends on your spectating system)
+    self:_enterSpectatorMode()
     
     -- Notify state change
     self.controller:notifyStateChange("Spectating")
@@ -45,6 +74,9 @@ end
 function SpectatingState:OnExit()
     -- Clear spectating attributes
     self.controller.player:SetAttribute("IsSpectating", false)
+    
+    -- Reset flags
+    self.deathScreenSent = false
     
     -- Reset camera to player
     self:_resetCamera()
@@ -129,6 +161,44 @@ function SpectatingState:cycleSpectateTarget(direction)
             mode = "spectate",
             target = alivePlayers[self.spectateIndex]
         })
+    end
+end
+
+-- Send death screen command to client
+function SpectatingState:_sendDeathScreenCommand()
+    -- Only send death screen once per spectating session
+    if self.deathScreenSent then
+        warn("[SpectatingState] Death screen already sent, skipping")
+        return
+    end
+    
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local showDeathScreenRemote = remotes:FindFirstChild("ShowDeathScreen")
+    
+    if showDeathScreenRemote then
+        -- Gather stats for the death screen
+        local stats = {}
+        local leaderstats = self.controller.player:FindFirstChild("leaderstats")
+        
+        if leaderstats then
+            local length = leaderstats:FindFirstChild("Length")
+            if length then
+                stats.score = length.Value
+            end
+        end
+        
+        -- Get kills from attribute
+        stats.kills = self.controller.player:GetAttribute("LastKills") or 0
+        
+        -- Send the command with stats
+        showDeathScreenRemote:FireClient(self.controller.player, {
+            stats = stats,
+            timestamp = os.time()
+        })
+        self.deathScreenSent = true
+        warn("[SpectatingState] Death screen command sent")
+    else
+        warn("[SpectatingState] ShowDeathScreen remote not found")
     end
 end
 

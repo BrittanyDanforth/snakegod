@@ -19,32 +19,43 @@ function DyingState.new(controller)
 end
 
 function DyingState:OnEnter(collisionData)
-    -- Disable collisions immediately
-    self.controller.collisionState.canCollide = false
-    
-    -- Store death info
-    local character = self.controller.player.Character
-    if character and character:FindFirstChild("HumanoidRootPart") then
-        self.deathPosition = character.HumanoidRootPart.Position
-    end
-    
-    -- Store current length from leaderstats
-    local leaderstats = self.controller.player:FindFirstChild("leaderstats")
-    if leaderstats and leaderstats:FindFirstChild("Length") then
-        self.currentLength = leaderstats.Length.Value
-    else
-        self.currentLength = 55 -- default
-    end
-    
-    -- Log the death
     warn("[DyingState] Player", self.controller.player.Name, "entered dying state")
+    
+    -- Prevent duplicate death processing
+    if self.deathProcessing then
+        warn("[DyingState] Already processing death, ignoring duplicate entry")
+        return Promise.resolve("Spectating")
+    end
+    self.deathProcessing = true
+    
+    local character = self.controller.player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    
+    -- Store death info for respawn
+    self.deathPosition = humanoid and humanoid.RootPart and humanoid.RootPart.Position
+    
+    -- Store current length before death
+    local leaderstats = self.controller.player:FindFirstChild("leaderstats")
+    self.currentLength = 0
+    if leaderstats and leaderstats:FindFirstChild("Length") then
+        self.currentLength = leaderstats.Length.Value or 0
+        self.controller.player:SetAttribute("LastDeathLength", self.currentLength)
+    end
+    
     warn("[DyingState] Death position:", self.deathPosition, "Current length:", self.currentLength)
     
     -- Store character reference for later
     local character = self.controller.player.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     
-    -- IMPORTANT: Do NOT kill the humanoid yet - wait for revive decision
+    -- Kill the humanoid immediately to ensure proper death state
+    if humanoid and humanoid.Health > 0 then
+        warn("[DyingState] Killing player humanoid")
+        humanoid.Health = 0
+    end
+    
+    -- Disable collisions immediately
+    self.controller.collisionState.canCollide = false
     
     -- Return promise for next state
     return Promise.new(function(resolve, reject, onCancel)
@@ -91,6 +102,16 @@ function DyingState:OnEnter(collisionData)
         if self.controller:hasReviveToken() then
             warn("[DyingState] Player has revive tokens available")
             
+            -- Check if prompt is already active (safety check)
+            if self.controller.player:GetAttribute("RevivePromptActive") or 
+               self.controller.player:GetAttribute("AwaitingReviveResponse") then
+                warn("[DyingState] Revive prompt already active, skipping duplicate")
+                -- Kill the humanoid and go to spectating
+                self:_killPlayer()
+                resolve("Spectating")
+                return
+            end
+            
             -- Get remotes
             local remotes = ReplicatedStorage:WaitForChild("Remotes")
             local promptRevive = remotes:FindFirstChild("PromptRevive")
@@ -104,9 +125,19 @@ function DyingState:OnEnter(collisionData)
             end
             
             if promptRevive then
-                -- Set attributes for revive system
+                -- Check if we haven't already sent a prompt
+                if self.controller.player:GetAttribute("RevivePromptActive") then
+                    warn("[DyingState] Revive prompt already active, not sending duplicate")
+                    resolve("Spectating")
+                    return
+                end
+                
+                -- Set attributes for revive system BEFORE firing to client
                 self.controller.player:SetAttribute("RevivePromptActive", true)
                 self.controller.player:SetAttribute("AwaitingReviveResponse", true)
+                
+                -- Small delay to ensure attributes are set
+                task.wait(0.1)
                 
                 -- Fire revive prompt to client
                 promptRevive:FireClient(self.controller.player, {
@@ -152,20 +183,13 @@ function DyingState:OnEnter(collisionData)
                             warn("[DyingState] Player declined revive")
                             self.controller.player:SetAttribute("AwaitingReviveResponse", false)
                             
-                            -- Player declined - kill humanoid and show death UI
+                            -- Player declined - kill humanoid (SpectatingState will show death UI)
                             if humanoid and humanoid.Health > 0 then
                                 warn("[DyingState] Killing player humanoid (declined revive)")
                                 humanoid.Health = 0
                             end
                             
-                            -- Show death UI after killing
-                            task.wait(0.5)
-                            if deathUIRemote then
-                                deathUIRemote:FireClient(self.controller.player, {
-                                    action = "show"
-                                })
-                            end
-                            
+                            -- Don't show death UI here - SpectatingState will handle it
                             resolve("Spectating")
                         end
                     end
@@ -185,14 +209,7 @@ function DyingState:OnEnter(collisionData)
                             humanoid.Health = 0
                         end
                         
-                        -- Show death UI on timeout
-                        task.wait(0.5)
-                        if deathUIRemote then
-                            deathUIRemote:FireClient(self.controller.player, {
-                                action = "show"
-                            })
-                        end
-                        
+                        -- Don't show death UI here - SpectatingState will handle it
                         resolve("Spectating")
                     end
                 end)
@@ -253,8 +270,26 @@ function DyingState:OnExecute(dt)
 end
 
 function DyingState:OnExit()
+    -- Clear death processing flag
+    self.deathProcessing = false
+    
+    -- Clear ALL death-related attributes to prevent UI flashing
+    self.controller.player:SetAttribute("RevivePromptActive", false)
+    self.controller.player:SetAttribute("AwaitingReviveResponse", false)
+    self.controller.player:SetAttribute("IsReviving", false)
+    self.controller.player:SetAttribute("RevivingNow", false)
+    
     -- Ensure UI is hidden
     self.controller:hideReviveUI()
+    
+    -- Also hide death UI in case it's showing
+    local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local deathUIRemote = remotes:FindFirstChild("ControlDeathUI")
+    if deathUIRemote then
+        deathUIRemote:FireClient(self.controller.player, {
+            action = "hide"
+        })
+    end
     
     -- Notify state change
     self.controller:notifyStateChange("DeathComplete")

@@ -13,6 +13,10 @@ local ServerModules = ServerStorage:WaitForChild("ServerModules")
 local PlayerController = require(ServerModules.PlayerController)
 local CollisionModule = require(ServerModules.CollisionModule)
 
+-- Verify PlayerController loaded correctly
+warn("[MainServer] PlayerController module loaded:", typeof(PlayerController))
+warn("[MainServer] PlayerController.new exists:", typeof(PlayerController.new))
+
 -- Shared configuration  
 local Config = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Config"))
 
@@ -82,6 +86,18 @@ local function onPlayerAdded(player)
     
     -- Create player controller
     local controller = PlayerController.new(player, Config)
+    
+    -- Debug the controller object
+    warn("[MainServer] Created controller type:", typeof(controller))
+    if typeof(controller) == "table" then
+        local mt = getmetatable(controller)
+        if mt and mt.__index then
+            warn("[MainServer] Controller has metatable with __index")
+            local hasMethod = mt.__index.ensureFSMStates ~= nil
+            warn("[MainServer] ensureFSMStates exists:", hasMethod)
+        end
+    end
+    
     playerControllers[player] = controller
     
         -- Listen for snake creation from SnakeSystemIntegration
@@ -100,16 +116,49 @@ local function onPlayerAdded(player)
             local head = snakeModel:FindFirstChild("Segment0_Head")
             if head then
                 warn("[MainServer] Found snake for", player.Name, "with head:", head.Name)
+                
+                -- Debug controller type
+                warn("[MainServer] Controller type:", typeof(currentController))
+                if typeof(currentController) == "table" then
+                    warn("[MainServer] Controller methods:", getmetatable(currentController))
+                    -- Check if ensureFSMStates exists
+                    if currentController.ensureFSMStates then
+                        warn("[MainServer] ensureFSMStates method exists")
+                    else
+                        warn("[MainServer] ensureFSMStates method NOT found!")
+                        -- List all methods
+                        for key, value in pairs(currentController) do
+                            if typeof(value) == "function" then
+                                warn("[MainServer] Method found:", key)
+                            end
+                        end
+                    end
+                end
+                
                 currentController.snakeObject = snakeModel
                 currentController.snakeModel = snakeModel  -- Set both for compatibility
                 existingSnakes[player] = snakeModel
 
-                -- Ensure FSM states are initialized
-                currentController:ensureFSMStates()
+                -- Skip the problematic ensureFSMStates call
+                -- The FSM should already be initialized from PlayerController.new()
+                warn("[MainServer] Skipping FSM state check - assuming it's ready from constructor")
                 
                 -- Safely set initial state to Alive when snake is created
                 local success, err = pcall(function()
-                    currentController.fsm:changeState("Alive")
+                    -- Make sure FSM is initialized even if ensureFSMStates failed
+                    if not currentController.fsm or not currentController.fsm.currentState then
+                        warn("[MainServer] FSM not properly initialized, attempting manual setup")
+                        -- Try to manually initialize if possible
+                        if currentController._setupStates then
+                            currentController:_setupStates()
+                        end
+                    end
+                    
+                    if currentController.fsm and currentController.fsm.changeState then
+                        currentController.fsm:changeState("Alive")
+                    else
+                        warn("[MainServer] FSM still not ready, collision detection may not work")
+                    end
                 end)
                 
                 if success then
@@ -282,6 +331,13 @@ local function onPlayerAdded(player)
     player.CharacterRemoving:Connect(function()
         warn("[MainServer] Character removing for", player.Name)
         
+        -- Clean up revive-related attributes to prevent UI issues
+        player:SetAttribute("RevivePromptActive", nil)
+        player:SetAttribute("AwaitingReviveResponse", nil)
+        player:SetAttribute("IsReviving", nil)
+        player:SetAttribute("RevivingNow", nil)
+        player:SetAttribute("JustRevived", nil)
+        
         -- Clear snake references
         if controller.snakeObject then
             controller.snakeObject = nil
@@ -314,6 +370,15 @@ end
 -- Remote event handlers
 local function setupRemoteHandlers()
     local remotes = ReplicatedStorage:WaitForChild("Remotes")
+    
+    -- Create ShowDeathScreen remote for death menu
+    local showDeathScreenRemote = remotes:FindFirstChild("ShowDeathScreen")
+    if not showDeathScreenRemote then
+        showDeathScreenRemote = Instance.new("RemoteEvent")
+        showDeathScreenRemote.Name = "ShowDeathScreen"
+        showDeathScreenRemote.Parent = remotes
+        warn("[MainServer] Created ShowDeathScreen remote event")
+    end
     
     -- Listen for respawn events from existing system
     local respawnRemote = remotes:FindFirstChild("RespawnSnake")
