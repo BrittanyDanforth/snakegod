@@ -1907,73 +1907,137 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			return
 		end
 		
-		-- Add custom spawn protection visual effect
+		-- Add professional full-body spawn protection with countdown timer
 		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
-			-- 1. Create a non-collidable, transparent sphere for our effect
-			local shieldVFX = Instance.new("Part")
-			shieldVFX.Name = "AISpawnShield"
-			shieldVFX.Shape = Enum.PartType.Ball
-			shieldVFX.Material = Enum.Material.ForceField -- Use the material for the cool texture
-			shieldVFX.Size = Vector3.new(1, 1, 1) -- Start small
-			shieldVFX.Color = Color3.fromRGB(170, 220, 255) -- A nice light blue
-			shieldVFX.Transparency = 0.7
-			shieldVFX.Anchored = false -- Not anchored since we're welding
-			shieldVFX.CanCollide = false
-			shieldVFX.CanQuery = false
-			shieldVFX.CanTouch = false
-			shieldVFX.Massless = true
+			-- 1. CREATE A FULL-BODY, CUSTOM-TEXTURED FORCEFIELD
+			-- This will cover every segment of the snake for a true shield effect.
+			local protectionField = Instance.new("ForceField")
+			protectionField.Visible = true
 			
-			-- 2. IMPORTANT: Position it at the head before parenting
-			shieldVFX.CFrame = self.HeadParts.head.CFrame
-			shieldVFX.Parent = self.HeadParts.head
+			-- IMPORTANT: Parent it to the MODEL, not the head, to cover all parts.
+			protectionField.Parent = self.Model
+
+			-- 2. CREATE THE COUNTDOWN TIMER GUI
+			local billboardGui = Instance.new("BillboardGui")
+			billboardGui.Name = "InvincibleTimer"
+			billboardGui.Adornee = self.HeadParts.head -- Attach it to the snake's head
+			billboardGui.Size = UDim2.new(8, 0, 2.5, 0)   -- Size of the GUI in studs
+			billboardGui.StudsOffset = Vector3.new(0, 5, 0) -- Hover above the head
+			billboardGui.AlwaysOnTop = false -- Don't always show on top
+			billboardGui.LightInfluence = 0
+			billboardGui.Parent = self.HeadParts.head
 			
-			-- 3. Weld it to the head so it moves perfectly with the snake
-			local weld = Instance.new("WeldConstraint")
-			weld.Part0 = shieldVFX
-			weld.Part1 = self.HeadParts.head
-			weld.Parent = shieldVFX
+			-- Create background for better visibility
+			local bgFrame = Instance.new("Frame")
+			bgFrame.Size = UDim2.new(1, 0, 1, 0)
+			bgFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+			bgFrame.BackgroundTransparency = 0.3
+			bgFrame.BorderSizePixel = 0
+			bgFrame.Parent = billboardGui
 			
-			-- 4. Animate the shield appearing and disappearing
-			local TweenService = game:GetService("TweenService")
-			local shieldSize = self.HeadParts.head.Size.X * 2.5 -- Make it nicely bigger than the head
+			-- Add corner rounding
+			local uiCorner = Instance.new("UICorner")
+			uiCorner.CornerRadius = UDim.new(0.2, 0)
+			uiCorner.Parent = bgFrame
 			
-			-- Tween In: Animate the shield growing into view
-			local tweenIn = TweenService:Create(shieldVFX, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-				Size = Vector3.new(shieldSize, shieldSize, shieldSize),
-				Transparency = 0.5
-			})
-			tweenIn:Play()
+			local textLabel = Instance.new("TextLabel")
+			textLabel.Size = UDim2.new(1, 0, 1, 0)
+			textLabel.BackgroundTransparency = 1
+			textLabel.Font = Enum.Font.SourceSansBold
+			textLabel.TextColor3 = Color3.fromRGB(170, 255, 255) -- Light cyan color
+			textLabel.TextScaled = true
+			textLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+			textLabel.TextStrokeTransparency = 0
+			textLabel.Parent = bgFrame
 			
-			-- Add a pulsing glow effect
+			-- 3. RUN THE COUNTDOWN AND CLEANUP LOGIC
 			task.spawn(function()
-				local pulseConnection
-				pulseConnection = game:GetService("RunService").Heartbeat:Connect(function()
-					if shieldVFX and shieldVFX.Parent then
-						local pulse = math.sin(tick() * 3) * 0.1 + 0.5
-						shieldVFX.Transparency = pulse
+				local protectionDuration = 10 -- Total duration in seconds
+				local TweenService = game:GetService("TweenService")
+				
+				-- Initial flash effect
+				local flashTween = TweenService:Create(bgFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+					BackgroundTransparency = 0.7
+				})
+				flashTween:Play()
+				
+				-- The countdown loop (show for last 5 seconds)
+				task.wait(protectionDuration - 5) -- Wait until 5 seconds remaining
+				
+				for i = 5, 1, -1 do
+					if not textLabel.Parent then break end -- Stop if snake is destroyed
+					
+					-- Update text with icon
+					if i > 3 then
+						textLabel.Text = "🛡️ PROTECTED: " .. i
+						textLabel.TextColor3 = Color3.fromRGB(170, 255, 255)
+					elseif i > 1 then
+						textLabel.Text = "⚠️ EXPIRING: " .. i
+						textLabel.TextColor3 = Color3.fromRGB(255, 255, 170)
 					else
-						pulseConnection:Disconnect()
+						textLabel.Text = "⚠️ VULNERABLE: " .. i
+						textLabel.TextColor3 = Color3.fromRGB(255, 170, 170)
 					end
-				end)
-				
-				-- Wait for the spawn protection time to almost end
-				task.wait(9) -- Wait 9 seconds of the 10-second protection
-				
-				-- Stop pulsing
-				if pulseConnection then
-					pulseConnection:Disconnect()
+					
+					-- Pulse effect on each second
+					local pulseTween = TweenService:Create(textLabel, TweenInfo.new(0.2, Enum.EasingStyle.Bounce), {
+						TextTransparency = 0.3
+					})
+					pulseTween:Play()
+					pulseTween.Completed:Connect(function()
+						if textLabel.Parent then
+							textLabel.TextTransparency = 0
+						end
+					end)
+					
+					task.wait(1)
 				end
 				
-				-- Tween Out: Animate the shield shrinking and fading away
-				if shieldVFX and shieldVFX.Parent then
-					local tweenOut = TweenService:Create(shieldVFX, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-						Size = Vector3.new(0.1, 0.1, 0.1),
+				-- Fade out the GUI
+				if billboardGui.Parent then
+					local fadeOut = TweenService:Create(bgFrame, TweenInfo.new(0.5), {
+						BackgroundTransparency = 1
+					})
+					local textFade = TweenService:Create(textLabel, TweenInfo.new(0.5), {
+						TextTransparency = 1,
+						TextStrokeTransparency = 1
+					})
+					fadeOut:Play()
+					textFade:Play()
+				end
+				
+				-- Remove the ForceField with a flash effect
+				if protectionField and protectionField.Parent then
+					-- Create a flash effect when protection ends
+					local flash = Instance.new("Part")
+					flash.Name = "ProtectionEndFlash"
+					flash.Shape = Enum.PartType.Ball
+					flash.Material = Enum.Material.ForceField
+					flash.Size = Vector3.new(15, 15, 15)
+					flash.Color = Color3.fromRGB(170, 255, 255)
+					flash.Transparency = 0.7
+					flash.Anchored = true
+					flash.CanCollide = false
+					flash.CanQuery = false
+					flash.CFrame = self.HeadParts.head.CFrame
+					flash.Parent = workspace
+					
+					-- Animate the flash
+					local flashTween = TweenService:Create(flash, TweenInfo.new(0.5, Enum.EasingStyle.Quad), {
+						Size = Vector3.new(30, 30, 30),
 						Transparency = 1
 					})
-					tweenOut:Play()
+					flashTween:Play()
+					game:GetService("Debris"):AddItem(flash, 0.6)
 					
-					-- Clean up the part after the animation is done
-					game:GetService("Debris"):AddItem(shieldVFX, 1.1)
+					-- Destroy the forcefield
+					protectionField:Destroy()
+				end
+
+				-- Clean up the GUI after fade
+				task.wait(0.5)
+				if billboardGui.Parent then
+					billboardGui:Destroy()
 				end
 			end)
 		end
