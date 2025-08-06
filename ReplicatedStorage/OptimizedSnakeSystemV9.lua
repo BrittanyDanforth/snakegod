@@ -55,7 +55,7 @@ local PARTICLE_UPDATE_RATE = 5 -- Update particles every N frames
 local SEGMENT_UPDATE_RATE = 75
 local NETWORK_UPDATE_RATE = 25
 local MAX_SEGMENTS = 500
-local SEGMENT_SPACING = 0.45 -- Optimized for slight overlap with spline positioning
+local SEGMENT_SPACING = 0.35 -- Tighter spacing to prevent any gaps
 local HISTORY_SIZE = 2000
 local GROWTH_CHECK_INTERVAL = 10
 
@@ -644,10 +644,10 @@ function Snake:createUnifiedBody()
 		beam.Width0 = beamWidth
 		beam.Width1 = beamWidth
 		
-		-- Use subtle curves that follow the spline path for seamless connections
+		-- Use curves to ensure beams cover gaps
 		if i > 0 and i < segmentCount - 1 then
-			-- Calculate curve based on the angle between segments
-			local curveAmount = 1.5 -- Subtle curve for natural flow
+			-- Stronger curves for better coverage
+			local curveAmount = 2.5
 			beam.CurveSize0 = -curveAmount
 			beam.CurveSize1 = curveAmount
 		else
@@ -668,7 +668,7 @@ function Snake:createUnifiedBody()
 		beam.Transparency = NumberSequence.new{
 			NumberSequenceKeypoint.new(0, 0),
 			NumberSequenceKeypoint.new(0.5, 0),
-			NumberSequenceKeypoint.new(1, 0.1) -- Slight fade at edges
+			NumberSequenceKeypoint.new(1, 0) -- No fade for complete coverage
 		}
 
 		-- Color matching with smooth transitions
@@ -1063,6 +1063,10 @@ function Snake:updateUnifiedBody()
 				end
 				
 				if targetPos then
+					-- Force segment visibility
+					segment.Transparency = 0
+					segment.Parent = self.model
+					
 					local currentPos = segment.Position
 					-- Use higher smoothing during growth for smoother transitions
 					local smoothingFactor = self.isGrowing and VISUAL_SMOOTHING_FACTOR * 1.2 or VISUAL_SMOOTHING_FACTOR
@@ -1239,15 +1243,16 @@ function Snake:addSegments(count)
 		segment.Shape = Enum.PartType.Ball
 		segment.Material = Enum.Material.Neon
 
-		-- Start small for growth animation
+		-- Start at full size to prevent visual gaps
 		local targetSize = self:getSegmentSize(i, BASE_SIZE * self.growthFactor)
-		segment.Size = Vector3.new(targetSize * 0.1, targetSize * 0.1, targetSize * 0.1)
+		segment.Size = Vector3.new(targetSize, targetSize, targetSize)
 
-		segment.Transparency = 0.8 -- Start more transparent
+		segment.Transparency = 0 -- Fully visible immediately
 		segment.CanCollide = false
 		segment.CanTouch = i <= 50
 		segment.CanQuery = false
 		segment.Anchored = true
+		segment.CastShadow = false -- Performance
 
 		-- ENHANCED: Apply render settings to new segments
 		if i <= FORCE_RENDER_SEGMENTS then
