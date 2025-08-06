@@ -158,6 +158,17 @@ function Snake.new(character, config)
 	self.humanoid = character:WaitForChild("Humanoid")
 	self.player = Players:GetPlayerFromCharacter(character)
 	self.config = config or {}
+	
+	-- Ensure default colors if not provided
+	if not self.config.BodyColors or #self.config.BodyColors == 0 then
+		self.config.BodyColors = {
+			Color3.fromRGB(76, 217, 100),  -- Default green
+			Color3.fromRGB(51, 163, 75)    -- Darker green
+		}
+	end
+	if not self.config.HeadColor then
+		self.config.HeadColor = Color3.fromRGB(76, 217, 100)
+	end
 
 	if not self.player then
 		warn("⚠️ Failed to get player from character")
@@ -401,6 +412,12 @@ function Snake:getSegmentColor(index)
 		local r, g, b = HSVToRGB(hue, 1, 1)
 		return Color3.new(r, g, b)
 	else
+		-- Ensure we have valid colors
+		if not self.config.BodyColors or #self.config.BodyColors == 0 then
+			-- Default green color if no colors are provided
+			return Color3.fromRGB(76, 217, 100)
+		end
+		
 		-- Original color logic
 		if index == 0 then
 			return self.config.HeadColor or self.config.BodyColors[1]
@@ -1030,12 +1047,14 @@ function Snake:updateUnifiedBody()
 						beam.Color = ColorSequence.new(self:getSegmentColor(i))
 					end
 
-					-- Dynamic color during boost
-					if self.isBoosting and i > HEAD_BLEND_SEGMENTS and not self.rainbowMode then
+									-- Dynamic color during boost
+				if self.isBoosting and i > HEAD_BLEND_SEGMENTS and not self.rainbowMode then
+					if self.config.BodyColors and #self.config.BodyColors > 0 then
 						local colorShift = math.floor(tick() * 3) % #self.config.BodyColors
 						local colorIndex = ((i - 1 + colorShift) % #self.config.BodyColors) + 1
 						beam.Color = ColorSequence.new(self.config.BodyColors[colorIndex])
 					end
+				end
 				else
 					beam.Enabled = false
 				end
