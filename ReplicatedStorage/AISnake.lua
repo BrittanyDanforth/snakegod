@@ -248,7 +248,7 @@ local function returnSegment(segment)
 	segment.CanQuery = false
 	segment.CanTouch = false
 	segment.Anchored = true
-	segment.Color = Color3.new()
+	segment.Color = Color3.fromRGB(255, 255, 51) -- Default yellow color
 	segment.Material = Enum.Material.Neon
 	segment.Size = Vector3.new(3.5, 3.5, 4)
 
@@ -358,7 +358,7 @@ local function createVisualHead(config, parentModel)
 	headPart.Shape = Enum.PartType.Ball -- Using Ball like OptimizedSnakeSystem
 	headPart.Size = Vector3.new(BASE_SIZE * HEAD_SIZE_MULTIPLIER, BASE_SIZE * HEAD_SIZE_MULTIPLIER, BASE_SIZE * HEAD_SIZE_MULTIPLIER)
 	headPart.Material = Enum.Material.Neon -- Consistent with OptimizedSnakeSystem
-	headPart.Color = config.HeadColor
+	headPart.Color = config.HeadColor or Color3.fromRGB(255, 255, 51) -- Default to yellow if HeadColor is nil
 	headPart.CanCollide = false
 	headPart.CanTouch = true -- CRITICAL: Enable touch detection for orb collection
 	headPart.CanQuery = true -- Enable for raycasts
@@ -371,7 +371,7 @@ local function createVisualHead(config, parentModel)
 	-- Professional head glow matching OptimizedSnakeSystem
 	local headLight = Instance.new("PointLight")
 	headLight.Name = "Glow"
-	headLight.Color = config.HeadColor
+	headLight.Color = config.HeadColor or Color3.fromRGB(255, 255, 51)
 	headLight.Brightness = GLOW_INTENSITY
 	headLight.Range = GLOW_RANGE_BASE * 1.1 -- Slightly larger than body segments
 	headLight.Shadows = false -- Performance optimization
@@ -381,7 +381,7 @@ local function createVisualHead(config, parentModel)
 	local boostParticles = Instance.new("ParticleEmitter")
 	boostParticles.Name = "BoostParticles"
 	boostParticles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-	boostParticles.Color = ColorSequence.new(config.HeadColor)
+	boostParticles.Color = ColorSequence.new(config.HeadColor or Color3.fromRGB(255, 255, 51))
 	boostParticles.Lifetime = NumberRange.new(0.5, 1)
 	boostParticles.Rate = 0 -- Start disabled
 	boostParticles.Speed = NumberRange.new(5, 10)
@@ -443,6 +443,12 @@ local function createVisualHead(config, parentModel)
 end
 
 local function createSegment(index, position, color, config, parentModel, currentLength)
+	-- Validate color parameter
+	if not color then
+		warn("createSegment - color is nil for index", index, "- using default yellow")
+		color = Color3.fromRGB(255, 255, 51)
+	end
+	
 	local segment = getSegment(config)
 	segment.Name = "AISegment" .. index
 	segment.Shape = Enum.PartType.Ball -- Match OptimizedSnakeSystem
@@ -1600,9 +1606,19 @@ function AISnake.new(startPosition, preservedPersonalityType)
 
 	-- Get random AI color FIRST (50% yellow, 50% others)
 	local colorData = getRandomAIColor()
+	
+	-- Validate color data
+	if not colorData or not colorData.HeadColor or not colorData.BodyColors then
+		warn("AISnake.new - Invalid color data, using default yellow")
+		colorData = AISnakeColors[1] -- Default to yellow
+	end
 
 	-- Deep copy config and immediately apply colors
 	self.Config = deepCopy(SnakeConfig)
+	if not self.Config then
+		error("AISnake.new - Failed to deep copy SnakeConfig")
+	end
+	
 	self.Config.HeadColor = colorData.HeadColor
 	self.Config.BodyColors = colorData.BodyColors
 	self.Config.HeadMaterial = colorData.HeadMaterial
@@ -3422,20 +3438,37 @@ end)
 
 -- Get segment color matching OptimizedSnakeSystem
 function AISnake:getSegmentColor(index)
-	if not self.Config or not self.Config.BodyColors or #self.Config.BodyColors == 0 then
+	-- Always ensure we have a valid color, even if Config is not properly set
+	if not self.Config then
+		warn("AISnake:getSegmentColor - Config is nil, using default yellow")
+		return Color3.fromRGB(255, 255, 51) -- Default yellow color
+	end
+	
+	if not self.Config.BodyColors or type(self.Config.BodyColors) ~= "table" or #self.Config.BodyColors == 0 then
+		warn("AISnake:getSegmentColor - BodyColors is invalid, using default yellow")
 		return Color3.fromRGB(255, 255, 51) -- Default yellow color
 	end
 
 	if index == 0 then
-		return self.Config.HeadColor or self.Config.BodyColors[1]
+		local headColor = self.Config.HeadColor
+		if not headColor then
+			warn("AISnake:getSegmentColor - HeadColor is nil, using first body color")
+			headColor = self.Config.BodyColors[1] or Color3.fromRGB(255, 255, 51)
+		end
+		return headColor
 	elseif index <= 8 then -- HEAD_BLEND_SEGMENTS = 8
 		local blendFactor = (index / 8) ^ 0.7
-		local headColor = self.Config.HeadColor or self.Config.BodyColors[1]
-		local bodyColor = self.Config.BodyColors[1]
+		local headColor = self.Config.HeadColor or self.Config.BodyColors[1] or Color3.fromRGB(255, 255, 51)
+		local bodyColor = self.Config.BodyColors[1] or Color3.fromRGB(255, 255, 51)
 		return headColor:Lerp(bodyColor, blendFactor)
 	else
 		local colorIndex = ((index - 1) % #self.Config.BodyColors) + 1
-		return self.Config.BodyColors[colorIndex]
+		local color = self.Config.BodyColors[colorIndex]
+		if not color then
+			warn("AISnake:getSegmentColor - Color at index", colorIndex, "is nil, using default yellow")
+			return Color3.fromRGB(255, 255, 51)
+		end
+		return color
 	end
 end
 
