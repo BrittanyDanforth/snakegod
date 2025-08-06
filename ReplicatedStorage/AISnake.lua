@@ -1574,6 +1574,213 @@ function AISnake:updateBrain()
 	self.SteerDirection = steer
 end
 
+-- === HELPER FUNCTIONS FOR SPAWN PROTECTION UI ===
+function AISnake:_createSpawnProtectionUI()
+	if not self.HeadParts or not self.HeadParts.head then
+		return
+	end
+	
+	-- Create BillboardGui
+	local billboardGui = Instance.new("BillboardGui")
+	billboardGui.Name = "SpawnProtectionUI"
+	billboardGui.Size = UDim2.new(4, 0, 1.5, 0)
+	billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+	billboardGui.AlwaysOnTop = true
+	billboardGui.Parent = self.HeadParts.head
+	
+	-- Create background frame
+	local bgFrame = Instance.new("Frame")
+	bgFrame.Size = UDim2.new(1, 0, 1, 0)
+	bgFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+	bgFrame.BackgroundTransparency = 0.3
+	bgFrame.BorderSizePixel = 0
+	bgFrame.Parent = billboardGui
+	
+	-- Add UICorner for rounded edges
+	local uiCorner = Instance.new("UICorner")
+	uiCorner.CornerRadius = UDim.new(0.2, 0)
+	uiCorner.Parent = bgFrame
+	
+	-- Create text label
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Size = UDim2.new(1, 0, 1, 0)
+	textLabel.BackgroundTransparency = 1
+	textLabel.Text = "INVINCIBLE"  -- Set initial text immediately
+	textLabel.TextColor3 = Color3.new(1, 1, 0)
+	textLabel.TextScaled = true
+	textLabel.Font = Enum.Font.SourceSansBold
+	textLabel.Parent = bgFrame
+	
+	-- Store reference
+	self._spawnProtectionUI = billboardGui
+	
+	-- Animate the countdown
+	task.spawn(function()
+		local startTime = tick()
+		local duration = 10 -- 10 seconds of protection
+		
+		while self and not self._destroyed and self._spawnProtectionUI do
+			local elapsed = tick() - startTime
+			local remaining = math.max(0, duration - elapsed)
+			
+			if remaining <= 0 then
+				-- Protection expired
+				if self._spawnProtectionUI then
+					self._spawnProtectionUI:Destroy()
+					self._spawnProtectionUI = nil
+				end
+				self._isSpawnProtected = false
+				break
+			end
+			
+			-- Update text
+			if remaining > 3 then
+				textLabel.Text = "INVINCIBLE"
+				textLabel.TextColor3 = Color3.new(1, 1, 0) -- Yellow
+			else
+				-- Last 3 seconds: show countdown
+				textLabel.Text = tostring(math.ceil(remaining))
+				-- Flash between yellow and red
+				textLabel.TextColor3 = remaining % 0.5 < 0.25 and Color3.new(1, 0, 0) or Color3.new(1, 1, 0)
+			end
+			
+			task.wait(0.1)
+		end
+	end)
+end
+
+-- === HELPER FUNCTIONS FOR PERFORMANCE ===
+function AISnake:_updateTurning(dt)
+	-- Extract turning logic from updateMovement
+	local turnSpeed = self.Personality.TurnSpeed * 
+		(self.Boosting and self.Personality.BoostTurnMultiplier or 1)
+	
+	-- Apply personality-based turning behavior
+	if self.Personality.Type == "Slitherer" then
+		-- Add slight sinusoidal movement
+		local time = tick()
+		local sineWave = mathSin(time * 2) * 0.1
+		self.TargetYaw = self.TargetYaw + sineWave * dt
+	end
+	
+	-- Smooth turning
+	local yawDiff = self.TargetYaw - self.CurrentYaw
+	-- Normalize angle difference
+	while yawDiff > mathPi do yawDiff = yawDiff - 2 * mathPi end
+	while yawDiff < -mathPi do yawDiff = yawDiff + 2 * mathPi end
+	
+	self.CurrentYaw = self.CurrentYaw + yawDiff * turnSpeed * dt
+	self.Direction = Vector3new(mathSin(self.CurrentYaw), 0, mathCos(self.CurrentYaw))
+end
+
+function AISnake:_updatePosition(dt)
+	-- Extract position update logic
+	local moveSpeed = self.Boosting and self.Personality.BoostSpeed or self.Personality.BaseSpeed
+	local velocity = self.Direction * moveSpeed
+	self.Position = self.Position + velocity * dt
+	
+	-- Update root part
+	if self.RootPart and self.RootPart.Parent then
+		self.RootPart.Position = self.Position
+	end
+	
+	-- Update model attribute for client LOD
+	self.Model:SetAttribute("HeadPosition", self.Position)
+end
+
+function AISnake:_checkCollisionsOptimized()
+	-- Use SpatialGrid for high-performance collision detection
+	local myHeadPos = self.HeadParts.head and self.HeadParts.head.Position or self.Position
+	local checkRadius = 15 -- Only check within 15 studs
+	
+	-- Query nearby entities using SpatialGrid
+	local nearbyEntities = SpatialGrid.QueryRadius(myHeadPos, checkRadius)
+	
+	for _, entity in ipairs(nearbyEntities) do
+		if entity.owner ~= self and entity.owner and entity.owner.HeadParts then
+			local otherHead = entity.owner.HeadParts.head
+			if otherHead and otherHead.Parent then
+				local distance = (myHeadPos - otherHead.Position).Magnitude
+				
+				-- Head collision check
+				if distance < 4 then
+					-- We hit another snake's head - mutual destruction
+					if not self._isSpawnProtected and not entity.owner._isSpawnProtected then
+						self:die("HeadCollision")
+						if entity.owner.die then
+							entity.owner:die("HeadCollision")
+						end
+					end
+					return
+				end
+				
+				-- Body collision check for other snake's segments
+				if entity.owner.Segments then
+					for i = 10, #entity.owner.Segments do
+						local segment = entity.owner.Segments[i]
+						if segment and segment.Parent then
+							local segDist = (myHeadPos - segment.Position).Magnitude
+							if segDist < 3 then
+								-- We hit their body
+								if not self._isSpawnProtected then
+									self:die("Collision")
+								end
+								return
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+function AISnake:_checkOrbPickupOptimized()
+	-- Use SpatialGrid for high-performance orb detection
+	if not self.HeadParts or not self.HeadParts.head then
+		return
+	end
+	
+	local headPos = self.HeadParts.head.Position
+	local pickupRadius = 10 -- Only check orbs within 10 studs
+	
+	-- Query nearby orbs using SpatialGrid
+	local nearbyOrbs = SpatialGrid.QueryRadius(headPos, pickupRadius, "Orb")
+	
+	for _, orbData in ipairs(nearbyOrbs) do
+		local orb = orbData.object
+		if orb and orb.Parent and orb:GetAttribute("IsOrb") then
+			local distance = (headPos - orb.Position).Magnitude
+			
+			if distance < 5 then
+				-- Collect the orb
+				local orbValue = orb:GetAttribute("Value") or 1
+				local orbType = orb:GetAttribute("OrbType") or "normal"
+				
+				-- Fire collection event
+				if RemoteEvents and RemoteEvents.OrbCollected then
+					RemoteEvents.OrbCollected:FireAllClients(self.Model, orb, orbValue)
+				end
+				
+				-- Handle orb based on type
+				if orbType == "upgrade" then
+					self:grow(25) -- Upgrade orbs give 25 segments
+				else
+					self:grow(orbValue)
+				end
+				
+				-- Return orb to pool
+				if orb:GetAttribute("FromPool") then
+					orb.CFrame = CFrame.new(0, -1000, 0)
+					orb.Parent = workspace.OrbPool
+				else
+					orb:Destroy()
+				end
+			end
+		end
+	end
+end
+
 -- === AI CONSTRUCTOR ===
 function AISnake.new(startPosition, preservedPersonalityType)
 	if #AISnake._activeSnakes >= MAX_AI_SNAKES then
@@ -1752,6 +1959,11 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		if self.HeadParts.rightPupil and self.HeadParts.rightEye then
 			self.HeadParts.rightPupil.CFrame = self.HeadParts.rightEye.CFrame * CFrame.new(0, 0, 0.15)
 		end
+		
+		-- Create spawn protection UI
+		if self._isSpawnProtected then
+			self:_createSpawnProtectionUI()
+		end
 	end
 
 	self.Segments = {}
@@ -1923,19 +2135,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			return
 		end
 		
-		-- Add spawn protection visual effect
-		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
-			local protectionField = Instance.new("ForceField")
-			protectionField.Parent = self.Model
-			
-			-- Remove protection field when spawn protection expires
-			task.spawn(function()
-				task.wait(10) -- Match spawn protection time
-				if protectionField and protectionField.Parent then
-					protectionField:Destroy()
-				end
-			end)
-		end
+		-- Spawn protection visual effect will be handled by BillboardGui instead
 		
 		-- Make segments visible gradually
 		for i = 0, self.actualSegmentCount do
@@ -2006,12 +2206,13 @@ function AISnake.new(startPosition, preservedPersonalityType)
 					task.spawn(function()
 						local fadeSteps = 10
 						for step = 1, fadeSteps do
-							if segment and segment.Parent then
-								segment.Transparency = 1 - (step / fadeSteps)
+							if self._destroyed or not segment or not segment.Parent then
+								break
 							end
+							segment.Transparency = 1 - (step / fadeSteps)
 							task.wait(0.02)
 						end
-						if segment and segment.Parent then
+						if not self._destroyed and segment and segment.Parent then
 							segment.Transparency = 0
 						end
 					end)
@@ -2819,13 +3020,27 @@ function AISnake:updateMovement(dt)
 	local headPos = self.HeadParts.head.Position
 	local pickupRadius = 8 -- Increased for better upgrade orb pickup (they're bigger)
 
-	-- CHECK FOR COLLISIONS WITH OTHER SNAKES
-	-- Check collision with player snakes
-	local Players = game:GetService("Players")
+	-- HIGH-PERFORMANCE COLLISION DETECTION
+	-- Only check collisions every few frames for performance
+	self._collisionCheckFrame = (self._collisionCheckFrame or 0) + 1
+	if self._collisionCheckFrame >= COLLISION_CHECK_INTERVAL then
+		self._collisionCheckFrame = 0
+		
+		-- Use optimized spatial grid collision detection
+		if not self._isSpawnProtected then
+			self:_checkCollisionsOptimized()
+		end
+	end
+	
+	-- Keep reference to head position for other checks
 	local myHead = self.HeadParts.head
 	local myHeadPos = myHead.Position
 	
-	-- Check collision with player snakes
+	-- Collision detection moved to optimized function above
+	
+	-- Skip old collision code
+	if false then
+	local Players = game:GetService("Players")
 	for _, player in pairs(Players:GetPlayers()) do
 		local snakeModel = nil
 		
@@ -2907,6 +3122,7 @@ function AISnake:updateMovement(dt)
 			end
 		end
 	end
+	end -- End of skipped collision code
 
 	local orbsToCheck = {}
 
@@ -3184,64 +3400,13 @@ function AISnake:updateMovement(dt)
 		end
 	end
 
-	-- CHECK FOR ORB PICKUPS (OPTIMIZED - run less frequently)
+	-- HIGH-PERFORMANCE ORB DETECTION USING SPATIAL GRID
 	self._orbCheckFrame = (self._orbCheckFrame or 0) + 1
 	if self._orbCheckFrame >= ORB_CHECK_INTERVAL then
 		self._orbCheckFrame = 0
 		
-		local orbsToCheck = {}
-		
-		-- Only check Orbs folder for better performance
-		local orbFolder = Workspace:FindFirstChild("OrbFolder") or Workspace:FindFirstChild("Orbs")
-		if orbFolder then
-			-- Limit orb checks for performance
-			local maxOrbsToCheck = 30
-			local orbCount = 0
-			
-			for _, orb in ipairs(orbFolder:GetChildren()) do
-				if orb:IsA("BasePart") and orbCount < maxOrbsToCheck then
-					orbCount = orbCount + 1
-					table.insert(orbsToCheck, orb)
-				end
-			end
-		end
-		
-		-- Now check collected orbs
-		for _, orb in ipairs(orbsToCheck) do
-			if orb:IsA("BasePart") and orb.Parent then
-				local dist = (orb.Position - headPos).Magnitude
-				
-				if dist <= pickupRadius then
-					-- Check if orb is already being collected
-					local isBeingCollected = orb:GetAttribute("BeingCollected")
-					if isBeingCollected then
-						continue -- Skip this orb
-					end
-					
-					-- Mark orb as being collected to prevent double collection
-					orb:SetAttribute("BeingCollected", true)
-					
-					-- Handle all orbs the same way
-					local valueObj = orb:FindFirstChild("Value")
-					local orbValue = valueObj and valueObj.Value or 1
-					
-					if orb.Name == "UpgradeOrb" then
-						-- Apply upgrade
-						if SnakeUpgrades then
-							print("🎯 AI Snake collecting upgrade orb!")
-							SnakeUpgrades.GiveUpgrade(self)
-						end
-					else
-						-- Regular orb - grow the snake
-						self:grow(orbValue)
-					end
-					
-					-- Destroy the orb
-					orb:Destroy()
-					break -- Only pick up one orb per check
-				end
-			end
-		end
+		-- Use optimized spatial grid orb detection
+		self:_checkOrbPickupOptimized()
 	end
 
 end
