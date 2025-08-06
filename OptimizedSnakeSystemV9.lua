@@ -783,7 +783,8 @@ function Snake:startUpdateLoop()
 			return
 		end
 
-		frameCount = frameCount + 1
+		-- Ensure frameCount is always a valid number
+		frameCount = (frameCount or 0) + 1
 
 		-- 🎯 SMART UPDATE THROTTLING
 		-- Every frame: Critical movement
