@@ -22,7 +22,7 @@ else
 	Config = {
 		BaseSpeed = 50, -- Increased for proper speed
 		BoostSpeed = 100, -- Proper boost speed
-		TurnSpeed = 5.1, -- Slightly reduced
+		TurnSpeed = 8.5, -- Increased for more responsive Slither.io-style turning
 		CrawlSpeed = 8,
 		SlowSpeed = 18,
 		SuperSpeed = 55,
@@ -738,23 +738,42 @@ local function initializeForCharacter(character)
 			end
 		end
 
-		-- BUTTERY smooth direction changes (same for mobile and PC)
-		local turnRate = Config.TurnSpeed * dt * 0.9 -- Slightly slower for more realistic movement
-
-		-- Reduce turn rate when near walls to prevent shaking
-		if State.wallStuckTime > 0 then
-			turnRate = turnRate * 0.3  -- Much slower turning when stuck
+		-- SLITHER.IO STYLE SMOOTH TURNING (WITH MAXIMUM TURN RATE)
+		local turnSpeed = Config.TurnSpeed
+		if State.boosting then
+			turnSpeed = turnSpeed * 0.8 -- Slightly reduce turn speed while boosting, like in slither.io
 		end
 
-		-- PROPER DIRECTION INTERPOLATION - Never let it become invalid
-		if State.targetDirection.Magnitude > 0.001 and State.currentDirection.Magnitude > 0.001 then
-			-- Only interpolate if both directions are valid
-			local newDirection = State.currentDirection:Lerp(State.targetDirection, turnRate)
+		-- This is the maximum angle (in radians) the snake can turn per second.
+		local maxTurnAnglePerSecond = math.rad(turnSpeed * 40) -- The '40' is a multiplier you can tune.
 
-			-- Always normalize after lerp
-			if newDirection.Magnitude > 0.001 then
-				State.currentDirection = newDirection.Unit
-			end
+		-- Calculate how much we can turn this frame.
+		local maxTurnThisFrame = maxTurnAnglePerSecond * dt
+
+		-- Get the angle between the current direction and the target direction.
+		local angleToTarget = math.acos(math.clamp(State.currentDirection:Dot(State.targetDirection), -1, 1))
+
+		-- If we need to turn more than our max allowed turn for this frame, clamp it.
+		local turnAngle = math.min(angleToTarget, maxTurnThisFrame)
+
+		if angleToTarget > 0.01 then -- Only turn if we need to
+			-- Determine the direction of the turn (left or right).
+			-- Use the Y component of the cross product to determine turn direction
+			local cross = State.currentDirection:Cross(State.targetDirection)
+			local turnDirection = cross.Y >= 0 and 1 or -1
+			
+			-- Create a rotation around the Y axis
+			local rotationCFrame = CFrame.fromAxisAngle(Vector3.new(0, 1, 0), turnAngle * turnDirection)
+			
+			-- Apply the rotation to our current direction
+			local newDirection = rotationCFrame * State.currentDirection
+			State.currentDirection = newDirection.Unit
+		end
+		
+		-- Reduce turn rate when near walls to prevent shaking
+		if State.wallStuckTime > 0 then
+			-- Apply additional reduction to max turn angle when stuck
+			maxTurnThisFrame = maxTurnThisFrame * 0.3
 		end
 
 		-- BUTTERY smooth speed changes

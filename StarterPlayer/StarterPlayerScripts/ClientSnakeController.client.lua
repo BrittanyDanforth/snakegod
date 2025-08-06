@@ -25,14 +25,14 @@ local mouse = player:GetMouse()
 local snakeVisuals = nil -- Variable to hold our snake instance
 
 -- Create/get remote for sending input to server
-local remoteEvents = ReplicatedStorage:WaitForChild("Remotes", 10)
+local remoteEvents = ReplicatedStorage:WaitForChild("RemoteEvents", 10)
 local mouseDirectionRemote = nil
 local boostRemote = nil
 if remoteEvents then
     mouseDirectionRemote = remoteEvents:FindFirstChild("UpdateMouseDirection") or remoteEvents:WaitForChild("UpdateMouseDirection", 5)
     boostRemote = remoteEvents:FindFirstChild("UpdateBoostState")
 else
-    warn("[Client] Remotes folder not found!")
+    warn("[Client] RemoteEvents folder not found!")
 end
 
 -- ===================================================================
@@ -375,8 +375,8 @@ local function setupSnake(character)
         State.speedMode = mode
         State.targetSpeed = speedModes[mode] or Config.BaseSpeed
         
-        -- Visual feedback
-        local color = snakeConfig.HeadColor
+        -- Visual feedback with fallback color
+        local color = snakeConfig.HeadColor or Color3.new(0.2, 0.8, 0.2) -- Default green
         if mode == "super" then
             color = Color3.fromRGB(255, 255, 0)
         elseif mode == "ludicrous" then

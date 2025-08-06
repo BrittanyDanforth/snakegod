@@ -401,17 +401,21 @@ function Snake:getSegmentColor(index)
 		local r, g, b = HSVToRGB(hue, 1, 1)
 		return Color3.new(r, g, b)
 	else
-		-- Original color logic
+		-- Ensure we have valid colors with fallbacks
+		local defaultColor = Color3.new(0.2, 0.8, 0.2) -- Default green color
+		local bodyColors = self.config.BodyColors and #self.config.BodyColors > 0 and self.config.BodyColors or {defaultColor}
+		local headColor = self.config.HeadColor or bodyColors[1] or defaultColor
+		
+		-- Original color logic with fallbacks
 		if index == 0 then
-			return self.config.HeadColor or self.config.BodyColors[1]
+			return headColor
 		elseif index <= HEAD_BLEND_SEGMENTS then
 			local blendFactor = (index / HEAD_BLEND_SEGMENTS) ^ 0.7
-			local headColor = self.config.HeadColor or self.config.BodyColors[1]
-			local bodyColor = self.config.BodyColors[1]
+			local bodyColor = bodyColors[1]
 			return headColor:Lerp(bodyColor, blendFactor)
 		else
-			local colorIndex = ((index - 1) % #self.config.BodyColors) + 1
-			return self.config.BodyColors[colorIndex]
+			local colorIndex = ((index - 1) % #bodyColors) + 1
+			return bodyColors[colorIndex]
 		end
 	end
 end
@@ -717,9 +721,32 @@ function Snake:createUnifiedBody()
 end
 
 function Snake:updatePositionHistory()
+	local lastHistoryPoint = self:getHistoricalPosition(0) -- Get the most recent point
+	local newPosition = self.rootPart.Position
+	local distance = (newPosition - lastHistoryPoint.position).Magnitude
+
+	-- Define a max distance. If we move further than this in one frame, we need to fill the gap.
+	-- This should be slightly less than your effective segment spacing to be safe.
+	local maxSpacing = (BASE_SIZE * self.growthFactor * SEGMENT_SPACING) * 0.9
+
+	if distance > maxSpacing then
+		-- We moved too far. Inject extra points into the history to prevent gaps.
+		local pointsToInject = math.floor(distance / maxSpacing)
+		for i = 1, pointsToInject do
+			local alpha = i / (pointsToInject + 1)
+			local injectedPos = lastHistoryPoint.position:Lerp(newPosition, alpha)
+			local injectedLook = lastHistoryPoint.lookVector:Lerp(self.rootPart.CFrame.LookVector, alpha)
+
+			-- Add the new, interpolated point to the history buffer
+			self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
+			self.positionHistory[self.historyIndex] = { position = injectedPos, lookVector = injectedLook.Unit, time = tick() }
+		end
+	end
+
+	-- Finally, add the actual current position to the history
 	self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
 	self.positionHistory[self.historyIndex] = {
-		position = self.rootPart.Position,
+		position = newPosition,
 		lookVector = self.rootPart.CFrame.LookVector,
 		time = tick()
 	}
@@ -924,7 +951,7 @@ function Snake:updateUnifiedBody()
 	local requiredSegments = math.min(math.ceil(self.actualLength / 2), MAX_SEGMENTS)
 	
 	-- Apply segment budget
-	local segmentsToUpdate = math.min(requiredSegments, segmentBudget, self.visibleSegmentCount)
+	local segmentsToUpdate = math.min(requiredSegments, segmentBudget)
 
 	-- Add new segments if grown with smooth animation
 	if requiredSegments > self.visibleSegmentCount then
@@ -937,7 +964,7 @@ function Snake:updateUnifiedBody()
 
 	-- Calculate sizes based on growth
 	local currentBaseSize = BASE_SIZE * self.growthFactor
-	local spacing = currentBaseSize * SEGMENT_SPACING
+	-- REMOVED: local spacing = currentBaseSize * SEGMENT_SPACING (this was causing gaps)
 
 	-- Update all segments including head (segment 0) - LIMITED BY BUDGET
 	for i = 0, segmentsToUpdate do
@@ -981,18 +1008,20 @@ function Snake:updateUnifiedBody()
 				self.leftPupil.CFrame = self.leftEye.CFrame * CFrame.new(0, 0, -eyeScale * 0.3)
 				self.rightPupil.CFrame = self.rightEye.CFrame * CFrame.new(0, 0, -eyeScale * 0.3)
 			elseif isVisible or i <= FORCE_RENDER_SEGMENTS then
-				-- Body segment positioning
-				local stepsBack = math.floor(i * spacing / 2)
-				local histData = self:getHistoricalPosition(stepsBack)
-				local nextHistData = self:getHistoricalPosition(stepsBack + 1)
+				-- Body segment positioning with CONSTANT spacing
+				-- Each segment looks a fixed number of steps behind the one in front of it.
+				-- You can tune the "3" to make the snake feel tighter (2) or looser (4).
+				local DELAY_MULTIPLIER = 3 
+				local stepsBack = i * DELAY_MULTIPLIER
 
-				if histData and nextHistData then
-					-- Smooth interpolation
-					local alpha = (i * spacing / 2) % 1
-					local targetPos = histData.position:Lerp(nextHistData.position, alpha)
+				local histData = self:getHistoricalPosition(stepsBack)
+
+				if histData then
+					-- No complex interpolation needed because our history is already dense!
+					local targetPos = histData.position
 					local currentPos = segment.Position
 
-					-- Use higher smoothing during growth for smoother transitions
+					-- The existing smoothing factor will work perfectly here.
 					local smoothingFactor = self.isGrowing and VISUAL_SMOOTHING_FACTOR * 1.2 or VISUAL_SMOOTHING_FACTOR
 					segment.Position = currentPos:Lerp(targetPos, smoothingFactor)
 
@@ -1185,6 +1214,7 @@ function Snake:addSegments(count)
 		local attachment = Instance.new("Attachment")
 		attachment.Name = "Attachment" .. i
 		attachment.Parent = self.attachmentPart
+		attachment.WorldPosition = segment.Position -- Fix: Set position immediately to prevent visual glitch
 		self.attachments[i] = attachment
 
 		-- Create beam from previous segment
