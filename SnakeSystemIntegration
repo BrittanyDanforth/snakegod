@@ -10,37 +10,10 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
 
--- *** FASTER MODULE LOADER ***
-local snakeSystemsToTry = {
-	"OptimizedSnakeSystemV9",
-	"OptimizedSnakeSystemV4",
-	"OptimizedSnakeSystemV3",
-	"OptimizedSnakeSystemV2",
-	"OptimizedSnakeSystem" -- V1
-}
-local OptimizedSnakeSystem = nil
-
-for _, name in ipairs(snakeSystemsToTry) do
-	local module = ReplicatedStorage:FindFirstChild(name)
-	if module then
-		local success, result = pcall(require, module)
-		if success and result then
-			OptimizedSnakeSystem = result
-			print("✅ Loaded Snake System:", name)
-			break
-		else
-			warn("⚠️ Found snake system '"..name.."' but failed to require it:", result)
-		end
-	end
-end
-
-if not OptimizedSnakeSystem then
-	error("❌ FATAL: Could not find or load any OptimizedSnakeSystem module in ReplicatedStorage!")
-end
-
--- Initialize the system (creates networking folder)
-OptimizedSnakeSystem.init()
+-- Server should not handle visual systems - that's for the client
+-- The server only manages game state, collision detection, and rules
 
 -- Wait a moment for folder creation
 wait(0.1)
@@ -195,22 +168,25 @@ local function onCharacterAdded(character)
 
 	print("Creating snake with config - InitialLength:", config.InitialLength, "MaxSegments:", config.MaxSegments)
 
-	-- Create optimized snake
-	print("🐍 Creating snake for", player.Name, "with config:", config.InitialLength, "length")
-	local success, snake = pcall(function()
-		-- Use saved state if reviving and available
-		if isReviving and savedSnakeState then
-			print("🔄 Creating snake from saved state for revival")
-			return OptimizedSnakeSystem.createSnakeFromSavedState(character, config, savedSnakeState)
-		else
-			return OptimizedSnakeSystem.createSnake(character, config)
-		end
-	end)
-
-	if not success then
-		warn("❌ Error creating snake:", snake)
-		return
+	-- Server only manages game state - visuals are handled by client
+	print("🐍 Setting up server-side snake data for", player.Name)
+	
+	-- Store snake configuration on the character for the client to use
+	character:SetAttribute("SnakeConfig", HttpService:JSONEncode(config))
+	character:SetAttribute("SnakeLength", config.InitialLength)
+	
+	if isReviving and savedSnakeState then
+		print("🔄 Restoring snake state for revival")
+		character:SetAttribute("SavedSnakeState", HttpService:JSONEncode(savedSnakeState))
 	end
+	
+	-- Create a server-side snake object for game logic only
+	local snake = {
+		player = player,
+		character = character,
+		length = config.InitialLength,
+		isAlive = true
+	}
 
 	if not snake then
 		warn("❌ Failed to create snake for", player.Name)
@@ -237,30 +213,28 @@ local function onCharacterAdded(character)
 	end
 	_G.PlayerSnakes[player] = snake
 
-	-- Setup boost tracking
-	if snake.setBoosting then
-		-- Create RemoteEvent for boost state
-		local boostEvent = remoteEvents:FindFirstChild("UpdateBoostState")
-		if not boostEvent then
-			boostEvent = Instance.new("RemoteEvent")
-			boostEvent.Name = "UpdateBoostState"
-			boostEvent.Parent = remoteEvents
-		end
-
-		-- Listen for boost state changes
-		local boostConnection
-		boostConnection = boostEvent.OnServerEvent:Connect(function(eventPlayer, isBoosting)
-			if eventPlayer == player and activeSnakes[player] then
-				activeSnakes[player]:setBoosting(isBoosting)
-			end
-		end)
-
-		-- Store connection for cleanup
-		if not snake._connections then
-			snake._connections = {}
-		end
-		snake._connections.boost = boostConnection
+	-- Setup boost tracking for server-side game logic
+	-- Create RemoteEvent for boost state
+	local boostEvent = remoteEvents:FindFirstChild("UpdateBoostState")
+	if not boostEvent then
+		boostEvent = Instance.new("RemoteEvent")
+		boostEvent.Name = "UpdateBoostState"
+		boostEvent.Parent = remoteEvents
 	end
+
+	-- Listen for boost state changes
+	local boostConnection
+	boostConnection = boostEvent.OnServerEvent:Connect(function(eventPlayer, isBoosting)
+		if eventPlayer == player and activeSnakes[player] then
+			-- Update server-side boost state
+			activeSnakes[player].isBoosting = isBoosting
+			character:SetAttribute("IsBoosting", isBoosting)
+		end
+	end)
+
+	-- Store connection for cleanup
+	snake._connections = {}
+	snake._connections.boost = boostConnection
 
 	-- Ensure leaderstats exist
 	local leaderstats = player:FindFirstChild("leaderstats")
@@ -284,12 +258,14 @@ local function onCharacterAdded(character)
 	-- Handle length updates
 	if lengthValue then
 		-- Initial length
-		snake:updateLength(lengthValue.Value)
+		snake.length = lengthValue.Value
+		character:SetAttribute("SnakeLength", lengthValue.Value)
 
 		-- Listen for changes
 		lengthValue.Changed:Connect(function(newLength)
 			if snake and activeSnakes[player] == snake then
-				snake:updateLength(newLength)
+				snake.length = newLength
+				character:SetAttribute("SnakeLength", newLength)
 			end
 		end)
 	end
@@ -313,12 +289,9 @@ local function onCharacterAdded(character)
 		if snake and activeSnakes[player] == snake then
 			-- Update snake appearance
 			local newConfig = getSkinConfig(player)
-			-- Apply new skin to snake
-			if snake.head then
-				snake.head.Color = newConfig.HeadColor
-				snake.head.Material = newConfig.HeadMaterial
-			end
+			-- Update server-side config and notify client
 			snake.config = newConfig
+			character:SetAttribute("SnakeConfig", HttpService:JSONEncode(newConfig))
 		end
 	end)
 
