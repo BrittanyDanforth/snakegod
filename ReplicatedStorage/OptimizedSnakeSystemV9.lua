@@ -1185,6 +1185,7 @@ function Snake:addSegments(count)
 		local attachment = Instance.new("Attachment")
 		attachment.Name = "Attachment" .. i
 		attachment.Parent = self.attachmentPart
+		attachment.WorldPosition = segment.Position -- Fix: Set position immediately to prevent visual glitch
 		self.attachments[i] = attachment
 
 		-- Create beam from previous segment
