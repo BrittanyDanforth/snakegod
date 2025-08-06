@@ -1698,12 +1698,6 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	for _, obj in ipairs(self.Model:GetChildren()) do
 		obj:Destroy()
 	end
-	
-	-- Parent model to workspace immediately
-	self.Model.Parent = workspace
-	
-	-- Debug print
-	print("🐍 Creating AI Snake model:", self.Model.Name)
 
 	game:GetService("CollectionService"):AddTag(self.Model, "AISnake")
 
@@ -1793,6 +1787,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	local headAttachment = Instance.new("Attachment")
 	headAttachment.Name = "Attachment0"
 	headAttachment.Parent = attachmentPart
+	headAttachment.WorldPosition = self.Position -- Fix: Set position immediately
 	self.Attachments[0] = headAttachment
 
 	-- Store head as segment 0 for consistency with OptimizedSnakeSystem
@@ -1837,6 +1832,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		local attachment = Instance.new("Attachment")
 		attachment.Name = "Attachment" .. i
 		attachment.Parent = attachmentPart
+		attachment.WorldPosition = pos -- Fix: Set position immediately to prevent beam stretching
 		self.Attachments[i] = attachment
 	end
 
@@ -1897,6 +1893,10 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	self.Model:SetAttribute("CurrentLength", self.CurrentLength)
 	self.Model:SetAttribute("HeadPosition", self.Position)
 
+	-- Parent model to workspace now that it's fully constructed
+	self.Model.Parent = workspace
+	print("🐍 Creating AI Snake model:", self.Model.Name)
+
 	-- Spawn sequence to prevent gaps
 	task.defer(function()
 		-- Wait for model to be ready
@@ -1907,18 +1907,87 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			return
 		end
 		
-		-- Add spawn protection visual effect
+		-- Add spawn protection countdown UI
 		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
-			local protectionField = Instance.new("ForceField")
-			protectionField.Parent = self.Model
+			-- Create BillboardGui for countdown
+			local billboardGui = Instance.new("BillboardGui")
+			billboardGui.Name = "SpawnProtection"
+			billboardGui.Size = UDim2.new(4, 0, 2, 0)
+			billboardGui.StudsOffset = Vector3.new(0, 5, 0)
+			billboardGui.AlwaysOnTop = true
+			billboardGui.Parent = self.HeadParts.head
 			
-			-- Remove protection field when spawn protection expires
+			-- Create countdown text
+			local countdownLabel = Instance.new("TextLabel")
+			countdownLabel.Size = UDim2.new(1, 0, 1, 0)
+			countdownLabel.BackgroundTransparency = 1
+			countdownLabel.Text = "10"
+			countdownLabel.TextScaled = true
+			countdownLabel.TextColor3 = Color3.new(0, 1, 0)
+			countdownLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+			countdownLabel.TextStrokeTransparency = 0
+			countdownLabel.Font = Enum.Font.SourceSansBold
+			countdownLabel.Parent = billboardGui
+			
+			-- Add shield text
+			local shieldLabel = Instance.new("TextLabel")
+			shieldLabel.Size = UDim2.new(1, 0, 0.4, 0)
+			shieldLabel.Position = UDim2.new(0, 0, -0.4, 0)
+			shieldLabel.BackgroundTransparency = 1
+			shieldLabel.Text = "PROTECTED"
+			shieldLabel.TextScaled = true
+			shieldLabel.TextColor3 = Color3.new(0.5, 0.8, 1) -- Light blue
+			shieldLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+			shieldLabel.TextStrokeTransparency = 0
+			shieldLabel.Font = Enum.Font.SourceSansBold
+			shieldLabel.Parent = billboardGui
+			
+			-- Countdown timer
 			task.spawn(function()
-				task.wait(10) -- Match spawn protection time
-				if protectionField and protectionField.Parent then
-					protectionField:Destroy()
+				local timeLeft = 10
+				while timeLeft > 0 and self._isSpawnProtected and billboardGui.Parent do
+					countdownLabel.Text = tostring(timeLeft)
+					
+					-- Color changes as time runs out
+					if timeLeft <= 3 then
+						countdownLabel.TextColor3 = Color3.new(1, 0, 0) -- Red
+					elseif timeLeft <= 5 then
+						countdownLabel.TextColor3 = Color3.new(1, 1, 0) -- Yellow
+					end
+					
+					task.wait(1)
+					timeLeft = timeLeft - 1
+				end
+				
+				-- Remove UI when protection ends
+				if billboardGui and billboardGui.Parent then
+					billboardGui:Destroy()
 				end
 			end)
+			
+			-- Also add a subtle glow effect to the snake
+			if self.HeadParts.headLight then
+				local originalBrightness = self.HeadParts.headLight.Brightness
+				local originalRange = self.HeadParts.headLight.Range
+				
+				-- Pulse effect during protection
+				task.spawn(function()
+					while self._isSpawnProtected and self.HeadParts.headLight do
+						for i = 1, 10 do
+							if not self._isSpawnProtected or not self.HeadParts.headLight then break end
+							local pulse = math.sin(tick() * 3) * 0.5 + 0.5
+							self.HeadParts.headLight.Brightness = originalBrightness + pulse
+							self.HeadParts.headLight.Range = originalRange + pulse * 5
+							task.wait(0.1)
+						end
+					end
+					-- Restore original values
+					if self.HeadParts.headLight then
+						self.HeadParts.headLight.Brightness = originalBrightness
+						self.HeadParts.headLight.Range = originalRange
+					end
+				end)
+			end
 		end
 		
 		-- Make segments visible gradually
