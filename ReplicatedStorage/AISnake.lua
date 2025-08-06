@@ -248,7 +248,7 @@ local function returnSegment(segment)
 	segment.CanQuery = false
 	segment.CanTouch = false
 	segment.Anchored = true
-	segment.Color = Color3.new()
+	segment.Color = Color3.fromRGB(255, 255, 51) -- Default yellow color
 	segment.Material = Enum.Material.Neon
 	segment.Size = Vector3.new(3.5, 3.5, 4)
 
@@ -358,7 +358,7 @@ local function createVisualHead(config, parentModel)
 	headPart.Shape = Enum.PartType.Ball -- Using Ball like OptimizedSnakeSystem
 	headPart.Size = Vector3.new(BASE_SIZE * HEAD_SIZE_MULTIPLIER, BASE_SIZE * HEAD_SIZE_MULTIPLIER, BASE_SIZE * HEAD_SIZE_MULTIPLIER)
 	headPart.Material = Enum.Material.Neon -- Consistent with OptimizedSnakeSystem
-	headPart.Color = config.HeadColor
+	headPart.Color = config.HeadColor or Color3.fromRGB(255, 255, 51) -- Default to yellow if HeadColor is nil
 	headPart.CanCollide = false
 	headPart.CanTouch = true -- CRITICAL: Enable touch detection for orb collection
 	headPart.CanQuery = true -- Enable for raycasts
@@ -371,7 +371,7 @@ local function createVisualHead(config, parentModel)
 	-- Professional head glow matching OptimizedSnakeSystem
 	local headLight = Instance.new("PointLight")
 	headLight.Name = "Glow"
-	headLight.Color = config.HeadColor
+	headLight.Color = config.HeadColor or Color3.fromRGB(255, 255, 51)
 	headLight.Brightness = GLOW_INTENSITY
 	headLight.Range = GLOW_RANGE_BASE * 1.1 -- Slightly larger than body segments
 	headLight.Shadows = false -- Performance optimization
@@ -381,7 +381,7 @@ local function createVisualHead(config, parentModel)
 	local boostParticles = Instance.new("ParticleEmitter")
 	boostParticles.Name = "BoostParticles"
 	boostParticles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-	boostParticles.Color = ColorSequence.new(config.HeadColor)
+	boostParticles.Color = ColorSequence.new(config.HeadColor or Color3.fromRGB(255, 255, 51))
 	boostParticles.Lifetime = NumberRange.new(0.5, 1)
 	boostParticles.Rate = 0 -- Start disabled
 	boostParticles.Speed = NumberRange.new(5, 10)
@@ -443,6 +443,12 @@ local function createVisualHead(config, parentModel)
 end
 
 local function createSegment(index, position, color, config, parentModel, currentLength)
+	-- Validate color parameter
+	if not color then
+		warn("createSegment - color is nil for index", index, "- using default yellow")
+		color = Color3.fromRGB(255, 255, 51)
+	end
+	
 	local segment = getSegment(config)
 	segment.Name = "AISegment" .. index
 	segment.Shape = Enum.PartType.Ball -- Match OptimizedSnakeSystem
@@ -1568,6 +1574,233 @@ function AISnake:updateBrain()
 	self.SteerDirection = steer
 end
 
+-- === HELPER FUNCTIONS FOR SPAWN PROTECTION UI ===
+function AISnake:_createSpawnProtectionUI()
+	if not self.HeadParts or not self.HeadParts.head then
+		return
+	end
+	
+	-- Create BillboardGui
+	local billboardGui = Instance.new("BillboardGui")
+	billboardGui.Name = "SpawnProtectionUI"
+	billboardGui.Size = UDim2.new(4, 0, 1.5, 0)
+	billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+	billboardGui.AlwaysOnTop = true
+	billboardGui.Parent = self.HeadParts.head
+	
+	-- Create background frame
+	local bgFrame = Instance.new("Frame")
+	bgFrame.Size = UDim2.new(1, 0, 1, 0)
+	bgFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+	bgFrame.BackgroundTransparency = 0.3
+	bgFrame.BorderSizePixel = 0
+	bgFrame.Parent = billboardGui
+	
+	-- Add UICorner for rounded edges
+	local uiCorner = Instance.new("UICorner")
+	uiCorner.CornerRadius = UDim.new(0.2, 0)
+	uiCorner.Parent = bgFrame
+	
+	-- Create text label
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Size = UDim2.new(1, 0, 1, 0)
+	textLabel.BackgroundTransparency = 1
+	textLabel.Text = "INVINCIBLE"  -- Set initial text immediately
+	textLabel.TextColor3 = Color3.new(1, 1, 0)
+	textLabel.TextScaled = true
+	textLabel.Font = Enum.Font.SourceSansBold
+	textLabel.Parent = bgFrame
+	
+	-- Store reference
+	self._spawnProtectionUI = billboardGui
+	
+	-- Animate the countdown
+	task.spawn(function()
+		local startTime = tick()
+		local duration = 10 -- 10 seconds of protection
+		
+		while self and not self._destroyed and self._spawnProtectionUI do
+			local elapsed = tick() - startTime
+			local remaining = math.max(0, duration - elapsed)
+			
+			if remaining <= 0 then
+				-- Protection expired
+				if self._spawnProtectionUI then
+					self._spawnProtectionUI:Destroy()
+					self._spawnProtectionUI = nil
+				end
+				self._isSpawnProtected = false
+				break
+			end
+			
+			-- Update text
+			if remaining > 3 then
+				textLabel.Text = "INVINCIBLE"
+				textLabel.TextColor3 = Color3.new(1, 1, 0) -- Yellow
+			else
+				-- Last 3 seconds: show countdown
+				textLabel.Text = tostring(math.ceil(remaining))
+				-- Flash between yellow and red
+				textLabel.TextColor3 = remaining % 0.5 < 0.25 and Color3.new(1, 0, 0) or Color3.new(1, 1, 0)
+			end
+			
+			task.wait(0.1)
+		end
+	end)
+end
+
+-- === HELPER FUNCTIONS FOR PERFORMANCE ===
+function AISnake:_updateTurning(dt)
+	-- Extract turning logic from updateMovement
+	local turnSpeed = self.Personality.TurnSpeed * 
+		(self.Boosting and self.Personality.BoostTurnMultiplier or 1)
+	
+	-- Apply personality-based turning behavior
+	if self.Personality.Type == "Slitherer" then
+		-- Add slight sinusoidal movement
+		local time = tick()
+		local sineWave = mathSin(time * 2) * 0.1
+		self.TargetYaw = self.TargetYaw + sineWave * dt
+	end
+	
+	-- Smooth turning
+	local yawDiff = self.TargetYaw - self.CurrentYaw
+	-- Normalize angle difference
+	while yawDiff > mathPi do yawDiff = yawDiff - 2 * mathPi end
+	while yawDiff < -mathPi do yawDiff = yawDiff + 2 * mathPi end
+	
+	self.CurrentYaw = self.CurrentYaw + yawDiff * turnSpeed * dt
+	self.Direction = Vector3new(mathSin(self.CurrentYaw), 0, mathCos(self.CurrentYaw))
+end
+
+function AISnake:_updatePosition(dt)
+	-- Extract position update logic
+	local moveSpeed = self.Boosting and self.Personality.BoostSpeed or self.Personality.BaseSpeed
+	local velocity = self.Direction * moveSpeed
+	self.Position = self.Position + velocity * dt
+	
+	-- Update root part
+	if self.RootPart and self.RootPart.Parent then
+		self.RootPart.Position = self.Position
+	end
+	
+	-- Update model attribute for client LOD
+	self.Model:SetAttribute("HeadPosition", self.Position)
+end
+
+function AISnake:_checkCollisionsOptimized()
+	-- Use SpatialGrid for high-performance collision detection
+	local myHeadPos = self.HeadParts.head and self.HeadParts.head.Position or self.Position
+	local checkRadius = 15 -- Only check within 15 studs
+	
+	-- Query nearby entities using SpatialGrid
+	local nearbyEntities = SpatialGrid.QueryRadius(myHeadPos, checkRadius)
+	
+	for _, entity in ipairs(nearbyEntities) do
+		-- Skip non-snake entities (like orbs)
+		if entity.type == "ORB" then
+			continue
+		end
+		
+		-- Only process snake-related entities
+		if entity.type ~= "AI_HEAD" and entity.type ~= "AI_SEGMENT" and 
+		   entity.type ~= "PLAYER_HEAD" and entity.type ~= "PLAYER_SEGMENT" then
+			continue
+		end
+		
+		local otherSnake = entity.owner
+		
+		-- Ensure it's a snake and not ourselves
+		-- Use getmetatable to strictly check if it's an AISnake instance
+		if otherSnake and otherSnake ~= self and getmetatable(otherSnake) == AISnake and otherSnake.HeadParts and otherSnake.HeadParts.head then
+			local otherHead = otherSnake.HeadParts.head
+			if otherHead and otherHead.Parent then
+				local distance = (myHeadPos - otherHead.Position).Magnitude
+				
+				-- Head collision check
+				if distance < 4 then
+					-- We hit another snake's head - mutual destruction
+					if not self._isSpawnProtected and not otherSnake._isSpawnProtected then
+						self:die("HeadCollision")
+						if otherSnake.die then
+							otherSnake:die("HeadCollision")
+						end
+					end
+					return
+				end
+				
+				-- Body collision check for other snake's segments
+				if otherSnake.Segments then
+					for i = 10, #otherSnake.Segments do
+						local segment = otherSnake.Segments[i]
+						if segment and segment.Parent then
+							local segDist = (myHeadPos - segment.Position).Magnitude
+							if segDist < 3 then
+								-- We hit their body
+								if not self._isSpawnProtected then
+									self:die("Collision")
+								end
+								return
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+function AISnake:_checkOrbPickupOptimized()
+	-- Use SpatialGrid for high-performance orb detection
+	if not self.HeadParts or not self.HeadParts.head then
+		return
+	end
+	
+	local headPos = self.HeadParts.head.Position
+	local pickupRadius = 10 -- Only check orbs within 10 studs
+	
+	-- Query nearby orbs using SpatialGrid
+	local nearbyEntities = SpatialGrid.QueryRadius(headPos, pickupRadius)
+	
+	for _, entity in ipairs(nearbyEntities) do
+		-- Only process orb entities
+		if entity.type ~= "ORB" then
+			continue
+		end
+		
+		local orb = entity.part  -- In SpatialGrid, the part is stored as 'part', not 'object'
+		if orb and orb.Parent and orb:GetAttribute("IsOrb") then
+			local distance = (headPos - orb.Position).Magnitude
+			
+			if distance < 5 then
+				-- Collect the orb
+				local orbValue = orb:GetAttribute("Value") or 1
+				local orbType = orb:GetAttribute("OrbType") or "normal"
+				
+				-- Fire collection event
+				if RemoteEvents and RemoteEvents.OrbCollected then
+					RemoteEvents.OrbCollected:FireAllClients(self.Model, orb, orbValue)
+				end
+				
+				-- Handle orb based on type
+				if orbType == "upgrade" then
+					self:grow(25) -- Upgrade orbs give 25 segments
+				else
+					self:grow(orbValue)
+				end
+				
+				-- Return orb to pool
+				if orb:GetAttribute("FromPool") then
+					orb.CFrame = CFrame.new(0, -1000, 0)
+					orb.Parent = workspace.OrbPool
+				else
+					orb:Destroy()
+				end
+			end
+		end
+	end
+end
+
 -- === AI CONSTRUCTOR ===
 function AISnake.new(startPosition, preservedPersonalityType)
 	if #AISnake._activeSnakes >= MAX_AI_SNAKES then
@@ -1600,9 +1833,19 @@ function AISnake.new(startPosition, preservedPersonalityType)
 
 	-- Get random AI color FIRST (50% yellow, 50% others)
 	local colorData = getRandomAIColor()
+	
+	-- Validate color data
+	if not colorData or not colorData.HeadColor or not colorData.BodyColors then
+		warn("AISnake.new - Invalid color data, using default yellow")
+		colorData = AISnakeColors[1] -- Default to yellow
+	end
 
 	-- Deep copy config and immediately apply colors
 	self.Config = deepCopy(SnakeConfig)
+	if not self.Config then
+		error("AISnake.new - Failed to deep copy SnakeConfig")
+	end
+	
 	self.Config.HeadColor = colorData.HeadColor
 	self.Config.BodyColors = colorData.BodyColors
 	self.Config.HeadMaterial = colorData.HeadMaterial
@@ -1735,6 +1978,11 @@ function AISnake.new(startPosition, preservedPersonalityType)
 		end
 		if self.HeadParts.rightPupil and self.HeadParts.rightEye then
 			self.HeadParts.rightPupil.CFrame = self.HeadParts.rightEye.CFrame * CFrame.new(0, 0, 0.15)
+		end
+		
+		-- Create spawn protection UI
+		if self._isSpawnProtected then
+			self:_createSpawnProtectionUI()
 		end
 	end
 
@@ -1907,19 +2155,7 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			return
 		end
 		
-		-- Add spawn protection visual effect
-		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
-			local protectionField = Instance.new("ForceField")
-			protectionField.Parent = self.Model
-			
-			-- Remove protection field when spawn protection expires
-			task.spawn(function()
-				task.wait(10) -- Match spawn protection time
-				if protectionField and protectionField.Parent then
-					protectionField:Destroy()
-				end
-			end)
-		end
+		-- Spawn protection visual effect will be handled by BillboardGui instead
 		
 		-- Make segments visible gradually
 		for i = 0, self.actualSegmentCount do
@@ -1990,12 +2226,13 @@ function AISnake.new(startPosition, preservedPersonalityType)
 					task.spawn(function()
 						local fadeSteps = 10
 						for step = 1, fadeSteps do
-							if segment and segment.Parent then
-								segment.Transparency = 1 - (step / fadeSteps)
+							if self._destroyed or not segment or not segment.Parent then
+								break
 							end
+							segment.Transparency = 1 - (step / fadeSteps)
 							task.wait(0.02)
 						end
-						if segment and segment.Parent then
+						if not self._destroyed and segment and segment.Parent then
 							segment.Transparency = 0
 						end
 					end)
@@ -2010,6 +2247,11 @@ function AISnake.new(startPosition, preservedPersonalityType)
 	-- Ensure all segments are created and visible before activating
 	task.spawn(function()
 		task.wait(0.1)
+		
+		-- Check if snake was destroyed during wait
+		if self._destroyed then
+			return
+		end
 		
 		-- Double-check segments are visible
 		local visibleCount = 0
@@ -2153,14 +2395,14 @@ function AISnake:grow(amount)
 					local growTime = 0.18
 					local t = 0
 					local startSize = Vector3new(0.1, 0.1, 0.1)
-					while t < growTime do
+					while t < growTime and not self._destroyed do
 						t = t + RunService.Heartbeat:Wait()
-						if not segment or not segment.Parent then return end
+						if not segment or not segment.Parent or self._destroyed then return end
 						local alpha = mathMin(t / growTime, 1)
 						segment.Size = startSize:Lerp(Vector3new(finalSize, finalSize, finalSize), alpha)
 						segment.Transparency = 1 - alpha
 					end
-					if segment and segment.Parent then
+					if segment and segment.Parent and not self._destroyed then
 						segment.Size = Vector3new(finalSize, finalSize, finalSize)
 						segment.Transparency = 0
 					end
@@ -2179,8 +2421,14 @@ function AISnake:grow(amount)
 
 		-- Smoothly update existing segment sizes and beam widths
 		task.spawn(function()
+			-- Check if snake was destroyed
+			if self._destroyed then
+				return
+			end
+			
 			-- Update segments
 			for i = 0, math.min(self.CurrentLength, FORCE_RENDER_SEGMENTS) do
+				if self._destroyed then break end
 				local segment = self.Segments[i]
 				if segment and segment.Parent then
 					local targetSize = self:getSegmentSize(i, currentBaseSize)
@@ -2196,7 +2444,14 @@ function AISnake:grow(amount)
 
 			-- Update beam widths to match new segment sizes
 			task.wait(0.1) -- Small delay to let segment tweens start
+			
+			-- Check again after wait
+			if self._destroyed then
+				return
+			end
+			
 			for i = 0, math.min(self.CurrentLength - 1, FORCE_RENDER_SEGMENTS) do
+				if self._destroyed then break end
 				local beam = self.Beams[i]
 				if beam and beam.Parent then
 					local beamWidth = self:getBeamWidth(i, currentBaseSize)
@@ -2270,6 +2525,7 @@ function AISnake:Destroy()
 	
 	-- Spawn death orbs along the snake body
 	task.spawn(function()
+		-- No need to check _destroyed here since we're already dying
 		local DyingState = require(game.ServerStorage.ServerModules.States.DyingState)
 		
 		-- Calculate orb count based on snake length (similar to player death)
@@ -2803,13 +3059,27 @@ function AISnake:updateMovement(dt)
 	local headPos = self.HeadParts.head.Position
 	local pickupRadius = 8 -- Increased for better upgrade orb pickup (they're bigger)
 
-	-- CHECK FOR COLLISIONS WITH OTHER SNAKES
-	-- Check collision with player snakes
-	local Players = game:GetService("Players")
+	-- HIGH-PERFORMANCE COLLISION DETECTION
+	-- Only check collisions every few frames for performance
+	self._collisionCheckFrame = (self._collisionCheckFrame or 0) + 1
+	if self._collisionCheckFrame >= COLLISION_CHECK_INTERVAL then
+		self._collisionCheckFrame = 0
+		
+		-- Use optimized spatial grid collision detection
+		if not self._isSpawnProtected then
+			self:_checkCollisionsOptimized()
+		end
+	end
+	
+	-- Keep reference to head position for other checks
 	local myHead = self.HeadParts.head
 	local myHeadPos = myHead.Position
 	
-	-- Check collision with player snakes
+	-- Collision detection moved to optimized function above
+	
+	-- Skip old collision code
+	if false then
+	local Players = game:GetService("Players")
 	for _, player in pairs(Players:GetPlayers()) do
 		local snakeModel = nil
 		
@@ -2891,6 +3161,7 @@ function AISnake:updateMovement(dt)
 			end
 		end
 	end
+	end -- End of skipped collision code
 
 	local orbsToCheck = {}
 
@@ -3168,64 +3439,13 @@ function AISnake:updateMovement(dt)
 		end
 	end
 
-	-- CHECK FOR ORB PICKUPS (OPTIMIZED - run less frequently)
+	-- HIGH-PERFORMANCE ORB DETECTION USING SPATIAL GRID
 	self._orbCheckFrame = (self._orbCheckFrame or 0) + 1
 	if self._orbCheckFrame >= ORB_CHECK_INTERVAL then
 		self._orbCheckFrame = 0
 		
-		local orbsToCheck = {}
-		
-		-- Only check Orbs folder for better performance
-		local orbFolder = Workspace:FindFirstChild("OrbFolder") or Workspace:FindFirstChild("Orbs")
-		if orbFolder then
-			-- Limit orb checks for performance
-			local maxOrbsToCheck = 30
-			local orbCount = 0
-			
-			for _, orb in ipairs(orbFolder:GetChildren()) do
-				if orb:IsA("BasePart") and orbCount < maxOrbsToCheck then
-					orbCount = orbCount + 1
-					table.insert(orbsToCheck, orb)
-				end
-			end
-		end
-		
-		-- Now check collected orbs
-		for _, orb in ipairs(orbsToCheck) do
-			if orb:IsA("BasePart") and orb.Parent then
-				local dist = (orb.Position - headPos).Magnitude
-				
-				if dist <= pickupRadius then
-					-- Check if orb is already being collected
-					local isBeingCollected = orb:GetAttribute("BeingCollected")
-					if isBeingCollected then
-						continue -- Skip this orb
-					end
-					
-					-- Mark orb as being collected to prevent double collection
-					orb:SetAttribute("BeingCollected", true)
-					
-					-- Handle all orbs the same way
-					local valueObj = orb:FindFirstChild("Value")
-					local orbValue = valueObj and valueObj.Value or 1
-					
-					if orb.Name == "UpgradeOrb" then
-						-- Apply upgrade
-						if SnakeUpgrades then
-							print("🎯 AI Snake collecting upgrade orb!")
-							SnakeUpgrades.GiveUpgrade(self)
-						end
-					else
-						-- Regular orb - grow the snake
-						self:grow(orbValue)
-					end
-					
-					-- Destroy the orb
-					orb:Destroy()
-					break -- Only pick up one orb per check
-				end
-			end
-		end
+		-- Use optimized spatial grid orb detection
+		self:_checkOrbPickupOptimized()
 	end
 
 end
@@ -3422,20 +3642,37 @@ end)
 
 -- Get segment color matching OptimizedSnakeSystem
 function AISnake:getSegmentColor(index)
-	if not self.Config or not self.Config.BodyColors or #self.Config.BodyColors == 0 then
+	-- Always ensure we have a valid color, even if Config is not properly set
+	if not self.Config then
+		warn("AISnake:getSegmentColor - Config is nil, using default yellow")
+		return Color3.fromRGB(255, 255, 51) -- Default yellow color
+	end
+	
+	if not self.Config.BodyColors or type(self.Config.BodyColors) ~= "table" or #self.Config.BodyColors == 0 then
+		warn("AISnake:getSegmentColor - BodyColors is invalid, using default yellow")
 		return Color3.fromRGB(255, 255, 51) -- Default yellow color
 	end
 
 	if index == 0 then
-		return self.Config.HeadColor or self.Config.BodyColors[1]
+		local headColor = self.Config.HeadColor
+		if not headColor then
+			warn("AISnake:getSegmentColor - HeadColor is nil, using first body color")
+			headColor = self.Config.BodyColors[1] or Color3.fromRGB(255, 255, 51)
+		end
+		return headColor
 	elseif index <= 8 then -- HEAD_BLEND_SEGMENTS = 8
 		local blendFactor = (index / 8) ^ 0.7
-		local headColor = self.Config.HeadColor or self.Config.BodyColors[1]
-		local bodyColor = self.Config.BodyColors[1]
+		local headColor = self.Config.HeadColor or self.Config.BodyColors[1] or Color3.fromRGB(255, 255, 51)
+		local bodyColor = self.Config.BodyColors[1] or Color3.fromRGB(255, 255, 51)
 		return headColor:Lerp(bodyColor, blendFactor)
 	else
 		local colorIndex = ((index - 1) % #self.Config.BodyColors) + 1
-		return self.Config.BodyColors[colorIndex]
+		local color = self.Config.BodyColors[colorIndex]
+		if not color then
+			warn("AISnake:getSegmentColor - Color at index", colorIndex, "is nil, using default yellow")
+			return Color3.fromRGB(255, 255, 51)
+		end
+		return color
 	end
 end
 
