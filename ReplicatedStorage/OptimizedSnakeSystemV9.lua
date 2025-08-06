@@ -12,8 +12,16 @@ local Debris = game:GetService("Debris")
 -- Only get UserInputService on client
 local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
--- TIER 2: Catmull-Rom Spline Module for seamless path interpolation
-local CatmullRomSpline = require(ReplicatedStorage:WaitForChild("CatmullRomSpline"))
+-- Catmull-Rom Spline Module for seamless path interpolation (optional)
+local CatmullRomSpline
+local hasCatmullRomSpline = false
+local success = pcall(function()
+	CatmullRomSpline = require(ReplicatedStorage:WaitForChild("CatmullRomSpline", 2))
+	hasCatmullRomSpline = true
+end)
+if not success then
+	warn("CatmullRomSpline module not found - using fallback positioning")
+end
 
 -- LOD System Constants (ENHANCED FOR PERFORMANCE)
 local LOD_UPDATE_RATE = 5 -- Check LOD every N frames
@@ -959,8 +967,8 @@ function Snake:updateUnifiedBody()
 	-- Apply segment budget
 	local segmentsToUpdate = math.min(requiredSegments, segmentBudget)
 	
-	-- Update spline every frame for maximum smoothness
-	if #self.positionHistory >= 4 then
+	-- Update spline every frame for maximum smoothness (if module available)
+	if hasCatmullRomSpline and #self.positionHistory >= 4 then
 		-- Convert position history to Vector3 array for spline
 		local splinePoints = {}
 		-- Use more history points for smoother curves
@@ -1030,7 +1038,7 @@ function Snake:updateUnifiedBody()
 				self.leftPupil.CFrame = self.leftEye.CFrame * CFrame.new(0, 0, -eyeScale * 0.3)
 				self.rightPupil.CFrame = self.rightEye.CFrame * CFrame.new(0, 0, -eyeScale * 0.3)
 			elseif isVisible or i <= FORCE_RENDER_SEGMENTS then
-				-- Body segment positioning using spline-based interpolation
+				-- Body segment positioning
 				local targetPos
 				
 				if self.pathSpline and self.pathSpline:GetLength() > 0 then
@@ -1040,10 +1048,16 @@ function Snake:updateUnifiedBody()
 					local splineT = math.clamp(distanceAlongPath / splineLength, 0, 1)
 					targetPos = self.pathSpline:GetPoint(splineT)
 				else
-					-- Fallback for first few frames before spline is ready
+					-- Fallback to interpolated historical positions
 					local stepsBack = math.floor(i * spacing / 2)
 					local histData = self:getHistoricalPosition(stepsBack)
-					if histData then
+					local nextHistData = self:getHistoricalPosition(stepsBack + 1)
+					
+					if histData and nextHistData then
+						-- Smooth interpolation between history points
+						local alpha = (i * spacing / 2) % 1
+						targetPos = histData.position:Lerp(nextHistData.position, alpha)
+					elseif histData then
 						targetPos = histData.position
 					end
 				end
@@ -1059,6 +1073,21 @@ function Snake:updateUnifiedBody()
 						local splineT = math.min(i * spacing / (self.pathSpline:GetLength() or 1), 1)
 						local tangent = self.pathSpline:GetTangent(splineT)
 						segment.CFrame = CFrame.lookAt(segment.Position, segment.Position + tangent)
+					elseif not hasCatmullRomSpline and i > 0 then
+						-- Fallback: Reactive clamping when splines aren't available
+						local prevSegment = self.segments[i - 1]
+						if prevSegment and prevSegment.Parent then
+							local segmentDiff = segment.Position - prevSegment.Position
+							local currentDistance = segmentDiff.Magnitude
+							local desiredDistance = spacing * 0.95 -- 95% of spacing to ensure overlap
+							
+							-- If gap detected, forcibly clamp the segment
+							if currentDistance > desiredDistance then
+								local clampedPosition = prevSegment.Position + (segmentDiff.Unit * desiredDistance)
+								segment.Position = clampedPosition
+								segment.CFrame = CFrame.lookAt(clampedPosition, prevSegment.Position)
+							end
+						end
 					end
 
 					-- Use calculated segment size
@@ -1676,5 +1705,12 @@ function Snake:updateParticles()
 end
 
 -- System management functions
+
+-- Print system status
+if hasCatmullRomSpline then
+	print("✅ Snake System V10 loaded with Catmull-Rom spline interpolation")
+else
+	print("✅ Snake System V10 loaded with standard interpolation (spline module not found)")
+end
 
 return OptimizedSnakeSystemV9
