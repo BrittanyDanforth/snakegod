@@ -14,16 +14,31 @@ function AliveState.new(controller)
 end
 
 function AliveState:OnEnter()
-    -- Enable player controls
-    self.controller.collisionState.canCollide = true
+    -- Validate controller exists
+    if not self.controller then
+        warn("[AliveState] No controller found!")
+        return
+    end
+    
+    -- Enable player controls with proper nil checks
+    if self.controller.collisionState then
+        self.controller.collisionState.canCollide = true
+    else
+        warn("[AliveState] No collision state found!")
+    end
     
     -- Notify systems that player is alive
-    self.controller:notifyStateChange("Alive")
+    if self.controller.notifyStateChange then
+        self.controller:notifyStateChange("Alive")
+    end
     
     -- Reset any death-related attributes
     if self.controller.player then
         self.controller.player:SetAttribute("IsDead", false)
         self.controller.player:SetAttribute("IsReviving", false)
+        
+        -- Log successful entry
+        warn("[AliveState] Successfully entered for", self.controller.player.Name)
     end
 end
 
