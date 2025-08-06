@@ -28,15 +28,41 @@ local collisionSystem = nil
 local snakeSystemIntegration = nil
 local existingSnakes = {} -- Track snakes created by the old system
 
--- Wait for SnakeSystemIntegration to load
+-- Wait for snake system to be available
 local function waitForSnakeSystem()
-    -- Find the SnakeSystemIntegration script
-    for _, script in pairs(game:GetDescendants()) do
-        if script.Name == "SnakeSystemIntegration" and script:IsA("Script") then
-            snakeSystemIntegration = script
-            break
+    -- SnakeSystemIntegration should already be loaded
+    return true
+end
+
+-- Create/verify remote events
+local function createRemoteEvents()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        remotes = Instance.new("Folder")
+        remotes.Name = "Remotes"
+        remotes.Parent = ReplicatedStorage
+    end
+    
+    -- Create necessary remote events if they don't exist
+    local requiredRemotes = {
+        "PromptRevive",
+        "ReviveResponse",
+        "UpdateReviveCountdown",
+        "CancelRevive",
+        "ControlDeathUI",
+        "FreezeCamera",
+        "UpdateBoostState"
+    }
+    
+    for _, remoteName in ipairs(requiredRemotes) do
+        if not remotes:FindFirstChild(remoteName) then
+            local remote = Instance.new("RemoteEvent")
+            remote.Name = remoteName
+            remote.Parent = remotes
         end
     end
+    
+    -- warn("[MainServer] Created/verified remote events")
 end
 
 -- Initialize systems

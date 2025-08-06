@@ -55,23 +55,14 @@ function CollisionModule:stop()
 end
 
 function CollisionModule:update(dt)
-    self.frameCount = self.frameCount + 1
-    
-    -- Skip frames for performance
-    if self.frameCount % COLLISION_CONFIG.FRAME_SKIP ~= 0 then
-        return
-    end
-    
     -- Update cache periodically
-    local now = os.clock()
-    if now - self.lastCacheUpdate > self.CACHE_UPDATE_INTERVAL then
+    if tick() - self.lastCacheUpdate > self.CACHE_UPDATE_INTERVAL then
         self:_updateCaches()
-        self.lastCacheUpdate = now
     end
     
     -- Perform collision checks for each player controller
     local checksThisFrame = 0
-    for player, controller in pairs(self.controllers) do
+    for _, controller in pairs(self.playerControllers) do
         if controller and not controller.isDestroyed and controller.fsm then
             local state = controller.fsm:getCurrentState()
             
