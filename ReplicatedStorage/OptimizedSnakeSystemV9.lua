@@ -401,17 +401,21 @@ function Snake:getSegmentColor(index)
 		local r, g, b = HSVToRGB(hue, 1, 1)
 		return Color3.new(r, g, b)
 	else
-		-- Original color logic
+		-- Ensure we have valid colors with fallbacks
+		local defaultColor = Color3.new(0.2, 0.8, 0.2) -- Default green color
+		local bodyColors = self.config.BodyColors and #self.config.BodyColors > 0 and self.config.BodyColors or {defaultColor}
+		local headColor = self.config.HeadColor or bodyColors[1] or defaultColor
+		
+		-- Original color logic with fallbacks
 		if index == 0 then
-			return self.config.HeadColor or self.config.BodyColors[1]
+			return headColor
 		elseif index <= HEAD_BLEND_SEGMENTS then
 			local blendFactor = (index / HEAD_BLEND_SEGMENTS) ^ 0.7
-			local headColor = self.config.HeadColor or self.config.BodyColors[1]
-			local bodyColor = self.config.BodyColors[1]
+			local bodyColor = bodyColors[1]
 			return headColor:Lerp(bodyColor, blendFactor)
 		else
-			local colorIndex = ((index - 1) % #self.config.BodyColors) + 1
-			return self.config.BodyColors[colorIndex]
+			local colorIndex = ((index - 1) % #bodyColors) + 1
+			return bodyColors[colorIndex]
 		end
 	end
 end
