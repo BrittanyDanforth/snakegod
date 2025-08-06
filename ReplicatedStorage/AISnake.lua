@@ -1907,22 +1907,76 @@ function AISnake.new(startPosition, preservedPersonalityType)
 			return
 		end
 		
-		-- Add spawn protection visual effect (DISABLED - causing issues)
-		-- Commenting out ForceField creation to prevent visual glitches
-		--[[
+		-- Add custom spawn protection visual effect
 		if self._isSpawnProtected and self.HeadParts and self.HeadParts.head then
-			local protectionField = Instance.new("ForceField")
-			protectionField.Parent = self.Model
+			-- 1. Create a non-collidable, transparent sphere for our effect
+			local shieldVFX = Instance.new("Part")
+			shieldVFX.Name = "AISpawnShield"
+			shieldVFX.Shape = Enum.PartType.Ball
+			shieldVFX.Material = Enum.Material.ForceField -- Use the material for the cool texture
+			shieldVFX.Size = Vector3.new(1, 1, 1) -- Start small
+			shieldVFX.Color = Color3.fromRGB(170, 220, 255) -- A nice light blue
+			shieldVFX.Transparency = 0.7
+			shieldVFX.Anchored = false -- Not anchored since we're welding
+			shieldVFX.CanCollide = false
+			shieldVFX.CanQuery = false
+			shieldVFX.CanTouch = false
+			shieldVFX.Massless = true
 			
-			-- Remove protection field when spawn protection expires
+			-- 2. IMPORTANT: Position it at the head before parenting
+			shieldVFX.CFrame = self.HeadParts.head.CFrame
+			shieldVFX.Parent = self.HeadParts.head
+			
+			-- 3. Weld it to the head so it moves perfectly with the snake
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = shieldVFX
+			weld.Part1 = self.HeadParts.head
+			weld.Parent = shieldVFX
+			
+			-- 4. Animate the shield appearing and disappearing
+			local TweenService = game:GetService("TweenService")
+			local shieldSize = self.HeadParts.head.Size.X * 2.5 -- Make it nicely bigger than the head
+			
+			-- Tween In: Animate the shield growing into view
+			local tweenIn = TweenService:Create(shieldVFX, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				Size = Vector3.new(shieldSize, shieldSize, shieldSize),
+				Transparency = 0.5
+			})
+			tweenIn:Play()
+			
+			-- Add a pulsing glow effect
 			task.spawn(function()
-				task.wait(10) -- Match spawn protection time
-				if protectionField and protectionField.Parent then
-					protectionField:Destroy()
+				local pulseConnection
+				pulseConnection = game:GetService("RunService").Heartbeat:Connect(function()
+					if shieldVFX and shieldVFX.Parent then
+						local pulse = math.sin(tick() * 3) * 0.1 + 0.5
+						shieldVFX.Transparency = pulse
+					else
+						pulseConnection:Disconnect()
+					end
+				end)
+				
+				-- Wait for the spawn protection time to almost end
+				task.wait(9) -- Wait 9 seconds of the 10-second protection
+				
+				-- Stop pulsing
+				if pulseConnection then
+					pulseConnection:Disconnect()
+				end
+				
+				-- Tween Out: Animate the shield shrinking and fading away
+				if shieldVFX and shieldVFX.Parent then
+					local tweenOut = TweenService:Create(shieldVFX, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+						Size = Vector3.new(0.1, 0.1, 0.1),
+						Transparency = 1
+					})
+					tweenOut:Play()
+					
+					-- Clean up the part after the animation is done
+					game:GetService("Debris"):AddItem(shieldVFX, 1.1)
 				end
 			end)
 		end
-		--]]
 		
 		-- Make segments visible gradually
 		for i = 0, self.actualSegmentCount do
