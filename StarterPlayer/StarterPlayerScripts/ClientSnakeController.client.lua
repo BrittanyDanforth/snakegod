@@ -375,8 +375,8 @@ local function setupSnake(character)
         State.speedMode = mode
         State.targetSpeed = speedModes[mode] or Config.BaseSpeed
         
-        -- Visual feedback
-        local color = snakeConfig.HeadColor
+        -- Visual feedback with fallback color
+        local color = snakeConfig.HeadColor or Color3.new(0.2, 0.8, 0.2) -- Default green
         if mode == "super" then
             color = Color3.fromRGB(255, 255, 0)
         elseif mode == "ludicrous" then

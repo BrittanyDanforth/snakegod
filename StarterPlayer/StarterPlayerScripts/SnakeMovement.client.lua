@@ -22,7 +22,7 @@ else
 	Config = {
 		BaseSpeed = 50, -- Increased for proper speed
 		BoostSpeed = 100, -- Proper boost speed
-		TurnSpeed = 5.1, -- Slightly reduced
+		TurnSpeed = 8.5, -- Increased for more responsive Slither.io-style turning
 		CrawlSpeed = 8,
 		SlowSpeed = 18,
 		SuperSpeed = 55,
@@ -738,19 +738,32 @@ local function initializeForCharacter(character)
 			end
 		end
 
-		-- BUTTERY smooth direction changes (same for mobile and PC)
-		local turnRate = Config.TurnSpeed * dt * 0.9 -- Slightly slower for more realistic movement
-
+		-- SLITHER.IO STYLE SMOOTH TURNING
+		-- Dynamic turn rate based on angle difference for more responsive control
+		local angleDiff = math.acos(math.clamp(State.currentDirection:Dot(State.targetDirection), -1, 1))
+		local baseTurnRate = Config.TurnSpeed * dt
+		
+		-- Increase turn rate for sharper turns (more responsive)
+		local dynamicTurnRate = baseTurnRate * (1 + angleDiff * 0.5)
+		
+		-- Apply boost turn bonus for tighter control when boosting
+		if State.boosting then
+			dynamicTurnRate = dynamicTurnRate * 1.2
+		end
+		
 		-- Reduce turn rate when near walls to prevent shaking
 		if State.wallStuckTime > 0 then
-			turnRate = turnRate * 0.3  -- Much slower turning when stuck
+			dynamicTurnRate = dynamicTurnRate * 0.3
 		end
-
+		
+		-- Clamp turn rate for stability
+		dynamicTurnRate = math.min(dynamicTurnRate, 0.15) -- Max 15% turn per frame
+		
 		-- PROPER DIRECTION INTERPOLATION - Never let it become invalid
 		if State.targetDirection.Magnitude > 0.001 and State.currentDirection.Magnitude > 0.001 then
-			-- Only interpolate if both directions are valid
-			local newDirection = State.currentDirection:Lerp(State.targetDirection, turnRate)
-
+			-- Spherical interpolation for smoother rotation
+			local newDirection = State.currentDirection:Lerp(State.targetDirection, dynamicTurnRate)
+			
 			-- Always normalize after lerp
 			if newDirection.Magnitude > 0.001 then
 				State.currentDirection = newDirection.Unit
