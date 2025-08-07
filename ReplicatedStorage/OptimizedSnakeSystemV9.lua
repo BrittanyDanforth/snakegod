@@ -19,10 +19,8 @@ local HISTORY_SIZE = 1000 -- Position history for smooth following
 local LOD_UPDATE_RATE = 5 -- Check LOD every N frames
 
 -- Visual Constants
-local WAVE_AMPLITUDE = 0.8 -- Side-to-side movement amplitude
-local WAVE_FREQUENCY = 2.5 -- How fast the wave travels
-local BONE_SMOOTHING = 0.85 -- Smoothing factor (0-1)
-local SEGMENT_SPACING = 2.5 -- Distance between bone positions
+local BONE_SPACING_MULTIPLIER = 5 -- Steps back in history per bone (lower = tighter curves, higher = wider curves)
+-- Old complex constants no longer needed with simplified system
 
 -- LOD System
 local LOD_DISTANCES = {
@@ -87,7 +85,6 @@ function Snake.new(character, config)
 	-- Movement history
 	self.positionHistory = {}
 	self.historyIndex = 0
-	self.wavePhase = 0
 	
 	-- LOD state
 	self.lodLevel = "HIGH"
@@ -402,72 +399,25 @@ function Snake:updateBones(deltaTime)
 		-- No bones to update (fallback mode)
 		return 
 	end
-	
-	-- Update wave phase
-	self.wavePhase = self.wavePhase + WAVE_FREQUENCY * deltaTime
-	
-	-- Calculate spacing based on length
-	local segmentSpacing = SEGMENT_SPACING * (self.length / 85)
-	local stepsPerBone = math.ceil(segmentSpacing / 0.5)
-	
-	-- Update each bone
+
+	-- Loop through every bone in the snake
 	for i, bone in ipairs(self.boneChain) do
-		local boneInfo = self.boneData[bone.Name]
-		if not boneInfo then continue end
+		-- 1. Calculate how far back in the history this bone should look
+		-- This creates the spacing between segments.
+		local stepsBack = (i - 1) * BONE_SPACING_MULTIPLIER
+
+		-- 2. Get the historical position and direction
+		local historicalData = self:getHistoricalData(stepsBack)
 		
-		-- Get historical position
-		local historySteps = (i - 1) * stepsPerBone
-		local historicalData = self:getHistoricalData(historySteps)
-		
-		-- Calculate target position with wave motion
-		local targetPos = historicalData.position
-		local targetDir = historicalData.direction
-		
-		local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * WAVE_AMPLITUDE
-		local perpendicular = targetDir:Cross(Vector3.new(0, 1, 0)).Unit
-		local wavePos = targetPos + (perpendicular * waveOffset)
-		
-		-- Calculate bone transform
-		local meshInverse = self.meshPart.CFrame:Inverse()
-		local targetCFrame = CFrame.lookAt(wavePos, wavePos + targetDir)
-		local relativeCFrame = meshInverse * targetCFrame
-		
-		-- Add rotation
-		local twist = math.sin(self.wavePhase - (i * 0.3)) * 0.1
-		relativeCFrame = relativeCFrame * CFrame.Angles(0, 0, twist)
-		
-		-- Get original transform
-		local originalTransform = boneInfo.originalTransform
-		
-		-- Calculate final transform
-		local scale = 1 - ((i - 1) / #self.boneChain) * 0.3
-		local finalTransform = originalTransform * CFrame.new(relativeCFrame.Position * 0.1 * scale)
-		
-		-- Add rotation influence
-		finalTransform = finalTransform * CFrame.Angles(
-			math.rad(waveOffset * 2),
-			math.rad(twist * 30),
-			0
-		)
-		
-		-- Smooth the transform
-		self.previousTransforms = self.previousTransforms or {}
-		if self.previousTransforms[bone.Name] then
-			local prevTransform = self.previousTransforms[bone.Name]
-			local prevPos = prevTransform.Position
-			local newPos = finalTransform.Position
-			local smoothPos = prevPos:Lerp(newPos, 1 - BONE_SMOOTHING)
-			
-			local prevRot = prevTransform - prevTransform.Position
-			local newRot = finalTransform - finalTransform.Position
-			local smoothRot = prevRot:Lerp(newRot, 1 - BONE_SMOOTHING)
-			
-			finalTransform = CFrame.new(smoothPos) * smoothRot
+		if historicalData then
+			-- 3. The most important part: Set the World CFrame of the bone
+			-- We tell the bone to go to the historical position and face the historical direction.
+			-- This is much more direct and less error-prone.
+			bone.WorldCFrame = CFrame.lookAt(
+				historicalData.position,
+				historicalData.position + historicalData.direction
+			)
 		end
-		
-		-- Apply transform
-		bone.Transform = finalTransform
-		self.previousTransforms[bone.Name] = finalTransform
 	end
 end
 
