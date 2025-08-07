@@ -203,6 +203,11 @@ function Snake:createSkinnedMesh()
 	self.model.Name = "Snake_" .. self.player.Name
 	self.model.Parent = workspace
 	
+	-- Scale down the model if it's too large
+	-- You can adjust this scale factor as needed
+	local scaleFactor = 0.5 -- Make it half size
+	self.model:ScaleTo(scaleFactor)
+	
 	-- Find the mesh part (should be named "Circle" based on the structure)
 	self.meshPart = self.model:FindFirstChild("Circle")
 	if not self.meshPart then
@@ -219,6 +224,12 @@ function Snake:createSkinnedMesh()
 	self.meshPart.CanCollide = false
 	self.meshPart.CanQuery = true
 	self.meshPart.CanTouch = true
+	self.meshPart.Massless = true  -- Prevent physics issues
+	
+	-- Set network ownership to player for smooth movement
+	if self.player then
+		self.meshPart:SetNetworkOwner(self.player)
+	end
 	
 	-- Tag for collision
 	CollectionService:AddTag(self.meshPart, "SnakeBody")
@@ -231,14 +242,28 @@ function Snake:createSkinnedMesh()
 	-- Store initial poses from InitialPoses folder
 	self:storeInitialPoses()
 	
-	-- Weld to character
+	-- Temporarily anchor the root part to prevent flinging
+	local wasAnchored = self.rootPart.Anchored
+	self.rootPart.Anchored = true
+	
+	-- Position at character FIRST before welding
+	self.meshPart.CFrame = self.rootPart.CFrame
+	
+	-- Ensure no velocity before welding
+	self.meshPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	self.meshPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+	
+	-- Small wait to ensure physics settles
+	task.wait()
+	
+	-- Now weld to character
 	local weld = Instance.new("WeldConstraint")
 	weld.Part0 = self.meshPart
 	weld.Part1 = self.rootPart
 	weld.Parent = self.meshPart
 	
-	-- Position at character
-	self.meshPart.CFrame = self.rootPart.CFrame
+	-- Restore anchor state
+	self.rootPart.Anchored = wasAnchored
 	
 	-- Add visual effects
 	self:addVisualEffects()
