@@ -18,9 +18,7 @@ local BONE_UPDATE_RATE = 60 -- Hz for bone updates
 local HISTORY_SIZE = 1000 -- Position history for smooth following
 local LOD_UPDATE_RATE = 5 -- Check LOD every N frames
 
--- Visual Constants
-local BONE_SPACING_MULTIPLIER = 5 -- Steps back in history per bone (lower = tighter curves, higher = wider curves)
--- Old complex constants no longer needed with simplified system
+-- Visual Constants are now defined within functions for easier tuning
 
 -- LOD System
 local LOD_DISTANCES = {
@@ -195,15 +193,12 @@ function Snake:createSkinnedMesh()
 	
 	print("🦴 Found snake template:", templateModel.Name)
 	
-	-- Clone the template
+		-- Clone the template
 	self.model = templateModel:Clone()
 	self.model.Name = "Snake_" .. self.player.Name
 	self.model.Parent = workspace
 	
-	-- Scale down the model if it's too large
-	-- You can adjust this scale factor as needed
-	local scaleFactor = 0.5 -- Make it half size
-	self.model:ScaleTo(scaleFactor)
+	-- Do NOT scale the model - use the size from Blender
 	
 	-- Find the mesh part (should be named "Circle" based on the structure)
 	self.meshPart = self.model:FindFirstChild("Circle")
@@ -395,28 +390,37 @@ function Snake:getHistoricalData(stepsBack)
 end
 
 function Snake:updateBones(deltaTime)
-	if not self.boneChain or #self.boneChain == 0 then 
-		-- No bones to update (fallback mode)
-		return 
-	end
+	if not self.boneChain or #self.boneChain == 0 then return end
 
-	-- Loop through every bone in the snake
+	-- This is the single most important variable for the snake's look.
+	-- Lower number = tighter, more frequent curves.
+	-- Higher number = wider, more spread-out curves.
+	-- Start with a value around 3.
+	local BONE_SPACING_MULTIPLIER = 3
+
+	-- Loop through every bone in the snake, from head to tail
 	for i, bone in ipairs(self.boneChain) do
-		-- 1. Calculate how far back in the history this bone should look
-		-- This creates the spacing between segments.
+		
+		-- 1. Calculate how far back in the player's movement history this bone should look.
+		-- This creates the "follow the leader" effect.
 		local stepsBack = (i - 1) * BONE_SPACING_MULTIPLIER
 
-		-- 2. Get the historical position and direction
+		-- 2. Get the CFrame (position and rotation) from that point in history.
 		local historicalData = self:getHistoricalData(stepsBack)
 		
 		if historicalData then
-			-- 3. The most important part: Set the World CFrame of the bone
-			-- We tell the bone to go to the historical position and face the historical direction.
-			-- This is much more direct and less error-prone.
-			bone.WorldCFrame = CFrame.lookAt(
+			-- 3. This is the magic. We set the bone's WorldCFrame directly.
+			-- This is far more stable than complex relative math.
+			-- The bone is told to go to the historical position and face the historical direction.
+			local targetCFrame = CFrame.lookAt(
 				historicalData.position,
 				historicalData.position + historicalData.direction
 			)
+
+			-- 4. To make the movement buttery smooth, we Lerp (interpolate) from the
+			-- bone's current position to its target position. This prevents jittering on turns.
+			local smoothingFactor = 0.5 -- A value between 0 (stiff) and 1 (instant)
+			bone.WorldCFrame = bone.WorldCFrame:Lerp(targetCFrame, smoothingFactor)
 		end
 	end
 end
