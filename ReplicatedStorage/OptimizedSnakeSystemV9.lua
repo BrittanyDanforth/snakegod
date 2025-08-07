@@ -1,38 +1,509 @@
--- OptimizedSnakeSystemV9.lua
--- Redirects to the new SkinnedMeshSnakeSystem for bone-based animation
--- This maintains backward compatibility while using the new system
+-- Optimized Snake System V11 - SKINNED MESH WITH BONES
+-- Uses a single rigged mesh with bone animation for zero gaps and maximum performance
+-- Automatically detects and animates bones from your Blender model
 
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local SkinnedMeshSnakeSystem = require(ReplicatedStorage:WaitForChild("SkinnedMeshSnakeSystem"))
+local CollectionService = game:GetService("CollectionService")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
--- Export the same interface as before for compatibility
+-- Performance Constants
+local BONE_UPDATE_RATE = 60 -- Hz for bone updates
+local HISTORY_SIZE = 1000 -- Position history for smooth following
+local LOD_UPDATE_RATE = 5 -- Check LOD every N frames
+
+-- Visual Constants
+local WAVE_AMPLITUDE = 0.8 -- Side-to-side movement amplitude
+local WAVE_FREQUENCY = 2.5 -- How fast the wave travels
+local BONE_SMOOTHING = 0.85 -- Smoothing factor (0-1)
+local SEGMENT_SPACING = 2.5 -- Distance between bone positions
+
+-- LOD System
+local LOD_DISTANCES = {
+	HIGH = 100,
+	MEDIUM = 250,
+	LOW = 500,
+	CULLED = 1000
+}
+
+-- Create network events
+local remoteEvents = {}
+local function createNetworkEvents()
+	local folder = ReplicatedStorage:FindFirstChild("SnakeNetworking")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "SnakeNetworking"
+		folder.Parent = ReplicatedStorage
+	end
+
+	local events = {"PositionUpdate", "LengthUpdate", "SkinUpdate", "BoostUpdate"}
+	for _, eventName in ipairs(events) do
+		local event = folder:FindFirstChild(eventName)
+		if not event then
+			event = Instance.new("RemoteEvent")
+			event.Name = eventName
+			event.Parent = folder
+		end
+		remoteEvents[eventName:lower()] = event
+	end
+end
+
+-- Skinned Mesh Snake Class
+local Snake = {}
+Snake.__index = Snake
+
+function Snake.new(character, config)
+	local self = setmetatable({}, Snake)
+	
+	-- Core properties
+	self.character = character
+	self.rootPart = character:WaitForChild("HumanoidRootPart")
+	self.humanoid = character:WaitForChild("Humanoid")
+	self.player = Players:GetPlayerFromCharacter(character)
+	self.config = config or {}
+	
+	-- Ensure default configuration
+	self.config.HeadColor = self.config.HeadColor or Color3.fromRGB(76, 217, 100)
+	self.config.BodyColors = self.config.BodyColors or {
+		Color3.fromRGB(76, 217, 100),
+		Color3.fromRGB(51, 163, 75)
+	}
+	self.config.InitialLength = self.config.InitialLength or 85
+	
+	-- State
+	self.isAlive = true
+	self.length = self.config.InitialLength
+	self.frameCount = 0
+	self.lastUpdate = tick()
+	self.isBoosting = false
+	
+	-- Movement history
+	self.positionHistory = {}
+	self.historyIndex = 0
+	self.wavePhase = 0
+	
+	-- LOD state
+	self.lodLevel = "HIGH"
+	self.isLocalPlayer = (self.player == Players.LocalPlayer)
+	self.updateFrequency = 1
+	
+	-- Hide character
+	self:hideCharacter()
+	
+	-- Create the skinned mesh
+	if not self:createSkinnedMesh() then
+		warn("Failed to create skinned mesh snake for", self.player.Name)
+		return nil
+	end
+	
+	-- Initialize position history
+	self:initializeHistory()
+	
+	-- Setup update connections
+	self:setupUpdateConnections()
+	
+	print("✅ Skinned Mesh Snake created for", self.player.Name)
+	return self
+end
+
+function Snake:hideCharacter()
+	for _, part in pairs(self.character:GetDescendants()) do
+		if part:IsA("BasePart") and part ~= self.rootPart then
+			part.Transparency = 1
+			part.CanCollide = false
+			part.CanQuery = false
+		elseif part:IsA("Decal") or part:IsA("Texture") then
+			part.Transparency = 1
+		elseif part:IsA("Accessory") then
+			part:Destroy()
+		end
+	end
+	
+	self.rootPart.Transparency = 1
+	self.rootPart.CanCollide = true
+	self.rootPart.CanQuery = false
+	self.humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+end
+
+function Snake:createSkinnedMesh()
+	-- Get the snake template
+	local templateModel = ReplicatedStorage:FindFirstChild("SkinnedSnakeTemplate") or 
+	                     ReplicatedStorage:FindFirstChild("slither_snake_rigged")
+	
+	if not templateModel then
+		warn("❌ Snake template not found! Looking for 'SkinnedSnakeTemplate' or 'slither_snake_rigged' in ReplicatedStorage")
+		return false
+	end
+	
+	-- Clone the template
+	self.model = templateModel:Clone()
+	self.model.Name = "Snake_" .. self.player.Name
+	self.model.Parent = workspace
+	
+	-- Find the mesh part (should be named "Circle" based on the structure)
+	self.meshPart = self.model:FindFirstChild("Circle")
+	if not self.meshPart then
+		self.meshPart = self.model:FindFirstChildOfClass("MeshPart")
+	end
+	
+	if not self.meshPart then
+		warn("❌ No MeshPart found in snake model!")
+		return false
+	end
+	
+	-- Setup mesh properties
+	self.meshPart.Anchored = false
+	self.meshPart.CanCollide = false
+	self.meshPart.CanQuery = true
+	self.meshPart.CanTouch = true
+	
+	-- Tag for collision
+	CollectionService:AddTag(self.meshPart, "SnakeBody")
+	self.meshPart:SetAttribute("OwnerName", self.player.Name)
+	self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
+	
+	-- Find and organize bones
+	self:findAndOrganizeBones()
+	
+	-- Store initial poses from InitialPoses folder
+	self:storeInitialPoses()
+	
+	-- Weld to character
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = self.meshPart
+	weld.Part1 = self.rootPart
+	weld.Parent = self.meshPart
+	
+	-- Position at character
+	self.meshPart.CFrame = self.rootPart.CFrame
+	
+	-- Add visual effects
+	self:addVisualEffects()
+	
+	return true
+end
+
+function Snake:findAndOrganizeBones()
+	self.bones = {}
+	self.boneChain = {}
+	self.boneData = {}
+	
+	-- Find the first bone (should be named "Bone")
+	local firstBone = self.meshPart:FindFirstChild("Bone")
+	if not firstBone then
+		firstBone = self.meshPart:FindFirstChildOfClass("Bone")
+	end
+	
+	if not firstBone then
+		warn("❌ No bones found in mesh!")
+		return
+	end
+	
+	-- Follow the bone chain automatically
+	local currentBone = firstBone
+	local boneIndex = 1
+	
+	while currentBone do
+		table.insert(self.boneChain, currentBone)
+		self.boneData[currentBone.Name] = {
+			bone = currentBone,
+			index = boneIndex,
+			originalTransform = currentBone.Transform
+		}
+		
+		-- Find next bone in chain (child of current)
+		local nextBone = nil
+		for _, child in pairs(currentBone:GetChildren()) do
+			if child:IsA("Bone") then
+				nextBone = child
+				break
+			end
+		end
+		
+		currentBone = nextBone
+		boneIndex = boneIndex + 1
+	end
+	
+	print(string.format("✅ Found %d bones in chain:", #self.boneChain))
+	for i, bone in ipairs(self.boneChain) do
+		print(string.format("  [%d] %s", i, bone.Name))
+	end
+end
+
+function Snake:storeInitialPoses()
+	local initialPosesFolder = self.model:FindFirstChild("InitialPoses")
+	if not initialPosesFolder then
+		warn("⚠️ InitialPoses folder not found")
+		return
+	end
+	
+	self.initialPoses = {}
+	
+	-- Store pose data for each bone
+	for _, boneInfo in pairs(self.boneData) do
+		local bone = boneInfo.bone
+		local boneName = bone.Name
+		
+		self.initialPoses[boneName] = {
+			composited = initialPosesFolder:FindFirstChild(boneName .. "_Composited"),
+			initial = initialPosesFolder:FindFirstChild(boneName .. "_Initial"),
+			original = initialPosesFolder:FindFirstChild(boneName .. "_Original"),
+			transform = bone.Transform
+		}
+	end
+end
+
+function Snake:addVisualEffects()
+	-- Add glow light
+	self.headLight = Instance.new("PointLight")
+	self.headLight.Brightness = 2
+	self.headLight.Range = 15
+	self.headLight.Color = self.config.HeadColor
+	self.headLight.Shadows = false
+	self.headLight.Parent = self.meshPart
+	
+	-- Add particle emitter for boost
+	self.boostParticles = Instance.new("ParticleEmitter")
+	self.boostParticles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	self.boostParticles.Rate = 0
+	self.boostParticles.Lifetime = NumberRange.new(0.5, 1)
+	self.boostParticles.Speed = NumberRange.new(5, 10)
+	self.boostParticles.SpreadAngle = Vector2.new(15, 15)
+	self.boostParticles.Color = ColorSequence.new(self.config.HeadColor)
+	self.boostParticles.LightEmission = 1
+	self.boostParticles.Parent = self.meshPart
+end
+
+function Snake:initializeHistory()
+	local startPos = self.rootPart.Position
+	local startDir = self.rootPart.CFrame.LookVector
+	
+	for i = 1, HISTORY_SIZE do
+		self.positionHistory[i] = {
+			position = startPos - startDir * (i * 0.5),
+			direction = startDir,
+			time = tick() - (i * 0.016)
+		}
+	end
+end
+
+function Snake:updateHistory()
+	self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
+	
+	self.positionHistory[self.historyIndex] = {
+		position = self.rootPart.Position,
+		direction = self.rootPart.CFrame.LookVector,
+		time = tick()
+	}
+end
+
+function Snake:getHistoricalData(stepsBack)
+	local index = ((self.historyIndex - stepsBack - 1) % HISTORY_SIZE) + 1
+	return self.positionHistory[index] or self.positionHistory[self.historyIndex]
+end
+
+function Snake:updateBones(deltaTime)
+	if not self.boneChain or #self.boneChain == 0 then return end
+	
+	-- Update wave phase
+	self.wavePhase = self.wavePhase + WAVE_FREQUENCY * deltaTime
+	
+	-- Calculate spacing based on length
+	local segmentSpacing = SEGMENT_SPACING * (self.length / 85)
+	local stepsPerBone = math.ceil(segmentSpacing / 0.5)
+	
+	-- Update each bone
+	for i, bone in ipairs(self.boneChain) do
+		local boneInfo = self.boneData[bone.Name]
+		if not boneInfo then continue end
+		
+		-- Get historical position
+		local historySteps = (i - 1) * stepsPerBone
+		local historicalData = self:getHistoricalData(historySteps)
+		
+		-- Calculate target position with wave motion
+		local targetPos = historicalData.position
+		local targetDir = historicalData.direction
+		
+		local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * WAVE_AMPLITUDE
+		local perpendicular = targetDir:Cross(Vector3.new(0, 1, 0)).Unit
+		local wavePos = targetPos + (perpendicular * waveOffset)
+		
+		-- Calculate bone transform
+		local meshInverse = self.meshPart.CFrame:Inverse()
+		local targetCFrame = CFrame.lookAt(wavePos, wavePos + targetDir)
+		local relativeCFrame = meshInverse * targetCFrame
+		
+		-- Add rotation
+		local twist = math.sin(self.wavePhase - (i * 0.3)) * 0.1
+		relativeCFrame = relativeCFrame * CFrame.Angles(0, 0, twist)
+		
+		-- Get original transform
+		local originalTransform = boneInfo.originalTransform
+		
+		-- Calculate final transform
+		local scale = 1 - ((i - 1) / #self.boneChain) * 0.3
+		local finalTransform = originalTransform * CFrame.new(relativeCFrame.Position * 0.1 * scale)
+		
+		-- Add rotation influence
+		finalTransform = finalTransform * CFrame.Angles(
+			math.rad(waveOffset * 2),
+			math.rad(twist * 30),
+			0
+		)
+		
+		-- Smooth the transform
+		self.previousTransforms = self.previousTransforms or {}
+		if self.previousTransforms[bone.Name] then
+			local prevTransform = self.previousTransforms[bone.Name]
+			local prevPos = prevTransform.Position
+			local newPos = finalTransform.Position
+			local smoothPos = prevPos:Lerp(newPos, 1 - BONE_SMOOTHING)
+			
+			local prevRot = prevTransform - prevTransform.Position
+			local newRot = finalTransform - finalTransform.Position
+			local smoothRot = prevRot:Lerp(newRot, 1 - BONE_SMOOTHING)
+			
+			finalTransform = CFrame.new(smoothPos) * smoothRot
+		end
+		
+		-- Apply transform
+		bone.Transform = finalTransform
+		self.previousTransforms[bone.Name] = finalTransform
+	end
+end
+
+function Snake:updateLOD()
+	if not workspace.CurrentCamera then return end
+	
+	local camera = workspace.CurrentCamera
+	local distance = (camera.CFrame.Position - self.meshPart.Position).Magnitude
+	
+	local newLOD = "CULLED"
+	if distance < LOD_DISTANCES.HIGH then
+		newLOD = "HIGH"
+	elseif distance < LOD_DISTANCES.MEDIUM then
+		newLOD = "MEDIUM"
+	elseif distance < LOD_DISTANCES.LOW then
+		newLOD = "LOW"
+	end
+	
+	if newLOD ~= self.lodLevel then
+		self.lodLevel = newLOD
+		self:applyLODSettings()
+	end
+end
+
+function Snake:applyLODSettings()
+	if self.lodLevel == "CULLED" then
+		self.model.Parent = nil
+	else
+		self.model.Parent = workspace
+		
+		if self.lodLevel == "LOW" then
+			self.updateFrequency = 4
+		elseif self.lodLevel == "MEDIUM" then
+			self.updateFrequency = 2
+		else
+			self.updateFrequency = 1
+		end
+	end
+end
+
+function Snake:setupUpdateConnections()
+	-- Main update loop
+	self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
+		if not self.isAlive then return end
+		
+		self.frameCount = self.frameCount + 1
+		
+		-- Update position history
+		self:updateHistory()
+		
+		-- Update bones based on LOD
+		if self.frameCount % self.updateFrequency == 0 then
+			self:updateBones(deltaTime)
+		end
+		
+		-- Update LOD
+		if self.frameCount % 10 == 0 then
+			self:updateLOD()
+		end
+		
+		-- Keep mesh attached
+		if self.meshPart and self.meshPart.Parent then
+			self.meshPart.CFrame = self.rootPart.CFrame
+		end
+	end)
+	
+	-- Network updates (client only)
+	if RunService:IsClient() and self.isLocalPlayer then
+		self.networkConnection = RunService.Heartbeat:Connect(function()
+			if self.frameCount % 30 == 0 and remoteEvents.positionupdate then
+				remoteEvents.positionupdate:FireServer(self.rootPart.Position)
+			end
+		end)
+	end
+end
+
+function Snake:setBoost(boosting)
+	self.isBoosting = boosting
+	if self.boostParticles then
+		self.boostParticles.Rate = boosting and 100 or 0
+	end
+end
+
+function Snake:grow(amount)
+	self.length = self.length + amount
+	-- Could add scaling effects here
+end
+
+function Snake:destroy()
+	self.isAlive = false
+	
+	if self.updateConnection then
+		self.updateConnection:Disconnect()
+	end
+	
+	if self.networkConnection then
+		self.networkConnection:Disconnect()
+	end
+	
+	if self.model then
+		self.model:Destroy()
+	end
+	
+	print("❌ Snake destroyed for", self.player.Name)
+end
+
+-- Module functions
 local OptimizedSnakeSystemV9 = {}
 
 function OptimizedSnakeSystemV9.init()
-    SkinnedMeshSnakeSystem.init()
+	createNetworkEvents()
+	print("✅ OptimizedSnakeSystemV9 (Skinned Mesh) initialized")
 end
 
 function OptimizedSnakeSystemV9.createSnake(character, config)
-    return SkinnedMeshSnakeSystem.createSnake(character, config)
+	return Snake.new(character, config)
 end
 
 function OptimizedSnakeSystemV9.createSnakeFromSavedState(character, config, savedState)
-    -- Create a snake with the saved state
-    local snake = SkinnedMeshSnakeSystem.createSnake(character, config)
-    
-    -- Apply saved state if provided
-    if savedState and snake then
-        if savedState.length then
-            snake.length = savedState.length
-        end
-        if savedState.isAlive ~= nil then
-            snake.isAlive = savedState.isAlive
-        end
-    end
-    
-    return snake
+	local snake = Snake.new(character, config)
+	
+	if savedState and snake then
+		if savedState.length then
+			snake.length = savedState.length
+		end
+		if savedState.isAlive ~= nil then
+			snake.isAlive = savedState.isAlive
+		end
+	end
+	
+	return snake
 end
-
-print("✅ OptimizedSnakeSystemV9 redirecting to SkinnedMeshSnakeSystem")
 
 return OptimizedSnakeSystemV9
