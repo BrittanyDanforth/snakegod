@@ -219,16 +219,23 @@ function Snake:createSkinnedMesh()
 		return false
 	end
 	
-	-- Setup mesh properties
+	-- Setup mesh properties for proper physics
 	self.meshPart.Anchored = false
-	self.meshPart.CanCollide = false
-	self.meshPart.CanQuery = true
-	self.meshPart.CanTouch = true
-	self.meshPart.Massless = true  -- Prevent physics issues
+	self.meshPart.CanCollide = false  -- No collision with world
+	self.meshPart.CanQuery = false    -- Don't interfere with raycasts
+	self.meshPart.CanTouch = true     -- Still detect touches for gameplay
+	self.meshPart.Massless = true     -- Prevent physics issues
+	
+	-- Ensure proper collision group (if exists)
+	pcall(function()
+		self.meshPart.CollisionGroup = "SnakeBodies"
+	end)
 	
 	-- Set network ownership to player for smooth movement
 	if self.player then
-		self.meshPart:SetNetworkOwner(self.player)
+		pcall(function()
+			self.meshPart:SetNetworkOwner(self.player)
+		end)
 	end
 	
 	-- Tag for collision
@@ -521,9 +528,26 @@ function Snake:setupUpdateConnections()
 			self:updateLOD()
 		end
 		
-		-- Keep mesh attached
+		-- Keep mesh attached and check weld
 		if self.meshPart and self.meshPart.Parent then
-			self.meshPart.CFrame = self.rootPart.CFrame
+			-- Check if weld still exists
+			local weld = self.meshPart:FindFirstChildOfClass("WeldConstraint")
+			if not weld or not weld.Part1 or weld.Part1 ~= self.rootPart then
+				-- Weld broke, recreate it
+				warn("⚠️ Weld broke, recreating...")
+				if weld then weld:Destroy() end
+				
+				local newWeld = Instance.new("WeldConstraint")
+				newWeld.Part0 = self.meshPart
+				newWeld.Part1 = self.rootPart
+				newWeld.Parent = self.meshPart
+			end
+			
+			-- The weld should handle positioning automatically
+			-- Only update CFrame if not welded
+			if not weld then
+				self.meshPart.CFrame = self.rootPart.CFrame
+			end
 		end
 	end)
 	
