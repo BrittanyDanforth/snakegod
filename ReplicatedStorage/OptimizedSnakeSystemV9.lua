@@ -392,35 +392,77 @@ end
 function Snake:updateBones(deltaTime)
 	if not self.boneChain or #self.boneChain == 0 then return end
 
-	-- This is the single most important variable for the snake's look.
-	-- Lower number = tighter, more frequent curves.
-	-- Higher number = wider, more spread-out curves.
-	-- Start with a value around 3.
-	local BONE_SPACING_MULTIPLIER = 3
+	--[[
+		TUNING PARAMETERS FOR THE SLITHER.IO FEEL:
+		
+		- NORMAL_SEGMENT_GAP: The distance between bones during normal movement. A smaller number 
+		  makes the snake's curves more detailed and less "gapped". THIS IS THE MOST IMPORTANT VALUE.
+		  Start with a small value like 0.75.
+		  
+		- BOOST_SEGMENT_GAP: The distance between bones when boosting. Making this larger than the 
+		  normal gap creates the visual "stretching" effect seen in slither.io.
+		  
+		- INTERPOLATION_SPEED: How fast the bones snap to their target position. For the slither.io feel,
+		  this should be extremely high. 1.0 is instant, 0.95 is extremely fast but can smooth over
+		  tiny network jitters. A low value (like your old 0.5) is what causes ugly, lagging turns.
+	]]
+	local NORMAL_SEGMENT_GAP = 0.75 
+	local BOOST_SEGMENT_GAP = 1.5  
+	local INTERPOLATION_SPEED = 0.95 
 
-	-- Loop through every bone in the snake, from head to tail
+	-- Determine the current gap distance based on whether the snake is boosting
+	local currentSegmentGap = self.isBoosting and BOOST_SEGMENT_GAP or NORMAL_SEGMENT_GAP
+
+	-- This is the "Follow the Leader" logic, reimagined for perfect fluidity.
 	for i, bone in ipairs(self.boneChain) do
-		
-		-- 1. Calculate how far back in the player's movement history this bone should look.
-		-- This creates the "follow the leader" effect.
-		local stepsBack = (i - 1) * BONE_SPACING_MULTIPLIER
 
-		-- 2. Get the CFrame (position and rotation) from that point in history.
-		local historicalData = self:getHistoricalData(stepsBack)
+		-- 1. Calculate the 'target distance' along the snake's historical path for this bone.
+		--    Each bone will be a set distance behind the one in front of it.
+		local targetDistance = (i - 1) * currentSegmentGap
 		
+		-- 2. Find the exact point in our position history that matches this target distance.
+		--    Instead of just grabbing a far-off point (like your old system), we now iterate
+		--    backwards through the high-fidelity history to find the *precise* CFrame.
+		local historicalData = nil
+		local distanceTraveled = 0
+		local lastPosition = self.rootPart.Position
+		
+		for j = 1, HISTORY_SIZE - 1 do
+			local historyIndex = ((self.historyIndex - j - 1) % HISTORY_SIZE) + 1
+			local historicalPoint = self.positionHistory[historyIndex]
+			
+			if not historicalPoint then break end
+			
+			-- Add the distance between this history point and the previous one
+			distanceTraveled = distanceTraveled + (lastPosition - historicalPoint.position).Magnitude
+			
+			if distanceTraveled >= targetDistance then
+				-- We found the point in history that our bone should be at.
+				historicalData = historicalPoint
+				break
+			end
+			
+			lastPosition = historicalPoint.position
+		end
+		
+		-- Fallback: If the history isn't long enough, use the last available point.
+		if not historicalData then
+			historicalData = self:getHistoricalData(HISTORY_SIZE - 1)
+		end
+
 		if historicalData then
-			-- 3. This is the magic. We set the bone's WorldCFrame directly.
-			-- This is far more stable than complex relative math.
-			-- The bone is told to go to the historical position and face the historical direction.
+			-- 3. This is the magic. We define the target CFrame for the bone.
+			--    Position: The historical position.
+			--    Rotation: Pointing in the historical direction of movement.
 			local targetCFrame = CFrame.lookAt(
 				historicalData.position,
 				historicalData.position + historicalData.direction
 			)
 
-			-- 4. To make the movement buttery smooth, we Lerp (interpolate) from the
-			-- bone's current position to its target position. This prevents jittering on turns.
-			local smoothingFactor = 0.5 -- A value between 0 (stiff) and 1 (instant)
-			bone.WorldCFrame = bone.WorldCFrame:Lerp(targetCFrame, smoothingFactor)
+			-- 4. Snap the bone to the target CFrame with extremely high interpolation.
+			--    This eliminates the lag and makes the body perfectly adhere to the path,
+			--    creating that iconic fluid motion.
+			bone.WorldCFrame = bone.WorldCFrame:Lerp(targetCFrame, INTERPOLATION_SPEED)
 		end
 	end
 end
