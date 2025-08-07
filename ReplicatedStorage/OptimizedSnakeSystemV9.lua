@@ -2,6 +2,9 @@
 -- Uses a single rigged mesh with bone animation for zero gaps and maximum performance
 -- Automatically detects and animates bones from your Blender model
 
+print("🦴 Loading OptimizedSnakeSystemV9 - BONE-BASED VERSION")
+print("🦴 This is the NEW skinned mesh version, not the old part-based system")
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -56,6 +59,7 @@ local Snake = {}
 Snake.__index = Snake
 
 function Snake.new(character, config)
+	print("🦴 Creating new skinned mesh snake for", character.Name)
 	local self = setmetatable({}, Snake)
 	
 	-- Core properties
@@ -109,6 +113,50 @@ function Snake.new(character, config)
 	return self
 end
 
+function Snake:createFallbackSnake()
+	-- Create a simple model as fallback
+	self.model = Instance.new("Model")
+	self.model.Name = "FallbackSnake_" .. self.player.Name
+	self.model.Parent = workspace
+	
+	-- Create a simple part
+	self.meshPart = Instance.new("Part")
+	self.meshPart.Name = "SnakeBody"
+	self.meshPart.Size = Vector3.new(4, 4, 4)
+	self.meshPart.Shape = Enum.PartType.Ball
+	self.meshPart.Material = Enum.Material.Neon
+	self.meshPart.BrickColor = BrickColor.new("Lime green")
+	self.meshPart.TopSurface = Enum.SurfaceType.Smooth
+	self.meshPart.BottomSurface = Enum.SurfaceType.Smooth
+	self.meshPart.Anchored = false
+	self.meshPart.CanCollide = false
+	self.meshPart.Parent = self.model
+	
+	-- Tag for collision
+	CollectionService:AddTag(self.meshPart, "SnakeBody")
+	self.meshPart:SetAttribute("OwnerName", self.player.Name)
+	self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
+	
+	-- No bones for fallback
+	self.boneChain = {}
+	self.boneData = {}
+	
+	-- Weld to character
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = self.meshPart
+	weld.Part1 = self.rootPart
+	weld.Parent = self.meshPart
+	
+	-- Position at character
+	self.meshPart.CFrame = self.rootPart.CFrame
+	
+	-- Add basic visual effects
+	self:addVisualEffects()
+	
+	warn("⚠️ Using fallback snake - no bone animation available")
+	return true
+end
+
 function Snake:hideCharacter()
 	for _, part in pairs(self.character:GetDescendants()) do
 		if part:IsA("BasePart") and part ~= self.rootPart then
@@ -129,14 +177,26 @@ function Snake:hideCharacter()
 end
 
 function Snake:createSkinnedMesh()
+	print("🦴 Looking for skinned snake template...")
+	
 	-- Get the snake template
 	local templateModel = ReplicatedStorage:FindFirstChild("SkinnedSnakeTemplate") or 
 	                     ReplicatedStorage:FindFirstChild("slither_snake_rigged")
 	
 	if not templateModel then
 		warn("❌ Snake template not found! Looking for 'SkinnedSnakeTemplate' or 'slither_snake_rigged' in ReplicatedStorage")
-		return false
+		warn("❌ Please ensure your rigged snake model is placed directly in ReplicatedStorage")
+		warn("❌ Available items in ReplicatedStorage:")
+		for _, item in pairs(ReplicatedStorage:GetChildren()) do
+			warn("  - " .. item.Name .. " (" .. item.ClassName .. ")")
+		end
+		
+		-- FALLBACK: Create a simple part-based snake for now
+		warn("⚠️ FALLBACK: Creating simple part snake instead")
+		return self:createFallbackSnake()
 	end
+	
+	print("🦴 Found snake template:", templateModel.Name)
 	
 	-- Clone the template
 	self.model = templateModel:Clone()
@@ -306,7 +366,10 @@ function Snake:getHistoricalData(stepsBack)
 end
 
 function Snake:updateBones(deltaTime)
-	if not self.boneChain or #self.boneChain == 0 then return end
+	if not self.boneChain or #self.boneChain == 0 then 
+		-- No bones to update (fallback mode)
+		return 
+	end
 	
 	-- Update wave phase
 	self.wavePhase = self.wavePhase + WAVE_FREQUENCY * deltaTime
@@ -484,7 +547,8 @@ local OptimizedSnakeSystemV9 = {}
 
 function OptimizedSnakeSystemV9.init()
 	createNetworkEvents()
-	print("✅ OptimizedSnakeSystemV9 (Skinned Mesh) initialized")
+	print("🦴 ✅ OptimizedSnakeSystemV9 (Skinned Mesh with Bones) initialized")
+	print("🦴 Looking for snake template: 'SkinnedSnakeTemplate' or 'slither_snake_rigged' in ReplicatedStorage")
 end
 
 function OptimizedSnakeSystemV9.createSnake(character, config)
