@@ -1,6 +1,6 @@
--- Optimized Snake System V11 - SKINNED MESH REVOLUTION
--- Complete rewrite to use a single skinned mesh with bone-based animation
--- Zero gaps, maximum performance, and professional-grade visuals
+-- Optimized Snake System V9 - SKINNED MESH VERSION
+-- Uses a single skinned mesh with bones instead of hundreds of parts
+-- Provides massive performance improvements and perfectly smooth rendering
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -8,460 +8,622 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
-local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
--- Constants for the skinned mesh system
-local MESH_ASSET_ID = "rbxassetid://YOUR_MESH_ID" -- Will be replaced with actual asset ID
-local BONE_COUNT = 15 -- Should match the number of bones in your Blender model
-local MAX_SNAKE_LENGTH = 500 -- Maximum segments the snake can grow to
-local MIN_SNAKE_LENGTH = 10 -- Starting length
+-- Catmull-Rom Spline Module for smooth path interpolation
+local CatmullRomSpline
+local hasCatmullRomSpline = false
+local success = pcall(function()
+	CatmullRomSpline = require(ReplicatedStorage:WaitForChild("CatmullRomSpline", 2))
+	hasCatmullRomSpline = true
+end)
+if not success then
+	warn("CatmullRomSpline module not found - using fallback positioning")
+end
 
--- Performance Constants
-local UPDATE_RATE = 60 -- Hz for bone updates
-local NETWORK_UPDATE_RATE = 20 -- Hz for network sync
-local HISTORY_SIZE = 1000 -- Position history for smooth following
+-- Performance Settings
+local SEGMENT_UPDATE_RATE = 75
+local NETWORK_UPDATE_RATE = 25
+local HISTORY_SIZE = 2000
+local GROWTH_CHECK_INTERVAL = 10
 
 -- Visual Constants
-local BASE_SCALE = 1.0 -- Base scale of the mesh
-local MAX_SCALE = 3.5 -- Maximum scale when fully grown
-local GLOW_INTENSITY = 2.0
-local PARTICLE_RATE = 100 -- Base particle emission rate
+local BASE_SIZE = 3.5 -- Base size for the snake
+local MAX_SIZE_MULTIPLIER = 3.5 -- Maximum size growth
+local GLOW_INTENSITY = 2
+local GLOW_RANGE_BASE = 15
+local HEAD_SIZE_MULTIPLIER = 1.05
+local VISUAL_SMOOTHING_FACTOR = 0.6
 
--- Movement Constants
-local BASE_SPEED = 20 -- Base movement speed
-local BOOST_MULTIPLIER = 1.5 -- Speed multiplier when boosting
-local TURN_RATE = 2.5 -- Radians per second
-local WAVE_AMPLITUDE = 1.2 -- Side-to-side movement amplitude
-local WAVE_FREQUENCY = 2.0 -- How fast the wave travels down the body
+-- Growth Animation Constants
+local GROWTH_SPEED = 0.15
+local GROWTH_PULSE_STRENGTH = 0.1
 
--- Growth Constants
-local GROWTH_RATE = 0.1 -- How fast the snake grows (units per food)
-local SCALE_PER_LENGTH = 0.005 -- How much the scale increases per length unit
+-- Bone Animation Constants
+local BONE_SPACING = 2.0 -- Distance between bones in world units
+local BONE_BLEND_FACTOR = 0.8 -- Smoothing between bone updates
+local MAX_BONES = 50 -- Maximum bones we'll animate
 
--- LOD System for performance
-local LOD_DISTANCES = {
-    HIGH = 100,    -- Full quality within 100 studs
-    MEDIUM = 300,  -- Reduced quality 100-300 studs
-    LOW = 600,     -- Minimal quality 300-600 studs
-    CULLED = 1000  -- Not rendered beyond 1000 studs
-}
+-- Rainbow Mode Constants
+local RAINBOW_SPEED = 2
+local RAINBOW_SEGMENT_OFFSET = 0.1
 
--- Skinned Mesh Snake Class
-local SkinnedSnake = {}
-SkinnedSnake.__index = SkinnedSnake
+-- Cached frequently used values
+local mathSin = math.sin
+local mathCos = math.cos
+local mathMin = math.min
+local mathMax = math.max
+local mathClamp = math.clamp
+local mathCeil = math.ceil
+local mathFloor = math.floor
+local mathRad = math.rad
+local tickCount = tick
+local v3New = Vector3.new
+local cfNew = CFrame.new
+local cfLookAt = CFrame.lookAt
+local cfAngles = CFrame.Angles
 
-function SkinnedSnake.new(character, config)
-    local self = setmetatable({}, SkinnedSnake)
-    
-    -- Core properties
-    self.character = character
-    self.rootPart = character:WaitForChild("HumanoidRootPart")
-    self.humanoid = character:WaitForChild("Humanoid")
-    self.player = Players:GetPlayerFromCharacter(character)
-    self.config = config or {}
-    
-    -- Ensure default configuration
-    self.config.HeadColor = self.config.HeadColor or Color3.fromRGB(76, 217, 100)
-    self.config.BodyColors = self.config.BodyColors or {
-        Color3.fromRGB(76, 217, 100),
-        Color3.fromRGB(51, 163, 75)
-    }
-    self.config.InitialLength = self.config.InitialLength or MIN_SNAKE_LENGTH
-    
-    -- Snake state
-    self.length = self.config.InitialLength
-    self.scale = BASE_SCALE
-    self.speed = BASE_SPEED
-    self.isBoosting = false
-    self.isAlive = true
-    
-    -- Movement state
-    self.positionHistory = {}
-    self.historyIndex = 0
-    self.wavePhase = 0
-    self.targetDirection = self.rootPart.CFrame.LookVector
-    
-    -- Visual state
-    self.currentColorIndex = 1
-    self.rainbowMode = false
-    self.glowEnabled = true
-    self.particlesEnabled = true
-    
-    -- Performance state
-    self.frameCount = 0
-    self.lastUpdate = tick()
-    self.lodLevel = "HIGH"
-    self.isLocalPlayer = (self.player == Players.LocalPlayer)
-    
-    -- Hide original character
-    self:hideCharacter()
-    
-    -- Create the skinned mesh
-    self:createSkinnedMesh()
-    
-    -- Initialize position history
-    self:initializeHistory()
-    
-    -- Start update loops
-    self:startUpdateLoop()
-    
-    print("✅ Skinned Snake created for", self.player.Name)
-    return self
+local function getSkinnedSnakeTemplate()
+	-- Look for the template in ReplicatedStorage
+	local template = ReplicatedStorage:FindFirstChild("SkinnedSnakeTemplate") or 
+	                ReplicatedStorage:FindFirstChild("slither_snake_rigged")
+	
+	if not template then
+		warn("⚠️ SkinnedSnakeTemplate not found in ReplicatedStorage!")
+		warn("Please ensure your rigged snake model is in ReplicatedStorage and named 'SkinnedSnakeTemplate'")
+		return nil
+	end
+	
+	return template
 end
 
-function SkinnedSnake:hideCharacter()
-    -- Make all character parts invisible
-    for _, part in pairs(self.character:GetDescendants()) do
-        if part:IsA("BasePart") and part ~= self.rootPart then
-            part.Transparency = 1
-            part.CanCollide = false
-            part.CanQuery = false
-        elseif part:IsA("Decal") or part:IsA("Texture") then
-            part.Transparency = 1
-        elseif part:IsA("Accessory") then
-            part:Destroy()
-        end
-    end
-    
-    self.rootPart.Transparency = 1
-    self.rootPart.CanCollide = true
-    self.rootPart.CanQuery = false
-    self.humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+-- Snake Class Definition
+local Snake = {}
+Snake.__index = Snake
+
+function Snake.new(character, config)
+	local self = setmetatable({}, Snake)
+	
+	-- Core properties
+	self.character = character
+	self.rootPart = character:WaitForChild("HumanoidRootPart")
+	self.humanoid = character:WaitForChild("Humanoid")
+	self.player = Players:GetPlayerFromCharacter(character)
+	
+	-- Configuration
+	self.config = config or {}
+	self.length = self.config.initialLength or 30
+	self.actualLength = self.length
+	self.targetLength = self.length
+	self.speed = self.config.speed or 16
+	self.baseSpeed = self.speed
+	self.turnSpeed = self.config.turnSpeed or 3
+	self.growthFactor = 1
+	self.sizeLevel = 1
+	
+	-- Visual settings
+	self.primaryColor = self.config.primaryColor or Color3.fromRGB(85, 170, 255)
+	self.secondaryColor = self.config.secondaryColor or Color3.fromRGB(170, 255, 127)
+	self.patternType = self.config.patternType or "gradient"
+	self.rainbowMode = self.config.rainbowMode or false
+	self.useCustomSkin = self.config.useCustomSkin or false
+	self.customSkinId = self.config.customSkinId
+	
+	-- State tracking
+	self.isAlive = true
+	self.isBoosting = false
+	self.isDead = false
+	self.frameCount = 0
+	self.lastUpdateTime = tickCount()
+	self.lastGrowthUpdate = tickCount()
+	self.isGrowing = false
+	self.lastSegmentAddTime = tickCount()
+	
+	-- Position tracking for smooth movement
+	self.positionHistory = {}
+	self.directionHistory = {}
+	
+	-- Skinned mesh components
+	self.model = nil
+	self.meshPart = nil
+	self.bones = {}
+	self.boneTransforms = {}
+	self.initialPoses = {}
+	self.headBone = nil
+	self.boostParticles = nil
+	self.headGlow = nil
+	
+	-- Eyes
+	self.leftEye = nil
+	self.rightEye = nil
+	self.leftPupil = nil
+	self.rightPupil = nil
+	
+	-- Spline for smooth path
+	self.pathSpline = nil
+	
+	-- Create the snake model
+	self:createUnifiedBody()
+	
+	-- Hide character parts
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") and part ~= self.rootPart then
+			part.Transparency = 1
+			part.CanCollide = false
+		elseif part:IsA("Decal") then
+			part.Transparency = 1
+		end
+	end
+	
+	-- Disable default animations
+	local animator = self.humanoid:FindFirstChild("Animator")
+	if animator then
+		for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+			track:Stop()
+		end
+	end
+	
+	self.humanoid.PlatformStand = true
+	
+	-- Setup update connections
+	self:setupUpdateConnections()
+	
+	return self
 end
 
-function SkinnedSnake:createSkinnedMesh()
-    -- Create the model container
-    self.model = Instance.new("Model")
-    self.model.Name = "SkinnedSnake_" .. self.player.Name
-    self.model.Parent = workspace
-    
-    -- Load the skinned mesh from ReplicatedStorage
-    local meshTemplate = ReplicatedStorage:WaitForChild("Meshes"):WaitForChild("untitledsnakeeeee")
-    self.meshPart = meshTemplate:Clone()
-    self.meshPart.Name = "SnakeBody"
-    self.meshPart.Parent = self.model
-    
-    -- Set up the mesh properties
-    self.meshPart.Anchored = false
-    self.meshPart.CanCollide = false
-    self.meshPart.CanQuery = true
-    self.meshPart.CanTouch = true
-    
-    -- Apply initial scale
-    self.meshPart.Size = self.meshPart.Size * self.scale
-    
-    -- Set up collision detection
-    CollectionService:AddTag(self.meshPart, "SnakeBody")
-    self.meshPart:SetAttribute("OwnerName", self.player.Name)
-    self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
-    
-    -- Find the armature and bones
-    self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController")
-    if not self.armature then
-        -- Look for bones directly
-        self.bones = {}
-        local function findBones(parent)
-            for _, child in pairs(parent:GetChildren()) do
-                if child:IsA("Bone") then
-                    table.insert(self.bones, child)
-                elseif child:IsA("Model") or child:IsA("Folder") then
-                    findBones(child)
-                end
-            end
-        end
-        findBones(self.meshPart)
-        
-        -- Sort bones by name or position
-        table.sort(self.bones, function(a, b)
-            return a.Name < b.Name
-        end)
-    else
-        -- Get bones from armature
-        self.bones = {}
-        local rootBone = self.armature:FindFirstChild("Bone")
-        if rootBone then
-            local currentBone = rootBone
-            while currentBone do
-                table.insert(self.bones, currentBone)
-                currentBone = currentBone:FindFirstChildOfClass("Bone")
-            end
-        end
-    end
-    
-    print("Found", #self.bones, "bones in the mesh")
-    
-    -- Store original bone transforms
-    self.originalBoneTransforms = {}
-    for i, bone in ipairs(self.bones) do
-        self.originalBoneTransforms[i] = bone.Transform
-    end
-    
-    -- Add visual effects
-    self:addVisualEffects()
-    
-    -- Create a WeldConstraint to attach mesh to root part
-    local weld = Instance.new("WeldConstraint")
-    weld.Part0 = self.meshPart
-    weld.Part1 = self.rootPart
-    weld.Parent = self.meshPart
-    
-    -- Position the mesh at the character
-    self.meshPart.CFrame = self.rootPart.CFrame
+function Snake:createUnifiedBody()
+	-- Get the skinned snake template
+	local template = getSkinnedSnakeTemplate()
+	if not template then
+		warn("Failed to create snake: Template not found")
+		return
+	end
+	
+	-- Clone the template
+	self.model = template:Clone()
+	self.model.Name = self.player.Name .. "_Snake"
+	self.model.Parent = workspace
+	
+	-- Find the mesh part (should be named "Circle" based on your description)
+	self.meshPart = self.model:FindFirstChild("Circle")
+	if not self.meshPart then
+		-- Try alternative names
+		self.meshPart = self.model:FindFirstChildOfClass("MeshPart")
+	end
+	
+	if not self.meshPart then
+		warn("No MeshPart found in snake template!")
+		return
+	end
+	
+	-- Set mesh properties
+	self.meshPart.Color = self.primaryColor
+	self.meshPart.Material = Enum.Material.Neon
+	self.meshPart.CanCollide = false
+	self.meshPart.CanTouch = true
+	self.meshPart.CanQuery = true
+	self.meshPart.Anchored = false
+	
+	-- Create a WeldConstraint to attach mesh to character
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = self.meshPart
+	weld.Part1 = self.rootPart
+	weld.Parent = self.meshPart
+	
+	-- Find and store all bones
+	self:collectBones()
+	
+	-- Store initial poses from the InitialPoses folder
+	local initialPosesFolder = self.model:FindFirstChild("InitialPoses")
+	if initialPosesFolder then
+		for _, poseValue in ipairs(initialPosesFolder:GetChildren()) do
+			if poseValue:IsA("CFrameValue") or poseValue.ClassName == "Pose" then
+				local boneName = poseValue.Name:match("(.+)_") or poseValue.Name
+				self.initialPoses[boneName] = poseValue.Value or poseValue.CFrame
+			end
+		end
+	end
+	
+	-- Add head glow
+	self.headGlow = Instance.new("PointLight")
+	self.headGlow.Name = "HeadGlow"
+	self.headGlow.Brightness = GLOW_INTENSITY
+	self.headGlow.Range = GLOW_RANGE_BASE * 1.1
+	self.headGlow.Color = self.primaryColor
+	self.headGlow.Shadows = false
+	self.headGlow.Parent = self.meshPart
+	
+	-- Add boost particles
+	self.boostParticles = Instance.new("ParticleEmitter")
+	self.boostParticles.Name = "BoostParticles"
+	self.boostParticles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	self.boostParticles.Color = ColorSequence.new(self.primaryColor)
+	self.boostParticles.Lifetime = NumberRange.new(0.5, 1)
+	self.boostParticles.Rate = 0
+	self.boostParticles.Speed = NumberRange.new(5, 10)
+	self.boostParticles.SpreadAngle = Vector2.new(180, 180)
+	self.boostParticles.VelocityInheritance = 0.7
+	self.boostParticles.Drag = 3
+	self.boostParticles.Size = NumberSequence.new{
+		NumberSequenceKeypoint.new(0, 0.5),
+		NumberSequenceKeypoint.new(0.5, 1),
+		NumberSequenceKeypoint.new(1, 0)
+	}
+	self.boostParticles.Rotation = NumberRange.new(0, 360)
+	self.boostParticles.RotSpeed = NumberRange.new(-180, 180)
+	self.boostParticles.Enabled = false
+	self.boostParticles.LightEmission = 1
+	self.boostParticles.LightInfluence = 0
+	self.boostParticles.ZOffset = 1
+	self.boostParticles.Parent = self.meshPart
+	
+	-- Create eyes
+	self:createEyes()
+	
+	-- Tag for collision
+	CollectionService:AddTag(self.meshPart, "SnakeHead")
+	self.meshPart:SetAttribute("PlayerId", self.player.UserId)
+	self.meshPart:SetAttribute("OwnerName", self.player.Name)
 end
 
-function SkinnedSnake:addVisualEffects()
-    -- Add main glow light
-    self.headLight = Instance.new("PointLight")
-    self.headLight.Brightness = GLOW_INTENSITY
-    self.headLight.Range = 20
-    self.headLight.Color = self.config.HeadColor
-    self.headLight.Shadows = false
-    self.headLight.Parent = self.meshPart
-    
-    -- Add surface light for better visibility
-    self.surfaceLight = Instance.new("SurfaceLight")
-    self.surfaceLight.Brightness = 0.5
-    self.surfaceLight.Color = self.config.HeadColor
-    self.surfaceLight.Face = Enum.NormalId.Front
-    self.surfaceLight.Parent = self.meshPart
-    
-    -- Add particle emitter for boost effects
-    self.boostParticles = Instance.new("ParticleEmitter")
-    self.boostParticles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-    self.boostParticles.Rate = 0 -- Start disabled
-    self.boostParticles.Lifetime = NumberRange.new(0.5, 1)
-    self.boostParticles.VelocityInheritance = 0.5
-    self.boostParticles.EmissionDirection = Enum.NormalId.Back
-    self.boostParticles.Speed = NumberRange.new(5, 10)
-    self.boostParticles.SpreadAngle = Vector2.new(15, 15)
-    self.boostParticles.Color = ColorSequence.new(self.config.HeadColor)
-    self.boostParticles.LightEmission = 1
-    self.boostParticles.LightInfluence = 0
-    self.boostParticles.Size = NumberSequence.new{
-        NumberSequenceKeypoint.new(0, 0.5),
-        NumberSequenceKeypoint.new(0.5, 1),
-        NumberSequenceKeypoint.new(1, 0)
-    }
-    self.boostParticles.Parent = self.meshPart
-    
-    -- Add selection box for better visibility (optional)
-    if self.isLocalPlayer then
-        self.selectionBox = Instance.new("SelectionBox")
-        self.selectionBox.Adornee = self.meshPart
-        self.selectionBox.Color3 = self.config.HeadColor
-        self.selectionBox.LineThickness = 0.05
-        self.selectionBox.Transparency = 0.8
-        self.selectionBox.Parent = self.meshPart
-    end
+function Snake:collectBones()
+	-- Find the first bone (should be just "Bone" based on your hierarchy)
+	local firstBone = self.meshPart:FindFirstChild("Bone")
+	if not firstBone then
+		warn("No bones found in mesh!")
+		return
+	end
+	
+	-- Follow the bone chain and collect all bones in order
+	local currentBone = firstBone
+	while currentBone do
+		table.insert(self.bones, currentBone)
+		-- Store the initial transform
+		self.boneTransforms[currentBone] = currentBone.Transform
+		
+		-- Find the next bone (should be a child named like "Bone.001", "Bone.002", etc.)
+		local nextBone = nil
+		for _, child in ipairs(currentBone:GetChildren()) do
+			if child:IsA("Bone") then
+				nextBone = child
+				break
+			end
+		end
+		currentBone = nextBone
+	end
+	
+	-- Store reference to head bone
+	self.headBone = firstBone
+	
+	print(string.format("Found %d bones in snake skeleton", #self.bones))
 end
 
-function SkinnedSnake:initializeHistory()
-    local startPos = self.rootPart.Position
-    local startLook = self.rootPart.CFrame.LookVector
-    
-    for i = 1, HISTORY_SIZE do
-        self.positionHistory[i] = {
-            position = startPos - startLook * (i * 0.5),
-            lookVector = startLook,
-            time = tick()
-        }
-    end
+function Snake:createEyes()
+	-- Create eye parts that will be positioned relative to the head
+	local function createEye(xOffset)
+		local eye = Instance.new("Part")
+		eye.Name = xOffset > 0 and "RightEye" or "LeftEye"
+		eye.Shape = Enum.PartType.Ball
+		eye.Material = Enum.Material.Neon
+		eye.Color = Color3.fromRGB(255, 255, 255)
+		eye.Size = v3New(0.5, 0.5, 0.5)
+		eye.Transparency = 0
+		eye.CanCollide = false
+		eye.Anchored = true
+		eye.Parent = self.model
+		
+		local pupil = Instance.new("Part")
+		pupil.Name = eye.Name .. "Pupil"
+		pupil.Shape = Enum.PartType.Ball
+		pupil.Material = Enum.Material.Neon
+		pupil.Color = Color3.fromRGB(0, 0, 0)
+		pupil.Size = v3New(0.25, 0.25, 0.25)
+		pupil.Transparency = 0
+		pupil.CanCollide = false
+		pupil.Anchored = true
+		pupil.Parent = self.model
+		
+		return eye, pupil
+	end
+	
+	self.leftEye, self.leftPupil = createEye(-0.6)
+	self.rightEye, self.rightPupil = createEye(0.6)
 end
 
-function SkinnedSnake:updateHistory()
-    -- Shift history forward
-    self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
-    
-    -- Store current position
-    self.positionHistory[self.historyIndex] = {
-        position = self.rootPart.Position,
-        lookVector = self.rootPart.CFrame.LookVector,
-        time = tick()
-    }
+function Snake:setupUpdateConnections()
+	-- Main update loop
+	self.updateConnection = RunService.Heartbeat:Connect(function()
+		if self.isDead then return end
+		
+		self.frameCount = self.frameCount + 1
+		local currentTime = tickCount()
+		local deltaTime = currentTime - self.lastUpdateTime
+		self.lastUpdateTime = currentTime
+		
+		-- Track position history
+		self:updatePositionHistory()
+		
+		-- Update the snake body
+		self:updateUnifiedBody()
+		
+		-- Update effects
+		if self.frameCount % 3 == 0 then
+			self:updateVisualEffects()
+		end
+		
+		-- Update length/growth
+		if self.frameCount % GROWTH_CHECK_INTERVAL == 0 then
+			self:updateGrowth(deltaTime)
+		end
+	end)
 end
 
-function SkinnedSnake:getHistoricalPosition(segmentsBack)
-    -- Get position from history for smooth following
-    local targetIndex = ((self.historyIndex - segmentsBack - 1) % HISTORY_SIZE) + 1
-    return self.positionHistory[targetIndex] or self.positionHistory[self.historyIndex]
+function Snake:updatePositionHistory()
+	-- Add current position to history
+	local currentPos = self.rootPart.Position
+	local currentDir = self.rootPart.CFrame.LookVector
+	
+	table.insert(self.positionHistory, 1, {
+		position = currentPos,
+		direction = currentDir,
+		time = tickCount()
+	})
+	
+	-- Trim history
+	while #self.positionHistory > HISTORY_SIZE do
+		table.remove(self.positionHistory)
+	end
 end
 
-function SkinnedSnake:updateBones(deltaTime)
-    if not self.bones or #self.bones == 0 then return end
-    
-    -- Update wave phase for natural movement
-    self.wavePhase = self.wavePhase + WAVE_FREQUENCY * deltaTime
-    
-    -- Calculate how many segments each bone represents
-    local segmentsPerBone = math.max(1, self.length / #self.bones)
-    
-    for i, bone in ipairs(self.bones) do
-        -- Get historical position for this bone
-        local segmentOffset = (i - 1) * segmentsPerBone
-        local historicalData = self:getHistoricalPosition(segmentOffset)
-        
-        -- Calculate the target position for this bone
-        local targetPos = historicalData.position
-        local targetLook = historicalData.lookVector
-        
-        -- Add wave motion for natural slithering
-        local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * WAVE_AMPLITUDE
-        local perpendicular = targetLook:Cross(Vector3.new(0, 1, 0)).Unit
-        
-        -- Apply wave motion
-        local wavePosition = targetPos + perpendicular * waveOffset
-        
-        -- Calculate bone transform
-        local boneOffset = i == 1 and 0 or (i - 1) / (#self.bones - 1)
-        local scaleFactor = 1 - (boneOffset * 0.3) -- Taper towards tail
-        
-        -- Apply the transform to the bone
-        if i == 1 then
-            -- Head bone follows root part more closely
-            bone.Transform = self.originalBoneTransforms[i] * CFrame.new(0, 0, 0)
-        else
-            -- Body bones follow with wave motion
-            local localOffset = self.meshPart.CFrame:ToObjectSpace(CFrame.new(wavePosition))
-            bone.Transform = self.originalBoneTransforms[i] * 
-                           CFrame.new(localOffset.Position * 0.1) * 
-                           CFrame.Angles(0, waveOffset * 0.1, 0)
-        end
-    end
+function Snake:updateUnifiedBody()
+	if not self.meshPart or #self.bones == 0 then return end
+	
+	-- Update spline if we have enough history
+	if hasCatmullRomSpline and #self.positionHistory >= 4 then
+		local splinePoints = {}
+		for i = 1, mathMin(#self.positionHistory, 100) do
+			table.insert(splinePoints, self.positionHistory[i].position)
+		end
+		
+		if #splinePoints >= 4 then
+			self.pathSpline = CatmullRomSpline.new(splinePoints)
+			self.pathSpline:SetUniform(true)
+		end
+	end
+	
+	-- Position the mesh at the character position
+	self.meshPart.CFrame = self.rootPart.CFrame
+	
+	-- Calculate bone positions along the snake's path
+	local boneCount = #self.bones
+	if boneCount == 0 then return end
+	
+	-- Calculate spacing based on snake length
+	local totalLength = self.actualLength
+	local boneSpacing = totalLength / mathMax(boneCount - 1, 1)
+	
+	-- Update each bone
+	for i, bone in ipairs(self.bones) do
+		local boneTransform
+		
+		if i == 1 then
+			-- Head bone follows the character directly
+			boneTransform = cfNew()
+		else
+			-- Calculate position along the path
+			local distanceBack = (i - 1) * boneSpacing
+			
+			if self.pathSpline and self.pathSpline:GetLength() > 0 then
+				-- Use spline for smooth positioning
+				local splineLength = self.pathSpline:GetLength()
+				local t = mathClamp(distanceBack / splineLength, 0, 1)
+				local worldPos = self.pathSpline:GetPoint(t)
+				local tangent = self.pathSpline:GetTangent(t)
+				
+				-- Convert world position to bone-relative transform
+				local worldCFrame = cfLookAt(worldPos, worldPos + tangent)
+				local relativeCFrame = self.meshPart.CFrame:Inverse() * worldCFrame
+				
+				-- Add some natural movement
+				local wave = mathSin(t * math.pi * 4 + tickCount() * 2) * 0.05
+				relativeCFrame = relativeCFrame * cfAngles(0, 0, wave)
+				
+				boneTransform = relativeCFrame
+			else
+				-- Fallback: simple follow behavior
+				local histIndex = mathFloor(distanceBack / 2) + 1
+				if histIndex <= #self.positionHistory then
+					local histData = self.positionHistory[histIndex]
+					local worldPos = histData.position
+					local worldCFrame = cfLookAt(worldPos, worldPos + histData.direction)
+					local relativeCFrame = self.meshPart.CFrame:Inverse() * worldCFrame
+					boneTransform = relativeCFrame
+				else
+					-- Default position
+					boneTransform = cfNew(0, 0, -distanceBack)
+				end
+			end
+		end
+		
+		-- Smooth the transform
+		local previousTransform = self.boneTransforms[bone] or bone.Transform
+		local smoothedTransform = previousTransform:Lerp(boneTransform, BONE_BLEND_FACTOR)
+		
+		-- Apply the transform
+		bone.Transform = smoothedTransform
+		self.boneTransforms[bone] = smoothedTransform
+	end
+	
+	-- Update eyes position
+	self:updateEyes()
 end
 
-function SkinnedSnake:updateLOD()
-    if not self.isLocalPlayer or not workspace.CurrentCamera then return end
-    
-    local camera = workspace.CurrentCamera
-    local distance = (camera.CFrame.Position - self.meshPart.Position).Magnitude
-    
-    -- Determine LOD level based on distance
-    local newLOD = "CULLED"
-    if distance < LOD_DISTANCES.HIGH then
-        newLOD = "HIGH"
-    elseif distance < LOD_DISTANCES.MEDIUM then
-        newLOD = "MEDIUM"
-    elseif distance < LOD_DISTANCES.LOW then
-        newLOD = "LOW"
-    end
-    
-    -- Apply LOD changes if needed
-    if newLOD ~= self.lodLevel then
-        self.lodLevel = newLOD
-        self:applyLODSettings()
-    end
+function Snake:updateEyes()
+	if not self.leftEye or not self.rightEye then return end
+	
+	local headCFrame = self.rootPart.CFrame
+	local headSize = BASE_SIZE * HEAD_SIZE_MULTIPLIER * self.growthFactor
+	local eyeScale = headSize / BASE_SIZE * 0.5
+	local eyeOffset = headSize * 0.3
+	local eyeForward = -headSize * 0.35
+	
+	self.leftEye.Size = v3New(eyeScale, eyeScale, eyeScale)
+	self.rightEye.Size = v3New(eyeScale, eyeScale, eyeScale)
+	self.leftPupil.Size = v3New(eyeScale * 0.5, eyeScale * 0.5, eyeScale * 0.5)
+	self.rightPupil.Size = v3New(eyeScale * 0.5, eyeScale * 0.5, eyeScale * 0.5)
+	
+	self.leftEye.CFrame = headCFrame * cfNew(-eyeOffset, eyeOffset * 0.5, eyeForward)
+	self.rightEye.CFrame = headCFrame * cfNew(eyeOffset, eyeOffset * 0.5, eyeForward)
+	self.leftPupil.CFrame = self.leftEye.CFrame * cfNew(0, 0, -eyeScale * 0.3)
+	self.rightPupil.CFrame = self.rightEye.CFrame * cfNew(0, 0, -eyeScale * 0.3)
 end
 
-function SkinnedSnake:applyLODSettings()
-    if self.lodLevel == "CULLED" then
-        self.meshPart.Parent = nil
-    else
-        self.meshPart.Parent = self.model
-        
-        -- Adjust quality based on LOD
-        if self.lodLevel == "HIGH" then
-            self.headLight.Enabled = true
-            self.surfaceLight.Enabled = true
-            self.boostParticles.Enabled = self.isBoosting
-        elseif self.lodLevel == "MEDIUM" then
-            self.headLight.Enabled = true
-            self.surfaceLight.Enabled = false
-            self.boostParticles.Enabled = false
-        else -- LOW
-            self.headLight.Enabled = false
-            self.surfaceLight.Enabled = false
-            self.boostParticles.Enabled = false
-        end
-    end
+function Snake:updateVisualEffects()
+	-- Update colors for rainbow mode
+	if self.rainbowMode and self.meshPart then
+		local hue = (tickCount() * RAINBOW_SPEED) % 360
+		local color = Color3.fromHSV(hue / 360, 0.8, 1)
+		self.meshPart.Color = color
+		if self.headGlow then
+			self.headGlow.Color = color
+		end
+	end
+	
+	-- Update boost particles
+	if self.boostParticles then
+		self.boostParticles.Enabled = self.isBoosting
+		if self.isBoosting then
+			self.boostParticles.Rate = 200
+		else
+			self.boostParticles.Rate = 0
+		end
+	end
 end
 
-function SkinnedSnake:grow(amount)
-    self.length = math.min(self.length + amount, MAX_SNAKE_LENGTH)
-    
-    -- Update scale based on length
-    local targetScale = BASE_SCALE + (self.length - MIN_SNAKE_LENGTH) * SCALE_PER_LENGTH
-    self.scale = math.min(targetScale, MAX_SCALE)
-    
-    -- Smoothly scale the mesh
-    local tween = TweenService:Create(
-        self.meshPart,
-        TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        {Size = self.meshPart.Size * (self.scale / self.meshPart.Size.Magnitude)}
-    )
-    tween:Play()
+function Snake:updateGrowth(deltaTime)
+	-- Smooth length interpolation
+	if math.abs(self.targetLength - self.actualLength) > 0.1 then
+		self.actualLength = self.actualLength + (self.targetLength - self.actualLength) * GROWTH_SPEED
+		self.isGrowing = true
+	else
+		self.isGrowing = false
+	end
+	
+	-- Update growth factor for visual scaling
+	local newGrowthFactor = 1 + (self.sizeLevel - 1) * 0.1
+	if math.abs(newGrowthFactor - self.growthFactor) > 0.01 then
+		self.growthFactor = self.growthFactor + (newGrowthFactor - self.growthFactor) * 0.1
+	end
 end
 
-function SkinnedSnake:setBoost(boosting)
-    self.isBoosting = boosting
-    self.speed = boosting and (BASE_SPEED * BOOST_MULTIPLIER) or BASE_SPEED
-    
-    -- Update boost particles
-    if self.boostParticles then
-        self.boostParticles.Rate = boosting and PARTICLE_RATE or 0
-    end
-    
-    -- Update humanoid speed
-    self.humanoid.WalkSpeed = self.speed
+function Snake:grow(amount)
+	self.length = self.length + amount
+	self.targetLength = self.length
 end
 
-function SkinnedSnake:updateColors()
-    -- Cycle through body colors or apply rainbow mode
-    if self.rainbowMode then
-        local hue = (tick() * 0.5) % 1
-        local color = Color3.fromHSV(hue, 1, 1)
-        self.headLight.Color = color
-        self.boostParticles.Color = ColorSequence.new(color)
-    else
-        -- Normal color cycling
-        self.currentColorIndex = (self.currentColorIndex % #self.config.BodyColors) + 1
-        local color = self.config.BodyColors[self.currentColorIndex]
-        self.headLight.Color = color
-        self.boostParticles.Color = ColorSequence.new(color)
-    end
+function Snake:setLength(newLength)
+	self.length = newLength
+	self.targetLength = newLength
 end
 
-function SkinnedSnake:startUpdateLoop()
-    self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
-        if not self.isAlive then return end
-        
-        self.frameCount = self.frameCount + 1
-        
-        -- Update position history
-        self:updateHistory()
-        
-        -- Update bone positions for slithering animation
-        self:updateBones(deltaTime)
-        
-        -- Update LOD every few frames
-        if self.frameCount % 5 == 0 then
-            self:updateLOD()
-        end
-        
-        -- Update colors periodically
-        if self.frameCount % 30 == 0 then
-            self:updateColors()
-        end
-        
-        -- Position mesh at root part
-        if self.meshPart and self.meshPart.Parent then
-            self.meshPart.CFrame = self.rootPart.CFrame
-        end
-    end)
+function Snake:setSizeLevel(level)
+	self.sizeLevel = mathMax(1, level)
 end
 
-function SkinnedSnake:destroy()
-    self.isAlive = false
-    
-    if self.updateConnection then
-        self.updateConnection:Disconnect()
-    end
-    
-    if self.model then
-        self.model:Destroy()
-    end
-    
-    print("❌ Skinned Snake destroyed for", self.player.Name)
+function Snake:boost(active)
+	self.isBoosting = active
+	if active then
+		self.speed = self.baseSpeed * 1.75
+		self.humanoid.WalkSpeed = self.speed
+	else
+		self.speed = self.baseSpeed
+		self.humanoid.WalkSpeed = self.speed
+	end
 end
 
--- Module return
-return SkinnedSnake
+function Snake:setRainbowMode(enabled)
+	self.rainbowMode = enabled
+	if not enabled and self.meshPart then
+		self.meshPart.Color = self.primaryColor
+		if self.headGlow then
+			self.headGlow.Color = self.primaryColor
+		end
+	end
+end
+
+function Snake:setPrimaryColor(color)
+	self.primaryColor = color
+	if not self.rainbowMode and self.meshPart then
+		self.meshPart.Color = color
+		if self.headGlow then
+			self.headGlow.Color = color
+		end
+	end
+end
+
+function Snake:die()
+	self.isDead = true
+	self.isAlive = false
+	
+	-- Stop updates
+	if self.updateConnection then
+		self.updateConnection:Disconnect()
+		self.updateConnection = nil
+	end
+	
+	-- Clean up model after a delay
+	if self.model then
+		Debris:AddItem(self.model, 3)
+	end
+end
+
+function Snake:destroy()
+	self:die()
+	
+	-- Immediate cleanup
+	if self.model then
+		self.model:Destroy()
+	end
+	
+	-- Clear references
+	self.bones = {}
+	self.boneTransforms = {}
+	self.initialPoses = {}
+	self.positionHistory = {}
+end
+
+-- Module Functions
+local OptimizedSnakeSystemV9 = {}
+
+function OptimizedSnakeSystemV9.init()
+	-- Check for required template
+	local template = getSkinnedSnakeTemplate()
+	if not template then
+		error("SkinnedSnakeTemplate not found! Please add your rigged snake model to ReplicatedStorage.")
+	end
+	
+	print("✅ OptimizedSnakeSystemV9 (Skinned Mesh Version) initialized!")
+end
+
+function OptimizedSnakeSystemV9.createSnake(character, config)
+	return Snake.new(character, config)
+end
+
+function OptimizedSnakeSystemV9.createSnakeFromSavedState(character, config, savedState)
+	local snake = Snake.new(character, config)
+	
+	-- Restore saved state
+	if savedState then
+		snake:setLength(savedState.length or config.initialLength)
+		snake:setSizeLevel(savedState.sizeLevel or 1)
+		if savedState.primaryColor then
+			snake:setPrimaryColor(savedState.primaryColor)
+		end
+		if savedState.rainbowMode ~= nil then
+			snake:setRainbowMode(savedState.rainbowMode)
+		end
+	end
+	
+	return snake
+end
+
+return OptimizedSnakeSystemV9
