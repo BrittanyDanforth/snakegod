@@ -392,94 +392,47 @@ end
 function Snake:updateBones(deltaTime)
 	if not self.boneChain or #self.boneChain == 0 then return end
 
-	--[[
-		TUNING PARAMETERS FOR THE SLITHER.IO FEEL:
-		
-		- NORMAL_SEGMENT_GAP: The distance between bones during normal movement. A smaller number 
-		  makes the snake's curves more detailed and less "gapped". THIS IS THE MOST IMPORTANT VALUE.
-		  Start with a small value like 0.75.
-		  
-		- BOOST_SEGMENT_GAP: The distance between bones when boosting. Making this larger than the 
-		  normal gap creates the visual "stretching" effect seen in slither.io.
-		  
-		- INTERPOLATION_SPEED: How fast the bones snap to their target position. For the slither.io feel,
-		  this should be extremely high. 1.0 is instant, 0.95 is extremely fast but can smooth over
-		  tiny network jitters. A low value (like your old 0.5) is what causes ugly, lagging turns.
-	]]
-	local NORMAL_SEGMENT_GAP = 2.5   -- Increased for more visible segments
-	local BOOST_SEGMENT_GAP = 4.0   -- Dramatic stretch when boosting
-	local INTERPOLATION_SPEED = 0.98 -- Near-instant for that snappy slither.io feel 
-
-	-- Determine the current gap distance based on whether the snake is boosting
-	local currentSegmentGap = self.isBoosting and BOOST_SEGMENT_GAP or NORMAL_SEGMENT_GAP
-
-	-- This is the "Follow the Leader" logic, reimagined for perfect fluidity.
+	-- SIMPLIFIED BONE ANIMATION FOR SKINNED MESHES
+	-- The key is to bend bones relative to each other, not position them in world space
+	
+	local BEND_STRENGTH = 0.3  -- How much each bone can bend (0-1)
+	local SMOOTHING = 0.15     -- How smoothly bones follow movement (0-1)
+	
+	-- Get the current movement direction
+	local currentDir = self.rootPart.CFrame.LookVector
+	local previousDir = self:getHistoricalData(10).direction or currentDir
+	
+	-- Calculate how much we're turning
+	local turnAmount = 1 - currentDir:Dot(previousDir)
+	local turnAxis = currentDir:Cross(previousDir).Unit
+	
+	-- Apply bending to each bone based on turn amount
 	for i, bone in ipairs(self.boneChain) do
-
-		-- 1. Calculate the 'target distance' along the snake's historical path for this bone.
-		--    Each bone will be a set distance behind the one in front of it.
-		local targetDistance = (i - 1) * currentSegmentGap
+		local boneInfo = self.boneData[bone.Name]
+		if not boneInfo then continue end
 		
-		-- 2. Find the exact point in our position history that matches this target distance.
-		--    We iterate backwards through the history to find the *precise* CFrame.
-		local historicalData = nil
-		local distanceTraveled = 0
-		local lastPosition = self.rootPart.Position
+		-- Each bone bends less than the previous (creates smooth curve)
+		local bendFactor = (1 - (i / #self.boneChain)) * BEND_STRENGTH
 		
-		-- CRITICAL FIX: Track the last valid historical point we encounter
-		-- This ensures bones at the end have somewhere sensible to go
-		local lastValidHistoricalPoint = nil
-		local furthestBackIndex = 0
+		-- Calculate this bone's bend based on the turn
+		local bendAngle = turnAmount * bendFactor * math.pi
 		
-		for j = 1, HISTORY_SIZE - 1 do
-			local historyIndex = ((self.historyIndex - j - 1) % HISTORY_SIZE) + 1
-			local historicalPoint = self.positionHistory[historyIndex]
-			
-			if not historicalPoint then break end
-			
-			-- Always track the last valid point we see
-			lastValidHistoricalPoint = historicalPoint
-			furthestBackIndex = j
-			
-			-- Add the distance between this history point and the previous one
-			distanceTraveled = distanceTraveled + (lastPosition - historicalPoint.position).Magnitude
-			
-			if distanceTraveled >= targetDistance then
-				-- We found the point in history that our bone should be at.
-				historicalData = historicalPoint
-				break
-			end
-			
-			lastPosition = historicalPoint.position
+		-- Add some organic wave motion
+		local waveAngle = math.sin(tick() * 2 + i * 0.3) * 0.05
+		
+		-- Create the bent transform
+		local bentTransform = boneInfo.originalTransform
+		
+		if turnAmount > 0.01 then
+			-- Apply turn-based bending
+			bentTransform = bentTransform * CFrame.fromAxisAngle(Vector3.new(0, 1, 0), bendAngle)
 		end
 		
-		-- IMPROVED FALLBACK: Handle "running out of path" gracefully
-		if not historicalData then
-			if lastValidHistoricalPoint then
-				-- Use the furthest valid point we found
-				historicalData = lastValidHistoricalPoint
-			else
-				-- Extreme fallback: create a straight line behind the snake
-				-- This prevents any bunching or weird coiling at spawn
-				historicalData = {
-					position = self.rootPart.Position - self.rootPart.CFrame.LookVector * targetDistance,
-					direction = self.rootPart.CFrame.LookVector
-				}
-			end
-		end
-
-		if historicalData then
-			-- 3. Define the target CFrame for the bone
-			local targetCFrame = CFrame.lookAt(
-				historicalData.position,
-				historicalData.position + historicalData.direction
-			)
-
-			-- 4. Snap the bone to the target CFrame with high interpolation
-			-- For initial positioning (first few frames), use instant placement
-			local interpSpeed = (furthestBackIndex < 5 and i > 5) and 1.0 or INTERPOLATION_SPEED
-			bone.WorldCFrame = bone.WorldCFrame:Lerp(targetCFrame, interpSpeed)
-		end
+		-- Add subtle wave motion
+		bentTransform = bentTransform * CFrame.Angles(0, waveAngle, 0)
+		
+		-- Smoothly apply the new transform
+		bone.Transform = bone.Transform:Lerp(bentTransform, SMOOTHING)
 	end
 end
 
