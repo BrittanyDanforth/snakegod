@@ -17,8 +17,8 @@ pcall(function()
 end)
 
 -- Constants for the skinned mesh system
-local MESH_ASSET_ID = "rbxassetid://YOUR_MESH_ID" -- Will be replaced with actual asset ID
-local BONE_COUNT = 15 -- Should match the number of bones in your Blender model
+local MESH_ASSET_ID = "rbxassetid://84274514316556" -- Your mesh asset ID
+local BONE_COUNT = 12 -- Should match the number of bones in your Blender model
 local MAX_SNAKE_LENGTH = 500 -- Maximum segments the snake can grow to
 local MIN_SNAKE_LENGTH = 10 -- Starting length
 
@@ -155,21 +155,62 @@ function SkinnedSnake:createSkinnedMesh()
     self.model.Name = "SkinnedSnake_" .. self.player.Name
     self.model.Parent = workspace
     
-    -- Load the skinned mesh from ReplicatedStorage
-    local meshTemplate = ReplicatedStorage:WaitForChild("Meshes"):WaitForChild("untitledsnakeeeee")
-    self.meshPart = meshTemplate:Clone()
-    self.meshPart.Name = "SnakeBody"
-    self.meshPart.Parent = self.model
-    
+    -- Try to locate a skinned mesh template in ReplicatedStorage first
+    local templateModel = ReplicatedStorage:FindFirstChild("SkinnedSnakeTemplate")
+        or ReplicatedStorage:FindFirstChild("slither_snake_rigged")
+        or ReplicatedStorage:FindFirstChild("untitledsnakeeeee")
+
+    if not templateModel then
+        local meshesFolder = ReplicatedStorage:FindFirstChild("Meshes")
+        if meshesFolder then
+            templateModel = meshesFolder:FindFirstChild("untitledsnakeeeee")
+                or meshesFolder:FindFirstChildOfClass("MeshPart")
+                or meshesFolder:FindFirstChildOfClass("Model")
+        end
+    end
+
+    if not templateModel then
+        for _, child in ipairs(ReplicatedStorage:GetChildren()) do
+            if child:IsA("MeshPart") or child:IsA("Model") then
+                templateModel = child
+                break
+            end
+        end
+    end
+
+    if templateModel then
+        local cloned = templateModel:Clone()
+        cloned.Name = "SnakeBody"
+        cloned.Parent = self.model
+        if cloned:IsA("Model") then
+            self.meshPart = cloned:FindFirstChild("Circle") or cloned:FindFirstChildOfClass("MeshPart")
+        else
+            self.meshPart = cloned
+        end
+        -- If we resolved a MeshPart and have an asset id, apply it so it's visible even if template is empty
+        if self.meshPart and self.meshPart:IsA("MeshPart") and typeof(MESH_ASSET_ID) == "string" and #MESH_ASSET_ID > 0 then
+            self.meshPart.MeshId = MESH_ASSET_ID
+        end
+    else
+        -- As a last resort, create a MeshPart from the provided asset ID so at least something is visible
+        local part = Instance.new("MeshPart")
+        part.Name = "SnakeBody"
+        if typeof(MESH_ASSET_ID) == "string" and #MESH_ASSET_ID > 0 then
+            part.MeshId = MESH_ASSET_ID
+        end
+        part.Parent = self.model
+        self.meshPart = part
+    end
+
     -- Set up the mesh properties
     self.meshPart.Anchored = false
     self.meshPart.CanCollide = false
     self.meshPart.CanQuery = true
     self.meshPart.CanTouch = true
-    
+
     -- Apply initial scale
     self.meshPart.Size = self.meshPart.Size * self.scale
-    
+
     -- Set up collision detection
     CollectionService:AddTag(self.meshPart, "SnakeBody")
     self.meshPart:SetAttribute("OwnerName", self.player.Name)
@@ -205,6 +246,9 @@ function SkinnedSnake:createSkinnedMesh()
     end)
 
     print("Found", #self.bones, "bones in the mesh")
+    if #self.bones ~= BONE_COUNT then
+        warn(string.format("[OptimizedSnakeSystemV9] Bone count mismatch: expected %d, found %d", BONE_COUNT, #self.bones))
+    end
 
     -- Store rest pose and initialize smoothing state
     self.originalBoneTransforms = {}
@@ -662,5 +706,23 @@ function SkinnedSnake:destroy()
     print("❌ Skinned Snake destroyed for", self.player.Name)
 end
 
--- Module return
-return SkinnedSnake
+-- Module API
+local OptimizedSnakeSystemV9 = {}
+
+function OptimizedSnakeSystemV9.init()
+	print("[OptimizedSnakeSystemV9] Initialized (Skinned Mesh, Bone-driven)")
+end
+
+function OptimizedSnakeSystemV9.createSnake(character, config)
+	return SkinnedSnake.new(character, config)
+end
+
+function OptimizedSnakeSystemV9.createSnakeFromSavedState(character, config, savedState)
+	local snake = SkinnedSnake.new(character, config)
+	if savedState and snake and savedState.length then
+		snake:updateLength(savedState.length)
+	end
+	return snake
+end
+
+return OptimizedSnakeSystemV9
