@@ -18,7 +18,7 @@ end)
 
 -- Constants for the skinned mesh system
 local MESH_ASSET_ID = "rbxassetid://84274514316556" -- Your mesh asset ID
-local BONE_COUNT = 12 -- Should match the number of bones in your Blender model
+local BONE_COUNT = 13 -- Updated to match actual bone count in the mesh
 local MAX_SNAKE_LENGTH = 500 -- Maximum segments the snake can grow to
 local MIN_SNAKE_LENGTH = 10 -- Starting length
 
@@ -209,6 +209,7 @@ function SkinnedSnake:createSkinnedMesh()
 	self.meshPart.CanCollide = false
 	self.meshPart.CanQuery = true
 	self.meshPart.CanTouch = true
+	self.meshPart.Massless = true -- CRITICAL: Prevents physics conflicts with character
 
 	-- Apply initial scale
 	self.meshPart.Size = self.meshPart.Size * self.scale
@@ -274,7 +275,7 @@ function SkinnedSnake:createSkinnedMesh()
 	weld.Part1 = self.rootPart
 	weld.Parent = self.meshPart
 
-	-- Position the mesh at the character
+	-- Position the mesh at the character initially
 	self.meshPart.CFrame = self.rootPart.CFrame
 end
 
@@ -717,10 +718,8 @@ function SkinnedSnake:startUpdateLoop()
 			self:updateColors()
 		end
 
-		-- Position mesh at root part
-		if self.meshPart and self.meshPart.Parent then
-			self.meshPart.CFrame = self.rootPart.CFrame
-		end
+		-- REMOVED: Manual CFrame setting that was fighting the WeldConstraint
+		-- The WeldConstraint automatically handles positioning the mesh to follow the rootPart
 	end)
 end
 
