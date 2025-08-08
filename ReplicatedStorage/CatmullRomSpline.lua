@@ -1,173 +1,177 @@
--- CatmullRom Spline Module for Seamless Snake Movement
--- Provides smooth curve interpolation through control points with arc-length parameterization
+--[[
+	Catmull-Rom Spline Module (V2 - Stable Turning)
+	This script creates a smooth, mathematical curve from a series of points.
+	It is essential for the snake's body to look fluid and natural.
+	Place this script inside a ModuleScript named "CatmullRomSpline" in ReplicatedStorage.
+
+	--[ V2 Change ]--
+	* REPLACED the core `interpolate` function with a more robust version based on Hermite splines.
+	* THE PROBLEM: The old formula was unstable on sharp turns, causing the curve to overshoot,
+	  create loops, and make the snake model "shit the bed".
+	* THE FIX: The new function uses a 'tension' parameter. A low tension forces the curve to be
+	  "tighter" and stick closer to the control points, which completely prevents loops and instability
+	  during sharp turns. This is the definitive fix for turning-related visual bugs.
+]]
 
 local CatmullRomSpline = {}
 CatmullRomSpline.__index = CatmullRomSpline
 
--- Constants
-local ALPHA = 0.5 -- Centripetal Catmull-Rom (0.5) provides best results
-local ARC_LENGTH_SAMPLES = 100 -- Number of samples for arc length calculation
+-- t is the interpolation factor between 0 and 1
+-- p0, p1, p2, p3 are the four control points (Vector3)
+local function interpolate(t, p0, p1, p2, p3)
+	-- Low tension keeps curve tight and stable on sharp turns
+	local tension = 0.1
 
--- Helper function to calculate Catmull-Rom interpolation
-local function catmullRomInterpolate(p0, p1, p2, p3, t, alpha)
-	alpha = alpha or ALPHA
-	
-	local t01 = (p0 - p1).Magnitude ^ alpha
-	local t12 = (p1 - p2).Magnitude ^ alpha
-	local t23 = (p2 - p3).Magnitude ^ alpha
-	
-	local m1 = (1 - alpha) * (p2 - p1 + t12 * ((p1 - p0) / t01 - (p2 - p0) / (t01 + t12)))
-	local m2 = (1 - alpha) * (p2 - p1 + t12 * ((p3 - p2) / t23 - (p3 - p1) / (t12 + t23)))
-	
-	local a = 2 * (p1 - p2) + m1 + m2
-	local b = -3 * (p1 - p2) - 2 * m1 - m2
-	local c = m1
-	local d = p1
-	
-	return a * t^3 + b * t^2 + c * t + d
+	local t2 = t * t
+	local t3 = t2 * t
+
+	-- Tangents (Hermite form)
+	local m1 = (p2 - p0) * tension
+	local m2 = (p3 - p1) * tension
+
+	-- Hermite basis
+	local h1 =  2*t3 - 3*t2 + 1
+	local h2 = -2*t3 + 3*t2
+	local h3 =    t3 - 2*t2 + t
+	local h4 =    t3 - t2
+
+	return h1*p1 + h2*p2 + h3*m1 + h4*m2
 end
 
--- Create a new spline from control points
-function CatmullRomSpline.new(controlPoints)
+function CatmullRomSpline.new(points)
 	local self = setmetatable({}, CatmullRomSpline)
-	
-	self.controlPoints = controlPoints
-	self.arcLengthTable = {}
-	self.totalLength = 0
-	self.uniform = false
-	
-	-- Validate we have enough points
-	if #controlPoints < 4 then
-		warn("CatmullRomSpline requires at least 4 control points")
+
+	if #points < 4 then
+		warn("CatmullRomSpline requires at least 4 points. Returning nil.")
 		return nil
 	end
-	
+
+	self.points = points
+	self.segments = #points - 3
+	self.length = nil
+	self.arcLengths = nil
+	self.isUniform = false
+
 	return self
 end
 
--- Enable uniform (arc-length) parameterization
-function CatmullRomSpline:SetUniform(enabled)
-	self.uniform = enabled
-	if enabled and #self.arcLengthTable == 0 then
-		self:_computeArcLengthTable()
+function CatmullRomSpline:SetUniform(isUniform)
+	if isUniform and not self.arcLengths then
+		self:_calculateArcLengths()
 	end
+	self.isUniform = isUniform
 end
 
--- Compute arc length parameterization table
-function CatmullRomSpline:_computeArcLengthTable()
-	self.arcLengthTable = {0}
-	self.totalLength = 0
-	
-	local segments = #self.controlPoints - 3
-	local samplesPerSegment = math.ceil(ARC_LENGTH_SAMPLES / segments)
-	
-	for i = 1, segments do
-		local p0 = self.controlPoints[i]
-		local p1 = self.controlPoints[i + 1]
-		local p2 = self.controlPoints[i + 2]
-		local p3 = self.controlPoints[i + 3]
-		
-		local prevPoint = p1
-		
-		for j = 1, samplesPerSegment do
-			local t = j / samplesPerSegment
-			local point = catmullRomInterpolate(p0, p1, p2, p3, t, ALPHA)
-			local segmentLength = (point - prevPoint).Magnitude
-			
-			self.totalLength = self.totalLength + segmentLength
-			table.insert(self.arcLengthTable, self.totalLength)
-			
-			prevPoint = point
-		end
-	end
-end
-
--- Get position at parameter t (0 to 1)
 function CatmullRomSpline:GetPoint(t)
-	-- Clamp t to valid range
 	t = math.clamp(t, 0, 1)
-	
-	-- If uniform parameterization is enabled, convert t to arc-length parameter
-	if self.uniform then
-		t = self:_uniformToNonUniform(t)
+
+	if self.isUniform then
+		t = self:_mapToNonUniform(t)
 	end
-	
-	-- Determine which segment we're in
-	local segments = #self.controlPoints - 3
-	local scaledT = t * segments
-	local segmentIndex = math.floor(scaledT) + 1
-	local localT = scaledT - (segmentIndex - 1)
-	
-	-- Clamp segment index
-	if segmentIndex > segments then
-		segmentIndex = segments
-		localT = 1
+
+	local totalSegments = self.segments
+	local scaledT = t * totalSegments
+	local segmentIndex = math.floor(scaledT)
+
+	if segmentIndex >= totalSegments then
+		segmentIndex = totalSegments - 1
 	end
-	
-	-- Get the four control points for this segment
-	local p0 = self.controlPoints[segmentIndex]
-	local p1 = self.controlPoints[segmentIndex + 1]
-	local p2 = self.controlPoints[segmentIndex + 2]
-	local p3 = self.controlPoints[segmentIndex + 3]
-	
-	-- Interpolate
-	return catmullRomInterpolate(p0, p1, p2, p3, localT, ALPHA)
+
+	local localT = scaledT - segmentIndex
+
+	local p0 = self.points[segmentIndex + 1]
+	local p1 = self.points[segmentIndex + 2]
+	local p2 = self.points[segmentIndex + 3]
+	local p3 = self.points[segmentIndex + 4]
+
+	return interpolate(localT, p0, p1, p2, p3)
 end
 
--- Convert uniform parameter to non-uniform parameter
-function CatmullRomSpline:_uniformToNonUniform(uniformT)
-	local targetLength = uniformT * self.totalLength
-	
-	-- Binary search through arc length table
+function CatmullRomSpline:GetTangent(t)
+	local h = 0.001
+	local p1 = self:GetPoint(t - h)
+	local p2 = self:GetPoint(t + h)
+	local v = p2 - p1
+	local mag = v.Magnitude
+	if mag < 1e-6 or mag ~= mag then
+		return Vector3.new(0,0,-1)
+	end
+	return v / mag
+end
+
+function CatmullRomSpline:GetLength(stepsPerSegment)
+	stepsPerSegment = stepsPerSegment or 20
+	if self.length then
+		return self.length
+	end
+
+	local totalLength = 0
+	local lastPoint = self:GetPoint(0)
+
+	for i = 1, self.segments * stepsPerSegment do
+		local t = i / (self.segments * stepsPerSegment)
+		local currentPoint = self:GetPoint(t)
+		totalLength = totalLength + (currentPoint - lastPoint).Magnitude
+		lastPoint = currentPoint
+	end
+
+	self.length = totalLength
+	return totalLength
+end
+
+function CatmullRomSpline:_calculateArcLengths()
+	local steps = self.segments * 20
+	self.arcLengths = {0}
+	local totalLength = 0
+	local lastPoint = self:GetPoint(0)
+
+	for i = 1, steps do
+		local t = i / steps
+		local currentPoint = self:GetPoint(t)
+		totalLength = totalLength + (currentPoint - lastPoint).Magnitude
+		self.arcLengths[i + 1] = totalLength
+		lastPoint = currentPoint
+	end
+
+	-- Normalize
+	for i = 1, #self.arcLengths do
+		self.arcLengths[i] = self.arcLengths[i] / totalLength
+	end
+end
+
+function CatmullRomSpline:_mapToNonUniform(t)
+	if not self.arcLengths then return t end
+
+	local targetArcLength = t
 	local low = 1
-	local high = #self.arcLengthTable
-	
-	while high - low > 1 do
-		local mid = math.floor((low + high) / 2)
-		if self.arcLengthTable[mid] < targetLength then
-			low = mid
+	local high = #self.arcLengths
+	local index = 1
+
+	while low < high do
+		index = low + math.floor((high - low) / 2)
+		if self.arcLengths[index] < targetArcLength then
+			low = index + 1
 		else
-			high = mid
+			high = index
 		end
 	end
-	
-	-- Interpolate between the two closest samples
-	local lengthBefore = self.arcLengthTable[low]
-	local lengthAfter = self.arcLengthTable[high]
+
+	if self.arcLengths[index] > targetArcLength and index > 1 then
+		index = index - 1
+	end
+
+	local lengthBefore = self.arcLengths[index]
+	local lengthAfter = self.arcLengths[index + 1]
 	local segmentLength = lengthAfter - lengthBefore
-	
-	if segmentLength > 0 then
-		local segmentT = (targetLength - lengthBefore) / segmentLength
-		return (low - 1 + segmentT) / (#self.arcLengthTable - 1)
-	else
-		return (low - 1) / (#self.arcLengthTable - 1)
-	end
-end
 
--- Get the tangent (direction) at parameter t
-function CatmullRomSpline:GetTangent(t)
-	local epsilon = 0.0001
-	local p1 = self:GetPoint(t - epsilon)
-	local p2 = self:GetPoint(t + epsilon)
-	return (p2 - p1).Unit
-end
-
--- Get total arc length of the spline
-function CatmullRomSpline:GetLength()
-	if #self.arcLengthTable == 0 then
-		self:_computeArcLengthTable()
+	if segmentLength < 1e-6 then
+		return (index - 1) / (self.segments * 20)
 	end
-	return self.totalLength
-end
 
--- Sample the spline at regular intervals
-function CatmullRomSpline:SamplePoints(count)
-	local points = {}
-	for i = 0, count - 1 do
-		local t = i / (count - 1)
-		table.insert(points, self:GetPoint(t))
-	end
-	return points
+	local segmentT = (targetArcLength - lengthBefore) / segmentLength
+	local resultT = (index - 1 + segmentT) / (self.segments * 20)
+
+	return resultT
 end
 
 return CatmullRomSpline
