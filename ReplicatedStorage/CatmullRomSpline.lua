@@ -1,5 +1,9 @@
--- CatmullRomSpline V2.1 (Hermite tension 0.1) - Stable Turning
+-- CatmullRomSpline V2.1.1 (Hermite tension 0.1) - Stable Turning
+-- LAST_UPDATED: 2025-08-08
+-- COMMIT_NOTE: Added endpoint-safe tangent, version accessor, and explicit header for CI visibility
+
 -- CHANGELOG:
+-- - V2.1.1: Public Version() accessor for external logging; metadata header for repos
 -- - V2.1: safer tangent at endpoints, header/version note for CI visibility
 
 --[[
@@ -19,6 +23,13 @@
 
 local CatmullRomSpline = {}
 CatmullRomSpline.__index = CatmullRomSpline
+
+-- Version metadata
+local VERSION = "2.1.1"
+local LAST_UPDATED = "2025-08-08"
+function CatmullRomSpline.Version()
+	return VERSION, LAST_UPDATED
+end
 
 -- t is the interpolation factor between 0 and 1
 -- p0, p1, p2, p3 are the four control points (Vector3)
