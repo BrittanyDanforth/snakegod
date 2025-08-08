@@ -15,7 +15,7 @@ end)
 
 -- Config
 local MESH_ASSET_ID = "rbxassetid://84274514316556"
-local BONE_COUNT = 12
+local BONE_COUNT = nil -- auto-detect
 local HISTORY_SIZE = 1200
 
 -- Movement/animation
@@ -270,15 +270,8 @@ function SkinnedSnake:createSkinnedMesh()
 
 	-- build bone chain
 	self.bones = buildBoneChain(self.meshPart)
-	if BONE_COUNT and #self.bones > BONE_COUNT then
-		local trimmed = {}
-		for i=1,BONE_COUNT do trimmed[i]=self.bones[i] end
-		self.bones = trimmed
-	end
-	print("Found", #self.bones, "bones in the mesh")
-	if BONE_COUNT and #self.bones ~= BONE_COUNT then
-		warn(string.format("[OptimizedSnakeSystemV9] Bone count mismatch: expected %d, found %d", BONE_COUNT, #self.bones))
-	end
+	-- Auto-detect: do not trim; use full detected chain
+	print("Detected", #self.bones, "bones in the mesh")
 
 	-- rest poses
 	self.previousTransforms = {}
@@ -374,9 +367,11 @@ function SkinnedSnake:updateBones(deltaTime)
 		chainPrevUp = uVec
 		self.previousUpVectors[bone] = uVec
 
-		local worldCFrame = safeCFrameFromTRU(position, tVec, rVec, uVec)
-		local wave = math.clamp(math.sin((tick()*WAVE_FREQUENCY) - index*0.3) * (WAVE_AMPLITUDE*0.1), -0.2, 0.2)
-		worldCFrame = worldCFrame * CFrame.Angles(0, 0, wave)
+		-- Lateral slither offset and slight yaw instead of roll
+		local wave = math.sin((tick()*WAVE_FREQUENCY) - index*0.35) * WAVE_AMPLITUDE
+		local slitherPos = position + rVec * (wave * (self.boneSpacing or DEFAULT_BONE_SPACING) * 0.3)
+		local worldCFrame = safeCFrameFromTRU(slitherPos, tVec, rVec, uVec)
+		worldCFrame = worldCFrame * CFrame.Angles(0, math.clamp(wave*0.1, -0.2, 0.2), 0)
 
 		local desiredObjectCF = meshCFrame:ToObjectSpace(worldCFrame)
 		local restObjectCF = self.restBoneCFrames[bone] or CFrame.new()
