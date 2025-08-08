@@ -5,6 +5,32 @@
 
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+-- Bootstrap: ensure a mesh template exists in ReplicatedStorage for clients
+local function ensureSnakeTemplate()
+    if not RunService:IsServer() then return end
+    if ReplicatedStorage:FindFirstChild("SkinnedSnakeTemplate") then return end
+
+    local ok, err = pcall(function()
+        local container = Instance.new("Model")
+        container.Name = "SkinnedSnakeTemplate"
+        container.Parent = ReplicatedStorage
+
+        local mesh = Instance.new("MeshPart")
+        mesh.Name = "SnakeBody"
+        mesh.CanCollide = false
+        mesh.CanQuery = false
+        mesh.Anchored = true
+        mesh.Parent = container
+        mesh.MeshId = "rbxassetid://84274514316556"
+    end)
+    if not ok then
+        warn("[SnakeAdapter] Failed to create SkinnedSnakeTemplate:", err)
+    end
+end
+
+ensureSnakeTemplate()
 
 local SnakeAdapter = {}
 SnakeAdapter.__index = SnakeAdapter

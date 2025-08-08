@@ -187,17 +187,19 @@ function SkinnedSnake:createSkinnedMesh()
         else
             self.meshPart = cloned
         end
-        -- If we resolved a MeshPart and have an asset id, apply it so it's visible even if template is empty
-        if self.meshPart and self.meshPart:IsA("MeshPart") and typeof(MESH_ASSET_ID) == "string" and #MESH_ASSET_ID > 0 then
+        -- If we resolved a MeshPart and have an asset id, apply it on the server only
+        if RunService:IsServer() and self.meshPart and self.meshPart:IsA("MeshPart") and typeof(MESH_ASSET_ID) == "string" and #MESH_ASSET_ID > 0 then
             self.meshPart.MeshId = MESH_ASSET_ID
         end
     else
-        -- As a last resort, create a MeshPart from the provided asset ID so at least something is visible
-        local part = Instance.new("MeshPart")
-        part.Name = "SnakeBody"
-        if typeof(MESH_ASSET_ID) == "string" and #MESH_ASSET_ID > 0 then
-            part.MeshId = MESH_ASSET_ID
-        end
+        -- As a last resort, create a simple neon fallback so client always sees something
+        local part = Instance.new("Part")
+        part.Name = "SnakeFallback"
+        part.Size = Vector3.new(4, 4, 4)
+        part.Material = Enum.Material.Neon
+        part.Color = self.config.HeadColor or Color3.fromRGB(76,217,100)
+        part.CanCollide = false
+        part.CanQuery = false
         part.Parent = self.model
         self.meshPart = part
     end
