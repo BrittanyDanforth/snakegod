@@ -234,9 +234,10 @@ function SkinnedSnake:createSkinnedMesh()
     cloned.Name = "SnakeBody"
     cloned.Parent = self.model
 
-    -- If it's a model, find its MeshPart
+    -- If it's a model, prefer MeshPart named 'Circle', else first MeshPart
     if cloned:IsA("Model") then
-        self.meshPart = cloned:FindFirstChildOfClass("MeshPart")
+        self.meshPart = cloned:FindFirstChild("Circle")
+            or cloned:FindFirstChildOfClass("MeshPart")
     else
         self.meshPart = cloned
     end
@@ -277,21 +278,32 @@ function SkinnedSnake:createSkinnedMesh()
     self.meshPart:SetAttribute("OwnerName", self.player.Name)
     self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
     
-    -- Find bones directly under the mesh
+    -- Find bones: collect all Bone descendants under the mesh; if too few, search whole model
     self.bones = {}
-    local function findBones(parent)
-        for _, child in pairs(parent:GetChildren()) do
-            if child:IsA("Bone") then
-                table.insert(self.bones, child)
-            else
-                findBones(child)
+    for _, desc in ipairs(self.meshPart:GetDescendants()) do
+        if desc:IsA("Bone") then
+            table.insert(self.bones, desc)
+        end
+    end
+    if #self.bones < 2 then
+        -- Fallback: search entire cloned model in case bones aren't strictly under selected mesh
+        self.bones = {}
+        for _, desc in ipairs(cloned:GetDescendants()) do
+            if desc:IsA("Bone") then
+                table.insert(self.bones, desc)
             end
         end
     end
-    findBones(self.meshPart)
 
-    -- If multiple naming schemes, try sorting by name as fallback
+    -- Numeric-aware sort: Bone, Bone.001, Bone.002, ...
+    local function boneOrder(name)
+        if name == "Bone" then return 0 end
+        local n = name:match("Bone%%.(%d+)") or name:match("Bone[_ ]?(%d+)")
+        return tonumber(n) or math.huge
+    end
     table.sort(self.bones, function(a, b)
+        local oa, ob = boneOrder(a.Name), boneOrder(b.Name)
+        if oa ~= ob then return oa < ob end
         return a.Name < b.Name
     end)
 
