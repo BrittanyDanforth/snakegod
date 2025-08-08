@@ -392,35 +392,51 @@ end
 function Snake:updateBones(deltaTime)
 	if not self.boneChain or #self.boneChain == 0 then return end
 
-	-- This is the single most important variable for the snake's look.
-	-- Lower number = tighter, more frequent curves.
-	-- Higher number = wider, more spread-out curves.
-	-- Start with a value around 3.
-	local BONE_SPACING_MULTIPLIER = 2
-
-	-- Loop through every bone in the snake, from head to tail
+	-- For smooth skinned mesh deformation, we calculate bend angles between segments
+	local HISTORY_STEPS = 3      -- How far back to look for each bone
+	local SMOOTHING = 0.3        -- How smoothly bones follow (0.1 = smooth, 1.0 = instant)
+	
 	for i, bone in ipairs(self.boneChain) do
-
-		-- 1. Calculate how far back in the player's movement history this bone should look.
-		-- This creates the "follow the leader" effect.
-		local stepsBack = (i - 1) * BONE_SPACING_MULTIPLIER
-
-		-- 2. Get the CFrame (position and rotation) from that point in history.
+		local boneInfo = self.boneData[bone.Name]
+		if not boneInfo then continue end
+		
+		-- Get historical positions for this bone
+		local stepsBack = i * HISTORY_STEPS
 		local historicalData = self:getHistoricalData(stepsBack)
-
-		if historicalData then
-			-- 3. This is the magic. We set the bone's WorldCFrame directly.
-			-- This is far more stable than complex relative math.
-			-- The bone is told to go to the historical position and face the historical direction.
-			local targetCFrame = CFrame.lookAt(
-				historicalData.position,
-				historicalData.position + historicalData.direction
-			)
-
-			-- 4. To make the movement buttery smooth, we Lerp (interpolate) from the
-			-- bone's current position to its target position. This prevents jittering on turns.
-			local smoothingFactor = 0.5 -- A value between 0 (stiff) and 1 (instant)
-			bone.WorldCFrame = bone.WorldCFrame:Lerp(targetCFrame, smoothingFactor)
+		
+		if historicalData and i > 1 then
+			-- Get the previous bone's historical position
+			local prevStepsBack = (i - 1) * HISTORY_STEPS
+			local prevHistoricalData = self:getHistoricalData(prevStepsBack)
+			
+			if prevHistoricalData then
+				-- Calculate the angle between this segment and the previous
+				local currentDir = (historicalData.position - prevHistoricalData.position).Unit
+				local restDir = Vector3.new(0, 0, -1) -- Default forward direction
+				
+				-- Calculate rotation needed
+				local angle = math.acos(math.clamp(currentDir:Dot(restDir), -1, 1))
+				local axis = restDir:Cross(currentDir)
+				
+				if axis.Magnitude > 0.001 then
+					axis = axis.Unit
+					
+					-- Create rotation that bends this bone
+					local rotation = CFrame.fromAxisAngle(axis, angle * 0.5) -- Only bend halfway for smoothness
+					
+					-- Apply to transform (relative to parent bone)
+					local targetTransform = boneInfo.originalTransform * rotation
+					
+					-- Smooth interpolation
+					bone.Transform = bone.Transform:Lerp(targetTransform, SMOOTHING)
+				else
+					-- No rotation needed, use original transform
+					bone.Transform = bone.Transform:Lerp(boneInfo.originalTransform, SMOOTHING)
+				end
+			end
+		else
+			-- First bone or no history - use original transform
+			bone.Transform = bone.Transform:Lerp(boneInfo.originalTransform, SMOOTHING)
 		end
 	end
 end
