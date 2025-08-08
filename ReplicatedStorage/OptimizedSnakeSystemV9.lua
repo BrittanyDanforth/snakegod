@@ -1,34 +1,32 @@
--- Optimized Snake System V11.3 - Robust Skinned Mesh Driver
--- Fully reworked: NaN-safe, nearest-neighbor bone chain, arc-length history sampling, physics-safe assembly
+-- Optimized Snake System V12 - Clean Rebuild
+-- Anchored, spline-driven, NaN-safe, tail-damped bone placement (no physics, no chain reaction)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
-local TweenService = game:GetService("TweenService")
 
--- Optional spline dependency (safe require)
+-- Optional spline dependency
 local CatmullRomSpline = nil
 pcall(function()
 	CatmullRomSpline = require(ReplicatedStorage:FindFirstChild("CatmullRomSpline"))
 end)
 
--- Config
-local MESH_ASSET_ID = "rbxassetid://84274514316556"
-local BONE_COUNT = nil -- auto-detect
-local HISTORY_SIZE = 1200
-
--- Movement/animation
-local DEFAULT_BONE_SPACING = 2.0
-local BONE_BLEND_FACTOR = 0.45
-local WAVE_AMPLITUDE = 0.4
-local WAVE_FREQUENCY = 1.5
+-- Config (tunable)
+local HISTORY_SIZE = 1400
+local CONTROL_POINT_COUNT = 40
 local BASE_SPEED = 20
 local BOOST_MULTIPLIER = 1.5
-local CONTROL_POINT_COUNT = 40
+local DEFAULT_BONE_SPACING = 2.0
+local HEAD_FILTER_ALPHA = 0.25 -- head smoothing
+local TANGENT_SMOOTH_ALPHA = 0.85 -- 85% prev, 15% new
+local HEAD_LERP = 0.35
+local TAIL_LERP = 0.85
+local WAVE_AMPLITUDE = 0.35
+local WAVE_FREQUENCY = 1.5
+local MAX_LATERAL_OFFSET_FACTOR = 0.22
 
 -- Visuals
-local BASE_SCALE = 1.0
 local GLOW_INTENSITY = 2.0
 
 -- LOD
@@ -93,7 +91,7 @@ local function getHistoryAtBackDistance(self, targetBackDistance)
 		if accumulated >= targetBackDistance then
 			local overshoot = accumulated - targetBackDistance
 			local t = (segment and segment > EPS) and (1 - overshoot/segment) or 1
-			t = (t ~= t) and 1 or math.clamp(t,0,1)
+			t = (t ~= t) and 1 or math.clamp(t, 0, 1)
 			local pos = prev.position:Lerp(current.position, t)
 			local dir = current.position - prev.position
 			dir = (dir and dir.Magnitude > EPS) and dir.Unit or (self.rootPart and self.rootPart.CFrame.LookVector or Vector3.new(0,0,-1))
@@ -115,10 +113,8 @@ local function buildBoneChain(meshPart)
 		if d:IsA("Bone") then table.insert(bones, d) end
 	end
 	if #bones < 2 then return bones end
-	-- positions in object space
 	local objPos = {}
-	for i,b in ipairs(bones) do objPos[b] = b.CFrame.Position end
-	-- find two farthest bones as endpoints
+	for _,b in ipairs(bones) do objPos[b] = b.CFrame.Position end
 	local a, b, maxd = bones[1], bones[2], -1
 	for i=1,#bones do
 		for j=i+1,#bones do
@@ -126,11 +122,9 @@ local function buildBoneChain(meshPart)
 			if d > maxd then maxd = d; a = bones[i]; b = bones[j] end
 		end
 	end
-	-- choose start closest to mesh origin
 	local start = (objPos[a].Magnitude <= objPos[b].Magnitude) and a or b
-	local used = {}
+	local used = {}; used[start] = true
 	local chain = { start }
-	used[start] = true
 	while #chain < #bones do
 		local last = chain[#chain]
 		local best, bestd = nil, 1e9
@@ -158,13 +152,11 @@ function SkinnedSnake.new(character, config)
 	self.humanoid = character:WaitForChild("Humanoid")
 	self.player = Players:GetPlayerFromCharacter(character)
 	self.config = config or {}
-	-- defaults
+
 	self.config.HeadColor = self.config.HeadColor or Color3.fromRGB(76,217,100)
 	self.config.BodyColors = (typeof(self.config.BodyColors) == "table" and #self.config.BodyColors>0) and self.config.BodyColors or { self.config.HeadColor }
 	self.length = tonumber(self.config.InitialLength) or 85
-	self.scale = BASE_SCALE
 	self.speed = BASE_SPEED
-	self.isBoosting = false
 	self.isAlive = true
 
 	-- animation state
@@ -173,6 +165,10 @@ function SkinnedSnake.new(character, config)
 	self.previousUpVectors = {}
 	self.previousTangents = {}
 	self.restBoneCFrames = {}
+	self.filteredPos = nil
+	self.filteredDir = nil
+	self.prevFilteredDir = nil
+	self.yawRate = 0
 
 	-- history
 	self.positionHistory = {}
@@ -246,9 +242,6 @@ function SkinnedSnake:createSkinnedMesh()
 		for _, d in ipairs(cloned:GetDescendants()) do
 			if d:IsA("BasePart") then d.CanCollide=false; d.CanQuery=false; d.Massless=true end
 		end
-		if RunService:IsServer() and self.meshPart and self.meshPart:IsA("MeshPart") and type(MESH_ASSET_ID) == "string" and #MESH_ASSET_ID>0 then
-			self.meshPart.MeshId = MESH_ASSET_ID
-		end
 	else
 		local part = Instance.new("Part")
 		part.Name = "SnakeFallback"
@@ -261,22 +254,19 @@ function SkinnedSnake:createSkinnedMesh()
 		self.meshPart = part
 	end
 
-	-- Anchor the mesh and drive via CFrame to avoid physics
+	-- Anchor and drive by CFrame
 	self.meshPart.Anchored = true
 	self.meshPart.CanCollide = false
 	self.meshPart.CanQuery = true
 	self.meshPart.CanTouch = false
 	self.meshPart.Massless = true
-	-- keep original size to preserve Blender proportions
-	-- self.meshPart.Size = self.meshPart.Size * self.scale
 	CollectionService:AddTag(self.meshPart, "SnakeBody")
 
-	-- build bone chain
+	-- Build bone chain
 	self.bones = buildBoneChain(self.meshPart)
-	-- Auto-detect: do not trim; use full detected chain
 	print("Detected", #self.bones, "bones in the mesh")
 
-	-- rest poses
+	-- Rest poses and spacing
 	self.previousTransforms = {}
 	self.previousUpVectors = {}
 	self.previousTangents = {}
@@ -286,19 +276,16 @@ function SkinnedSnake:createSkinnedMesh()
 		self.previousUpVectors[bone] = Vector3.new(0,1,0)
 		self.previousTransforms[bone] = bone.Transform
 	end
-
-	-- derive spacing from rest if possible
 	if #self.bones >= 2 then
 		local sum = 0
 		for i=2,#self.bones do
-			sum = sum + (self.restBoneCFrames[self.bones[i]].Position - self.restBoneCFrames[self.bones[i-1]].Position).Magnitude
+			sum += (self.restBoneCFrames[self.bones[i]].Position - self.restBoneCFrames[self.bones[i-1]].Position).Magnitude
 		end
-		sum = sum / math.max(1,(#self.bones-1))
+		sum = sum / math.max(1, (#self.bones-1))
 		if sum == sum and sum > EPS then self.boneSpacing = sum end
 	end
 
 	self:addVisualEffects()
-	self.welded = false
 	self.meshPart.CFrame = self.rootPart.CFrame
 end
 
@@ -338,11 +325,9 @@ end
 function SkinnedSnake:initializeHistory()
 	local startPos = self.rootPart.Position
 	local startLook = self.rootPart.CFrame.LookVector
-	-- Initialize filtered head pose
 	self.filteredPos = startPos
 	self.filteredDir = startLook
 	self.prevFilteredDir = startLook
-	self.yawRate = 0
 	for i=1,HISTORY_SIZE do
 		self.positionHistory[i] = { position = startPos - startLook * (i*0.5), direction = startLook, time = tick() }
 	end
@@ -350,29 +335,26 @@ function SkinnedSnake:initializeHistory()
 end
 
 function SkinnedSnake:updateHistory(dt)
-	-- Smooth head pose to avoid jitter
-	local alpha = 0.25
 	local headPos = self.rootPart.Position
 	local headDir = self.rootPart.CFrame.LookVector
-	self.filteredPos = self.filteredPos and self.filteredPos:Lerp(headPos, alpha) or headPos
-	local newFilteredDir = safeNormalize((self.filteredDir or headDir)* (1-alpha) + headDir*alpha, headDir)
-	-- Compute yaw rate (signed) based on change in filtered direction
+	self.filteredPos = self.filteredPos and self.filteredPos:Lerp(headPos, HEAD_FILTER_ALPHA) or headPos
+	local newDir = safeNormalize((self.filteredDir or headDir) * (1-HEAD_FILTER_ALPHA) + headDir * HEAD_FILTER_ALPHA, headDir)
 	if dt and dt > 0 then
-		local prev = self.prevFilteredDir or newFilteredDir
-		local dotv = math.clamp(prev:Dot(newFilteredDir), -1, 1)
-		local crossv = prev:Cross(newFilteredDir)
+		local prev = self.prevFilteredDir or newDir
+		local dotv = math.clamp(prev:Dot(newDir), -1, 1)
+		local crossv = prev:Cross(newDir)
 		local angle = math.atan2(crossv.Magnitude, dotv)
 		local sign = math.sign((self.rootPart.CFrame.UpVector):Dot(crossv))
 		self.yawRate = (angle * sign) / dt
 	end
-	self.prevFilteredDir = newFilteredDir
-	self.filteredDir = newFilteredDir
+	self.prevFilteredDir = newDir
+	self.filteredDir = newDir
 
 	self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
 	self.positionHistory[self.historyIndex] = { position = self.filteredPos, direction = self.filteredDir, time = tick() }
 end
 
-function SkinnedSnake:updateBones(deltaTime)
+function SkinnedSnake:updateBones(dt)
 	if not self.bones or #self.bones==0 then return end
 	if not self.meshPart or not self.meshPart.Parent then return end
 
@@ -381,40 +363,37 @@ function SkinnedSnake:updateBones(deltaTime)
 
 	local function setBoneFromWorld(bone, position, tangent, index)
 		if not isValidVector3(position) or not isValidVector3(tangent) then return end
-		-- gentler tangent smoothing (85/15)
 		local prevT = self.previousTangents[bone] or tangent
-		local smoothedT = safeNormalize(prevT*0.85 + tangent*0.15, tangent)
+		local smoothedT = safeNormalize(prevT*TANGENT_SMOOTH_ALPHA + tangent*(1-TANGENT_SMOOTH_ALPHA), tangent)
 		self.previousTangents[bone] = smoothedT
 
 		local tVec, rVec, uVec = orthonormalBasis(self.previousUpVectors[bone] or chainPrevUp, smoothedT)
 		chainPrevUp = uVec
 		self.previousUpVectors[bone] = uVec
 
-		-- Slither lateral offset with yaw-based amplitude and tail taper
+		-- Lateral offset (gentle) with yaw scaling and tail taper
 		local n = math.max(1, #self.bones)
 		local tailFactor = math.pow((index-1)/math.max(1,(n-1)), 1.35)
 		local yawScale = math.clamp(math.abs(self.yawRate) * 0.04, 0, 0.35)
-		local baseAmp = 0.04
-		local effAmp = baseAmp + yawScale
-		local wave = math.sin((tick()*WAVE_FREQUENCY) - index*0.35) * effAmp * tailFactor
-		local maxOffset = (self.boneSpacing or DEFAULT_BONE_SPACING) * 0.22
+		local effAmp = (0.04 + yawScale) * tailFactor
+		local wave = math.sin((tick()*WAVE_FREQUENCY) - index*0.35) * effAmp
+		local maxOffset = (self.boneSpacing or DEFAULT_BONE_SPACING) * MAX_LATERAL_OFFSET_FACTOR
 		local slitherPos = position + rVec * math.clamp(wave * (self.boneSpacing or DEFAULT_BONE_SPACING), -maxOffset, maxOffset)
 		local worldCFrame = safeCFrameFromTRU(slitherPos, tVec, rVec, uVec)
 		worldCFrame = worldCFrame * CFrame.Angles(0, math.clamp(wave*0.06, -0.12, 0.12), 0)
 
 		local desiredObjectCF = meshCFrame:ToObjectSpace(worldCFrame)
 		local restObjectCF = self.restBoneCFrames[bone] or CFrame.new()
-		local relativeTransform = restObjectCF:ToObjectSpace(desiredObjectCF)
+		local targetRel = restObjectCF:ToObjectSpace(desiredObjectCF)
 
 		local prevRel = self.previousTransforms[bone]
 		if prevRel then
-			-- Tail-damped smoothing: head reacts more, tail much smoother
-			local smooth = (0.35 + 0.5 * tailFactor) -- 0.35 head -> 0.85 tail
-			relativeTransform = prevRel:Lerp(relativeTransform, math.clamp(smooth, 0.25, 0.9))
+			local t = math.clamp(HEAD_LERP + (TAIL_LERP - HEAD_LERP) * tailFactor, 0.25, 0.9)
+			targetRel = prevRel:Lerp(targetRel, t)
 		end
 
-		bone.Transform = relativeTransform
-		self.previousTransforms[bone] = relativeTransform
+		bone.Transform = targetRel
+		self.previousTransforms[bone] = targetRel
 	end
 
 	if CatmullRomSpline then
@@ -432,7 +411,6 @@ function SkinnedSnake:updateBones(deltaTime)
 			return pts
 		end
 		local controlPoints = buildPoints(CONTROL_POINT_COUNT)
-		-- Smooth control points to reduce bumps
 		if #controlPoints >= 5 then
 			local smoothed = {}
 			for i=1,#controlPoints do
@@ -490,9 +468,10 @@ function SkinnedSnake:updateLOD()
 			self.meshPart.Parent = nil
 		else
 			self.meshPart.Parent = self.model
-			self.headLight.Enabled = (self.lodLevel == "HIGH")
-			self.surfaceLight.Enabled = (self.lodLevel == "HIGH")
-			self.boostParticles.Enabled = (self.lodLevel == "HIGH") and self.isBoosting or false
+			local high = (self.lodLevel == "HIGH")
+			self.headLight.Enabled = high
+			self.surfaceLight.Enabled = high
+			self.boostParticles.Enabled = high and self.isBoosting or false
 		end
 	end
 end
@@ -543,7 +522,6 @@ function SkinnedSnake:startUpdateLoop()
 		self:updateBones(dt)
 		if self.frameCount % 5 == 0 then self:updateLOD() end
 		if self.frameCount % 30 == 0 then self:updateColors() end
-		-- Drive mesh to root CFrame each frame (anchored, no physics)
 		if self.meshPart and self.meshPart.Parent then
 			self.meshPart.CFrame = self.rootPart.CFrame
 		end
@@ -560,7 +538,7 @@ end
 -- Module API
 local OptimizedSnakeSystemV9 = {}
 function OptimizedSnakeSystemV9.init()
-	print("[OptimizedSnakeSystemV9] Initialized (Skinned Mesh, Bone-driven)")
+	print("[OptimizedSnakeSystemV9] Initialized (V12, Anchored Spline Driver)")
 end
 function OptimizedSnakeSystemV9.createSnake(character, config)
 	return SkinnedSnake.new(character, config)
