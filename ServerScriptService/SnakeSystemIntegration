@@ -1,0 +1,431 @@
+--[[
+SNAKE SYSTEM INTEGRATION
+This script integrates the optimized snake system with your existing CharacterSetup
+Place this in ServerScriptService
+FIXED: Loading delay at the start of the game has been eliminated.
+FIXED: Added missing SpawnSnake handler for Play button
+--]]
+
+local ServerScriptService = game:GetService("ServerScriptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+
+-- SERVER DOES NOT LOAD VISUAL SYSTEMS
+-- The client handles all visual rendering
+-- This server script only manages game data and state
+
+-- Store active snakes (server-side data only)
+local activeSnakes = {}
+
+-- Create networking folder if needed
+local networkingFolder = ReplicatedStorage:FindFirstChild("SnakeNetworking")
+if not networkingFolder then
+	networkingFolder = Instance.new("Folder")
+	networkingFolder.Name = "SnakeNetworking"
+	networkingFolder.Parent = ReplicatedStorage
+end
+
+-- Create/Get RemoteEvents for menu integration
+local remoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents") or Instance.new("Folder", ReplicatedStorage)
+remoteEvents.Name = "RemoteEvents"
+
+local spawnSnake = remoteEvents:FindFirstChild("SpawnSnake") or Instance.new("RemoteEvent", remoteEvents)
+spawnSnake.Name = "SpawnSnake"
+
+local respawnSnake = remoteEvents:FindFirstChild("RespawnSnake") or Instance.new("RemoteEvent", remoteEvents)
+respawnSnake.Name = "RespawnSnake"
+
+-- Add UpdateMouseDirection for client input
+local updateMouseDirection = remoteEvents:FindFirstChild("UpdateMouseDirection") or Instance.new("RemoteEvent", remoteEvents)
+updateMouseDirection.Name = "UpdateMouseDirection"
+
+-- Default configuration
+local DEFAULT_CONFIG = {
+	InitialLength = 85, -- Normal starting length
+	MaxSegments = 50000, -- MASSIVE SNAKES! Was 10000
+	SegmentSpacing = 3.2, -- Original spacing
+	SegmentSize = Vector3.new(4, 4, 4), -- Original size
+	HeadSize = Vector3.new(4.5, 4.5, 4.5),
+	HeadColor = Color3.fromRGB(76, 217, 100),
+	BodyColors = {
+		Color3.fromRGB(60, 180, 80),
+		Color3.fromRGB(80, 200, 100),
+		Color3.fromRGB(100, 220, 120),
+		Color3.fromRGB(80, 200, 100),
+		Color3.fromRGB(60, 180, 80),
+	},
+	HeadMaterial = Enum.Material.Neon,
+	BodyMaterial = Enum.Material.Neon,
+	GlowIntensity = 2,
+	GlowRange = 6
+}
+
+-- Get skin configuration
+local function getSkinConfig(player)
+	local skinName = player:GetAttribute("SelectedSkin") or "Default"
+
+	-- Try to get skin data from your existing system
+	local skinData = nil
+	pcall(function()
+		local snakeSkins = require(ReplicatedStorage:WaitForChild("SnakeSkins"))
+		if snakeSkins and snakeSkins[skinName] then
+			skinData = snakeSkins[skinName]
+		end
+	end)
+
+	if skinData then
+		-- Merge with default config
+		local config = {}
+		for k, v in pairs(DEFAULT_CONFIG) do
+			config[k] = skinData[k] or v
+		end
+		return config
+	end
+
+	return DEFAULT_CONFIG
+end
+
+-- Handle character spawning
+local function onCharacterAdded(character)
+	local player = Players:GetPlayerFromCharacter(character)
+	if not player then
+		-- Try again after a short wait
+		wait(0.1)
+		player = Players:GetPlayerFromCharacter(character)
+		if not player then
+			warn("Could not get player from character")
+			return
+		end
+	end
+
+	-- Simple revive teleport - just set position if reviving
+	if player:GetAttribute("JustRevived") then
+		local revivePos = player:GetAttribute("RevivePosition")
+		if revivePos then
+			local x, y, z = revivePos:match("([%d.-]+),%s*([%d.-]+),%s*([%d.-]+)")
+			if x and y and z then
+				local deathPos = Vector3.new(tonumber(x), tonumber(y), tonumber(z))
+				local rootPart = character:WaitForChild("HumanoidRootPart")
+				if rootPart then
+					rootPart.CFrame = CFrame.new(deathPos)
+					print("✅ Revived at:", deathPos)
+				end
+			end
+		end
+		-- Don't clear the flag yet - wait for snake creation
+	end
+
+	-- Clean up old snake
+	if activeSnakes[player] then
+		activeSnakes[player]:destroy()
+		activeSnakes[player] = nil
+	end
+
+	-- Wait for character to load
+	local humanoid = character:WaitForChild("Humanoid")
+	local rootPart = character:WaitForChild("HumanoidRootPart")
+
+	-- Check if player is reviving and has a stored snake length BEFORE any delays
+	local reviveSnakeLength = player:GetAttribute("ReviveSnakeLength")
+	local isReviving = player:GetAttribute("RevivingNow") or player:GetAttribute("JustRevived")
+
+	if reviveSnakeLength and reviveSnakeLength > 0 then
+		print("🔄 Found revive snake length:", reviveSnakeLength, "for", player.Name)
+	elseif isReviving then
+		-- Fallback: try to get from leaderstats if attribute is missing
+		warn("⚠️ ReviveSnakeLength attribute missing during revive! Checking leaderstats...")
+		local leaderstats = player:FindFirstChild("leaderstats")
+		if leaderstats then
+			local lengthValue = leaderstats:FindFirstChild("Length")
+			if lengthValue and lengthValue.Value > 55 then
+				reviveSnakeLength = lengthValue.Value
+				print("🔄 Using leaderstats length as fallback:", reviveSnakeLength)
+			end
+		end
+	end
+
+	wait(0.5) -- Small delay for stability
+
+	-- Get configuration
+	local config = getSkinConfig(player)
+
+	-- Apply revive snake length if available
+	if reviveSnakeLength and reviveSnakeLength > 0 then
+		config.InitialLength = reviveSnakeLength
+		print("✅ Applying revive snake length:", reviveSnakeLength)
+		-- Clear the attribute after using it
+		player:SetAttribute("ReviveSnakeLength", nil)
+	end
+
+	-- SERVER ONLY MANAGES DATA - NO VISUAL SNAKE CREATION!
+	print("[Server] Setting up snake data for", player.Name)
+
+	-- Store configuration as attributes for the client to read
+	character:SetAttribute("SnakeConfig", game:GetService("HttpService"):JSONEncode(config))
+	character:SetAttribute("SnakeLength", config.InitialLength)
+	character:SetAttribute("SnakeActive", true)
+
+	-- Create a simple data structure for server-side tracking (NOT a visual snake!)
+	local snakeData = {
+		player = player,
+		character = character,
+		length = config.InitialLength,
+		isAlive = true,
+		config = config
+	}
+
+	activeSnakes[player] = snakeData
+
+	-- Setup boost state tracking
+	local boostEvent = remoteEvents:FindFirstChild("UpdateBoostState")
+	if not boostEvent then
+		boostEvent = Instance.new("RemoteEvent")
+		boostEvent.Name = "UpdateBoostState"
+		boostEvent.Parent = remoteEvents
+	end
+
+	-- Listen for boost state changes from client
+	local boostConnection = boostEvent.OnServerEvent:Connect(function(eventPlayer, isBoosting)
+		if eventPlayer == player and activeSnakes[player] then
+			activeSnakes[player].isBoosting = isBoosting
+			character:SetAttribute("IsBoosting", isBoosting)
+		end
+	end)
+
+	-- Ensure leaderstats exist
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if not leaderstats then
+		leaderstats = Instance.new("Folder")
+		leaderstats.Name = "leaderstats"
+		leaderstats.Parent = player
+	end
+
+	local lengthValue = leaderstats:FindFirstChild("Length")
+	if not lengthValue then
+		lengthValue = Instance.new("IntValue")
+		lengthValue.Name = "Length"
+		lengthValue.Value = config.InitialLength or 55
+		lengthValue.Parent = leaderstats
+	else
+		-- Set to initial length from config
+		lengthValue.Value = config.InitialLength or 55
+	end
+
+	-- Handle length updates (server-side data only)
+	if lengthValue then
+		-- Set initial length
+		lengthValue.Value = config.InitialLength or 55
+
+		-- Listen for changes and update attributes for client
+		lengthValue.Changed:Connect(function(newLength)
+			if activeSnakes[player] then
+				activeSnakes[player].length = newLength
+				character:SetAttribute("SnakeLength", newLength)
+			end
+		end)
+	end
+
+	-- Clean up when character is removed
+	character.AncestryChanged:Connect(function()
+		if not character.Parent then
+			if activeSnakes[player] then
+				activeSnakes[player] = nil
+			end
+		end
+	end)
+
+	-- Handle skin changes
+	local skinConnection = player:GetAttributeChangedSignal("SelectedSkin"):Connect(function()
+		if activeSnakes[player] then
+			-- Update config and notify client
+			local newConfig = getSkinConfig(player)
+			activeSnakes[player].config = newConfig
+			character:SetAttribute("SnakeConfig", game:GetService("HttpService"):JSONEncode(newConfig))
+		end
+	end)
+
+	-- Store connections for cleanup
+	snakeData.connections = {
+		boost = boostConnection,
+		skin = skinConnection
+	}
+
+	-- Handle death
+	local deathConnection = humanoid.Died:Connect(function()
+		if activeSnakes[player] then
+			local snakeData = activeSnakes[player]
+
+			-- Disconnect all connections
+			if snakeData.connections then
+				for _, conn in pairs(snakeData.connections) do
+					if conn then conn:Disconnect() end
+				end
+			end
+			if deathConnection then
+				deathConnection:Disconnect()
+			end
+
+			-- Mark as dead
+			snakeData.isAlive = false
+			character:SetAttribute("SnakeActive", false)
+
+			-- Clean up data
+			activeSnakes[player] = nil
+		end
+	end)
+
+	-- Add death connection to cleanup list
+	snakeData.connections.death = deathConnection
+end
+
+-- Handle players
+Players.PlayerAdded:Connect(function(player)
+	-- Setup leaderstats if not exists
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if not leaderstats then
+		leaderstats = Instance.new("Folder")
+		leaderstats.Name = "leaderstats"
+		leaderstats.Parent = player
+
+		local length = Instance.new("IntValue")
+		length.Name = "Length"
+		length.Value = 55
+		length.Parent = leaderstats
+	end
+
+	-- Connect character spawning
+	player.CharacterAdded:Connect(onCharacterAdded)
+
+	-- Handle existing character
+	if player.Character then
+		onCharacterAdded(player.Character)
+	end
+end)
+
+-- Cleanup on player leaving
+Players.PlayerRemoving:Connect(function(player)
+	if activeSnakes[player] then
+		local snakeData = activeSnakes[player]
+
+		-- Disconnect all connections
+		if snakeData.connections then
+			for _, conn in pairs(snakeData.connections) do
+				if conn then conn:Disconnect() end
+			end
+		end
+
+		activeSnakes[player] = nil
+	end
+end)
+
+-- Handle existing players
+for _, player in pairs(Players:GetPlayers()) do
+	if player.Character then
+		onCharacterAdded(player.Character)
+	else
+		-- Wait for character to spawn (when they click Play)
+		player.CharacterAdded:Connect(onCharacterAdded)
+	end
+end
+
+-- CRITICAL FIX: Handle initial spawn requests from Play button
+spawnSnake.OnServerEvent:Connect(function(player)
+	print("🎮 Play button clicked - spawning", player.Name)
+	if not player.Character then
+		player:LoadCharacter()
+	end
+end)
+
+-- Handle spawn requests from menu
+local respawnEvent = ReplicatedStorage:FindFirstChild("RespawnSnake")
+if respawnEvent then
+	respawnEvent.OnServerEvent:Connect(function(player, username)
+		print("🎮 Respawn requested for:", player.Name)
+
+		-- Store username if provided
+		if username and type(username) == "string" then
+			player:SetAttribute("SlitherUsername", username)
+			print("📝 Username set to:", username)
+		end
+
+		if player.Character then
+			player.Character:Destroy()
+		end
+		wait(0.1)
+		local success, err = pcall(function()
+			player:LoadCharacter()
+		end)
+		if not success then
+			warn("❌ Failed to load character:", err)
+		else
+			print("✅ Character loaded for:", player.Name)
+		end
+		print("🐍 Respawned player:", player.Name)
+	end)
+end
+
+-- Handle mouse direction updates
+updateMouseDirection.OnServerEvent:Connect(function(player, direction)
+	if player.Character and typeof(direction) == "Vector3" then
+		-- Validate the direction
+		local validDirection = Vector3.new(
+			math.clamp(direction.X, -1, 1),
+			0,
+			math.clamp(direction.Z, -1, 1)
+		)
+
+		-- Make sure it's not zero
+		if validDirection.Magnitude > 0 then
+			player.Character:SetAttribute("MouseDirection", validDirection.Unit)
+		end
+	end
+end)
+
+-- Removed auto-spawn - players spawn when clicking Play button
+
+-- Server-side broadcasting for smooth multiplayer rendering
+-- This efficiently broadcasts all snake data to all clients for smooth rendering
+local BROADCAST_RATE = 20 -- Updates per second
+local lastBroadcast = 0
+
+RunService.Heartbeat:Connect(function()
+	local now = tick()
+	if now - lastBroadcast < (1 / BROADCAST_RATE) then
+		return -- Throttle updates to the specified rate
+	end
+	lastBroadcast = now
+
+	local allSnakeData = {}
+
+	-- Collect data from all active snakes
+	for player, snakeData in pairs(activeSnakes) do
+		if player.Parent and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local rootPart = player.Character.HumanoidRootPart
+			local mouseDirection = player.Character:GetAttribute("MouseDirection") or Vector3.new(0, 0, -1)
+
+			table.insert(allSnakeData, {
+				PlayerId = player.UserId,
+				Position = rootPart.Position,
+				LookVector = mouseDirection,
+				Length = snakeData.length or DEFAULT_CONFIG.InitialLength,
+				Color = snakeData.color,
+				Name = player.Name
+			})
+		end
+	end
+
+	-- Only send an update if there's actually data to send
+	if #allSnakeData > 0 then
+		-- Use the existing RemoteEvents folder
+		local batchUpdateEvent = remoteEvents:FindFirstChild("BatchSnakeUpdate")
+		if not batchUpdateEvent then
+			batchUpdateEvent = Instance.new("RemoteEvent", remoteEvents)
+			batchUpdateEvent.Name = "BatchSnakeUpdate"
+		end
+		batchUpdateEvent:FireAllClients(allSnakeData)
+	end
+end)
+
+print("✅ Snake System Integration loaded with multiplayer broadcasting!")
