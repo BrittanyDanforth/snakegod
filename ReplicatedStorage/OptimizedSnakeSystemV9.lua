@@ -10,6 +10,9 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
+-- Require spline module for arc-length parameterized posing
+local CatmullRomSpline = require(ReplicatedStorage:WaitForChild("CatmullRomSpline"))
+
 -- Constants for the skinned mesh system
 local MESH_ASSET_ID = "rbxassetid://YOUR_MESH_ID" -- Will be replaced with actual asset ID
 local BONE_COUNT = 15 -- Should match the number of bones in your Blender model
@@ -67,10 +70,13 @@ function SkinnedSnake.new(character, config)
         Color3.fromRGB(51, 163, 75)
     }
     self.config.InitialLength = self.config.InitialLength or MIN_SNAKE_LENGTH
+    -- New: independent control over visual radius (mesh thickness)
+    self.config.Radius = self.config.Radius or BASE_SCALE
     
     -- Snake state
     self.length = self.config.InitialLength
     self.scale = BASE_SCALE
+    self.radius = self.config.Radius
     self.speed = BASE_SPEED
     self.isBoosting = false
     self.isAlive = true
@@ -80,6 +86,10 @@ function SkinnedSnake.new(character, config)
     self.historyIndex = 0
     self.wavePhase = 0
     self.targetDirection = self.rootPart.CFrame.LookVector
+    
+    -- Spline/path state
+    self.spline = nil
+    self.controlPointCount = 24 -- number of points to build spline from history
     
     -- Visual state
     self.currentColorIndex = 1
@@ -92,6 +102,12 @@ function SkinnedSnake.new(character, config)
     self.lastUpdate = tick()
     self.lodLevel = "HIGH"
     self.isLocalPlayer = (self.player == Players.LocalPlayer)
+    
+    -- Bone metrics
+    self.originalBoneTransforms = {}
+    self.averageRestBoneSpacing = 1.0
+    self.totalRestChainLength = 0
+    self.initialMeshSize = nil
     
     -- Hide original character
     self:hideCharacter()
@@ -147,8 +163,9 @@ function SkinnedSnake:createSkinnedMesh()
     self.meshPart.CanQuery = true
     self.meshPart.CanTouch = true
     
-    -- Apply initial scale
-    self.meshPart.Size = self.meshPart.Size * self.scale
+    -- Track initial size and apply independent radius
+    self.initialMeshSize = self.meshPart.Size
+    self:applyRadiusScale(self.radius)
     
     -- Set up collision detection
     CollectionService:AddTag(self.meshPart, "SnakeBody")
@@ -207,6 +224,9 @@ function SkinnedSnake:createSkinnedMesh()
     
     -- Position the mesh at the character
     self.meshPart.CFrame = self.rootPart.CFrame
+    
+    -- After positioning, compute rest bone spacing metrics
+    self:computeRestBoneMetrics()
 end
 
 function SkinnedSnake:addVisualEffects()
@@ -289,43 +309,49 @@ end
 function SkinnedSnake:updateBones(deltaTime)
     if not self.bones or #self.bones == 0 then return end
     
-    -- Update wave phase for natural movement
+    -- Update wave phase for optional lateral undulation
     self.wavePhase = self.wavePhase + WAVE_FREQUENCY * deltaTime
-    
-    -- Calculate how many segments each bone represents
-    local segmentsPerBone = math.max(1, self.length / #self.bones)
-    
+
+    -- Ensure spline exists
+    if not self.spline then return end
+
+    -- Arc-length aware spacing along the path
+    local boneCount = #self.bones
+    local splineLength = math.max(self.spline:GetLength(), 0.001)
+    local segmentLength = splineLength / (boneCount - 1)
+
     for i, bone in ipairs(self.bones) do
-        -- Get historical position for this bone
-        local segmentOffset = (i - 1) * segmentsPerBone
-        local historicalData = self:getHistoricalPosition(segmentOffset)
-        
-        -- Calculate the target position for this bone
-        local targetPos = historicalData.position
-        local targetLook = historicalData.lookVector
-        
-        -- Add wave motion for natural slithering
-        local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * WAVE_AMPLITUDE
-        local perpendicular = targetLook:Cross(Vector3.new(0, 1, 0)).Unit
-        
-        -- Apply wave motion
-        local wavePosition = targetPos + perpendicular * waveOffset
-        
-        -- Calculate bone transform
-        local boneOffset = i == 1 and 0 or (i - 1) / (#self.bones - 1)
-        local scaleFactor = 1 - (boneOffset * 0.3) -- Taper towards tail
-        
-        -- Apply the transform to the bone
-        if i == 1 then
-            -- Head bone follows root part more closely
-            bone.Transform = self.originalBoneTransforms[i] * CFrame.new(0, 0, 0)
+        local distanceAlong = (i - 1) * segmentLength
+        local t = math.clamp(distanceAlong / splineLength, 0, 1)
+
+        -- Sample point and tangent from spline
+        local P = self.spline:GetPoint(t)
+        local T = self.spline:GetTangent(t)
+
+        -- Optional subtle lateral wave offset, perpendicular to tangent
+        local side = T:Cross(Vector3.new(0, 1, 0))
+        if side.Magnitude < 1e-3 then
+            side = Vector3.new(1, 0, 0)
         else
-            -- Body bones follow with wave motion
-            local localOffset = self.meshPart.CFrame:ToObjectSpace(CFrame.new(wavePosition))
-            bone.Transform = self.originalBoneTransforms[i] * 
-                           CFrame.new(localOffset.Position * 0.1) * 
-                           CFrame.Angles(0, waveOffset * 0.1, 0)
+            side = side.Unit
         end
+        local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * (WAVE_AMPLITUDE * 0.25)
+        local Pw = P + side * waveOffset
+
+        -- World-space frame aligned to tangent
+        local C_world = CFrame.lookAt(Pw, Pw + T)
+
+        -- Convert to MeshPart object space and apply
+        local relative = self.meshPart.CFrame:ToObjectSpace(C_world)
+
+        -- Per-bone taper radius (0..1 along chain)
+        local u = (i - 1) / math.max(1, (boneCount - 1))
+        local taper = 0.5 + math.sin(u * math.pi) * 0.5
+        local finalRadius = math.max(0.01, self.radius * taper)
+
+        -- Apply final transform: keep orientation from spline; Roblox bones ignore non-uniform scale in Transform,
+        -- so we approximate radius via mesh XY size and keep Z via rest spacing influence by bone placements.
+        bone.Transform = relative
     end
 end
 
@@ -378,17 +404,10 @@ end
 function SkinnedSnake:grow(amount)
     self.length = math.min(self.length + amount, MAX_SNAKE_LENGTH)
     
-    -- Update scale based on length
-    local targetScale = BASE_SCALE + (self.length - MIN_SNAKE_LENGTH) * SCALE_PER_LENGTH
-    self.scale = math.min(targetScale, MAX_SCALE)
-    
-    -- Smoothly scale the mesh
-    local tween = TweenService:Create(
-        self.meshPart,
-        TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        {Size = self.meshPart.Size * (self.scale / self.meshPart.Size.Magnitude)}
-    )
-    tween:Play()
+    -- Decouple radius from length; keep previous radius
+    -- Optionally, apply subtle radius growth if desired (disabled by default)
+    local keepRadius = self.radius
+    self:applyRadiusScale(keepRadius)
 end
 
 function SkinnedSnake:setBoost(boosting)
@@ -420,6 +439,81 @@ function SkinnedSnake:updateColors()
     end
 end
 
+function SkinnedSnake:applyRadiusScale(targetRadius)
+    -- Adjust mesh thickness independently by scaling X/Y relative to the template size
+    if not self.initialMeshSize then return end
+    self.radius = targetRadius
+    local newSize = Vector3.new(self.initialMeshSize.X * targetRadius, self.initialMeshSize.Y * targetRadius, self.initialMeshSize.Z)
+    self.meshPart.Size = newSize
+end
+
+function SkinnedSnake:computeRestBoneMetrics()
+    if not self.bones or #self.bones < 2 then
+        self.averageRestBoneSpacing = 1.0
+        self.totalRestChainLength = 0
+        return
+    end
+    local total = 0
+    local count = 0
+    for i = 1, (#self.bones - 1) do
+        local a = self.originalBoneTransforms[i]
+        local b = self.originalBoneTransforms[i + 1]
+        if a and b then
+            total += (b.Position - a.Position).Magnitude
+            count += 1
+        end
+    end
+    if count > 0 then
+        self.averageRestBoneSpacing = total / count
+        self.totalRestChainLength = total
+    end
+end
+
+function SkinnedSnake:rebuildSpline()
+    -- Build Catmull-Rom spline from recent history positions
+    local controlPoints = {}
+    local sampleStride = 3 -- history steps between control points
+    local desired = self.controlPointCount
+
+    -- Oldest to newest
+    for idx = desired, 1, -1 do
+        local offset = (idx - 1) * sampleStride
+        local h = self:getHistoricalPosition(offset)
+        table.insert(controlPoints, 1, h.position)
+    end
+
+    -- Ensure minimum 4 points by duplicating endpoints
+    if #controlPoints < 4 then
+        local first = controlPoints[1] or self.rootPart.Position
+        local last = controlPoints[#controlPoints] or self.rootPart.Position
+        while #controlPoints < 4 do
+            table.insert(controlPoints, 1, first)
+        end
+        table.insert(controlPoints, last)
+    else
+        -- Duplicate ends once for better boundary behavior
+        table.insert(controlPoints, 1, controlPoints[1])
+        table.insert(controlPoints, controlPoints[#controlPoints])
+    end
+
+    local spline = CatmullRomSpline.new(controlPoints)
+    if spline then
+        spline:SetUniform(true)
+        self.spline = spline
+    end
+end
+
+function SkinnedSnake:rebuildSplineIfNeeded()
+    if not self.spline then
+        self:rebuildSpline()
+        return
+    end
+    -- Periodically refresh to incorporate newest history
+    if (self.frameCount % 3) == 0 then
+        self:rebuildSpline()
+    end
+end
+
 function SkinnedSnake:startUpdateLoop()
     self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
         if not self.isAlive then return end
@@ -428,6 +522,9 @@ function SkinnedSnake:startUpdateLoop()
         
         -- Update position history
         self:updateHistory()
+        
+        -- Rebuild spline from history at a throttled cadence
+        self:rebuildSplineIfNeeded()
         
         -- Update bone positions for slithering animation
         self:updateBones(deltaTime)
@@ -463,5 +560,50 @@ function SkinnedSnake:destroy()
     print("❌ Skinned Snake destroyed for", self.player.Name)
 end
 
+function SkinnedSnake:setRadius(newRadius)
+    -- Public API to control snake girth independently of length
+    self:applyRadiusScale(newRadius)
+end
+
+function SkinnedSnake:updateLength(newLength)
+    if typeof(newLength) == "number" then
+        self.length = math.clamp(newLength, MIN_SNAKE_LENGTH, MAX_SNAKE_LENGTH)
+    end
+end
+
+function SkinnedSnake:updateConfig(newConfig)
+    if typeof(newConfig) ~= "table" then return end
+    if newConfig.HeadColor then
+        self.config.HeadColor = newConfig.HeadColor
+        if self.headLight then
+            self.headLight.Color = newConfig.HeadColor
+        end
+        if self.boostParticles then
+            self.boostParticles.Color = ColorSequence.new(newConfig.HeadColor)
+        end
+    end
+    if newConfig.BodyColors and #newConfig.BodyColors > 0 then
+        self.config.BodyColors = newConfig.BodyColors
+    end
+    if newConfig.Radius then
+        self:setRadius(newConfig.Radius)
+    end
+end
+
+function SkinnedSnake:getTaperAt(u)
+    -- u in [0,1] head->tail; default profile: thin ends, thick middle
+    return 0.5 + math.sin(u * math.pi) * 0.5
+end
+
 -- Module return
-return SkinnedSnake
+local OptimizedSnakeSystemV9 = {}
+
+function OptimizedSnakeSystemV9.init()
+    print("✅ OptimizedSnakeSystemV9 initialized (skinned mesh, spline-driven)")
+end
+
+function OptimizedSnakeSystemV9.createSnake(character, config)
+    return SkinnedSnake.new(character, config)
+end
+
+return OptimizedSnakeSystemV9
