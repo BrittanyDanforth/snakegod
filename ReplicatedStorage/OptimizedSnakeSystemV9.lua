@@ -10,8 +10,11 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
--- Add spline dependency for smooth, arc-length based sampling
-local CatmullRomSpline = require(ReplicatedStorage:WaitForChild("CatmullRomSpline"))
+-- Add spline dependency for smooth, arc-length based sampling (safe require with timeout)
+local CatmullRomSpline = nil
+pcall(function()
+    CatmullRomSpline = require(ReplicatedStorage:WaitForChild("CatmullRomSpline", 1))
+end)
 
 -- Constants for the skinned mesh system
 local MESH_ASSET_ID = "rbxassetid://YOUR_MESH_ID" -- Will be replaced with actual asset ID
@@ -396,6 +399,48 @@ function SkinnedSnake:getHistoricalPosition(segmentsBack)
     return self.positionHistory[targetIndex] or self.positionHistory[self.historyIndex]
 end
 
+function SkinnedSnake:getHistoricalData(stepsBack)
+    -- Existing helper kept for simple fallback usage
+    local targetIndex = ((self.historyIndex - stepsBack - 1) % HISTORY_SIZE) + 1
+    return self.positionHistory[targetIndex] or self.positionHistory[self.historyIndex]
+end
+
+-- Helper: sample history by traveled distance backwards from current index
+local function getHistoryAtBackDistance(self, targetBackDistance)
+    if not self.positionHistory or self.historyIndex == 0 then
+        return nil
+    end
+    local accumulated = 0
+    local idx = self.historyIndex
+    local current = self.positionHistory[idx]
+    local prevIdx = ((idx - 2) % HISTORY_SIZE) + 1
+    while accumulated < targetBackDistance do
+        local prev = self.positionHistory[prevIdx]
+        if not prev then break end
+        local segment = (current.position - prev.position).Magnitude
+        accumulated = accumulated + segment
+        if accumulated >= targetBackDistance then
+            -- Interpolate between prev and current to hit exact distance
+            local overshoot = accumulated - targetBackDistance
+            local t = segment > 0 and (1 - overshoot / segment) or 1
+            local pos = prev.position:Lerp(current.position, t)
+            local dir = (current.position - prev.position)
+            dir = dir.Magnitude > 1e-3 and dir.Unit or Vector3.new(0, 0, -1)
+            return { position = pos, direction = dir }
+        end
+        -- step back
+        current = prev
+        idx = prevIdx
+        prevIdx = ((prevIdx - 2) % HISTORY_SIZE) + 1
+        if prevIdx == idx then break end
+    end
+    -- Fallback to oldest available
+    return {
+        position = current and current.position or self.rootPart.Position,
+        direction = current and (current.direction or self.rootPart.CFrame.LookVector) or self.rootPart.CFrame.LookVector
+    }
+end
+
 local function computeStableUp(prevUp: Vector3, tangent: Vector3)
     local worldUp = Vector3.new(0, 1, 0)
     local t = tangent.Magnitude > 0 and tangent.Unit or Vector3.new(0, 0, -1)
@@ -450,57 +495,93 @@ end
 function SkinnedSnake:updateBones(deltaTime)
     if not self.bones or #self.bones == 0 then return end
 
-    -- Build a spline from recent motion for arc-length sampling
-    local controlPoints = buildControlPointsFromHistory(self, CONTROL_POINT_COUNT)
-    if #controlPoints < 4 then return end
-
-    local spline = CatmullRomSpline.new(controlPoints)
-    if not spline then return end
-    spline:SetUniform(true)
-
-    -- Determine total spline length
-    local splineLength = spline:GetLength()
-    if splineLength <= 0 then return end
-
-    -- Total length needed for all bones along body
-    local totalBoneLength = math.max(0, (#self.bones - 1) * self.boneSpacing)
-    local startOffset = math.max(0, splineLength - totalBoneLength)
-
     local meshCFrame = self.meshPart.CFrame
 
-    -- Propagate a stable up-vector along the chain to prevent roll/poking
+    if CatmullRomSpline then
+        -- Build a spline from recent motion for arc-length sampling
+        local controlPoints = buildControlPointsFromHistory(self, CONTROL_POINT_COUNT)
+        if #controlPoints < 4 then return end
+
+        local spline = CatmullRomSpline.new(controlPoints)
+        if not spline then return end
+        spline:SetUniform(true)
+
+        -- Determine total spline length
+        local splineLength = spline:GetLength()
+        if splineLength <= 0 then return end
+
+        -- Total length needed for all bones along body
+        local totalBoneLength = math.max(0, (#self.bones - 1) * self.boneSpacing)
+        local startOffset = math.max(0, splineLength - totalBoneLength)
+
+        -- Propagate a stable up-vector along the chain to prevent roll/poking
+        local chainPrevUp = Vector3.new(0, 1, 0)
+
+        for i, bone in ipairs(self.bones) do
+            local distance = startOffset + (i - 1) * self.boneSpacing
+            local t = math.clamp(distance / splineLength, 0, 1)
+
+            local position = spline:GetPoint(t)
+            local tangent = spline:GetTangent(t)
+
+            -- Stable frame with minimal roll change
+            local up = computeStableUp(self.previousUpVectors[bone] or chainPrevUp, tangent)
+            chainPrevUp = up
+            self.previousUpVectors[bone] = up
+
+            -- Build a stable frame to lock roll
+            local tt = tangent.Unit
+            local right = tt:Cross(up).Unit
+            local trueUp = right:Cross(tt).Unit
+            local worldCFrame = CFrame.fromMatrix(position, right, trueUp)
+
+            -- Optional subtle waving in local right axis for life-like motion
+            local wave = math.sin((tick() * WAVE_FREQUENCY) - i * 0.3) * (WAVE_AMPLITUDE * 0.1)
+            worldCFrame = worldCFrame * CFrame.Angles(0, 0, wave)
+
+            -- Convert to mesh-local space
+            local relativeTransform = meshCFrame:Inverse() * worldCFrame
+
+            -- Apply initial bone offset from rig
+            local initialOffset = self.boneOffsets[bone] or CFrame.new()
+            relativeTransform = relativeTransform * initialOffset
+
+            -- Smooth the transform to avoid jitter
+            local previous = self.previousTransforms[bone]
+            if previous then
+                relativeTransform = previous:Lerp(relativeTransform, BONE_BLEND_FACTOR)
+            end
+
+            bone.Transform = relativeTransform
+            self.previousTransforms[bone] = relativeTransform
+        end
+        return
+    end
+
+    -- Fallback path: sample history by distance without spline module
     local chainPrevUp = Vector3.new(0, 1, 0)
-
     for i, bone in ipairs(self.bones) do
-        local distance = startOffset + (i - 1) * self.boneSpacing
-        local t = math.clamp(distance / splineLength, 0, 1)
+        local backDistance = (i - 1) * self.boneSpacing
+        local sample = getHistoryAtBackDistance(self, backDistance)
+        local pos = sample.position
+        local tangent = sample.direction
 
-        local position = spline:GetPoint(t)
-        local tangent = spline:GetTangent(t)
-
-        -- Stable frame with minimal roll change
         local up = computeStableUp(self.previousUpVectors[bone] or chainPrevUp, tangent)
         chainPrevUp = up
         self.previousUpVectors[bone] = up
 
-        -- Build a stable frame to lock roll
-        local t = tangent.Unit
-        local right = t:Cross(up).Unit
-        local trueUp = right:Cross(t).Unit
-        local worldCFrame = CFrame.fromMatrix(position, right, trueUp)
+        local tt = tangent.Unit
+        local right = tt:Cross(up).Unit
+        local trueUp = right:Cross(tt).Unit
+        local worldCFrame = CFrame.fromMatrix(pos, right, trueUp)
 
-        -- Optional subtle waving in local right axis for life-like motion
         local wave = math.sin((tick() * WAVE_FREQUENCY) - i * 0.3) * (WAVE_AMPLITUDE * 0.1)
         worldCFrame = worldCFrame * CFrame.Angles(0, 0, wave)
 
-        -- Convert to mesh-local space
         local relativeTransform = meshCFrame:Inverse() * worldCFrame
-
-        -- Apply initial bone offset from rig
         local initialOffset = self.boneOffsets[bone] or CFrame.new()
         relativeTransform = relativeTransform * initialOffset
 
-        -- Smooth the transform to avoid jitter
         local previous = self.previousTransforms[bone]
         if previous then
             relativeTransform = previous:Lerp(relativeTransform, BONE_BLEND_FACTOR)
