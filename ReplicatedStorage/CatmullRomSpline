@@ -1,11 +1,3 @@
--- CatmullRomSpline V2.1.1 (Hermite tension 0.1) - Stable Turning
--- LAST_UPDATED: 2025-08-08
--- COMMIT_NOTE: Added endpoint-safe tangent, version accessor, and explicit header for CI visibility
-
--- CHANGELOG:
--- - V2.1.1: Public Version() accessor for external logging; metadata header for repos
--- - V2.1: safer tangent at endpoints, header/version note for CI visibility
-
 --[[
 	Catmull-Rom Spline Module (V2 - Stable Turning)
 	This script creates a smooth, mathematical curve from a series of points.
@@ -24,32 +16,28 @@
 local CatmullRomSpline = {}
 CatmullRomSpline.__index = CatmullRomSpline
 
--- Version metadata
-local VERSION = "2.1.1"
-local LAST_UPDATED = "2025-08-08"
-function CatmullRomSpline.Version()
-	return VERSION, LAST_UPDATED
-end
-
 -- t is the interpolation factor between 0 and 1
 -- p0, p1, p2, p3 are the four control points (Vector3)
 local function interpolate(t, p0, p1, p2, p3)
-	-- Low tension keeps curve tight and stable on sharp turns
+	-- A low tension value makes the curve "tighter" and is essential
+	-- to prevent the spline from creating loops during sharp turns.
+	-- A value of 0.5 is standard Catmull-Rom, which is too unstable for this use case.
 	local tension = 0.1
 
 	local t2 = t * t
 	local t3 = t2 * t
 
-	-- Tangents (Hermite form)
+	-- Calculate tangents (slopes) for the middle two points
 	local m1 = (p2 - p0) * tension
 	local m2 = (p3 - p1) * tension
 
-	-- Hermite basis
+	-- These are Hermite basis functions, which blend the points and tangents together
 	local h1 =  2*t3 - 3*t2 + 1
 	local h2 = -2*t3 + 3*t2
 	local h3 =    t3 - 2*t2 + t
 	local h4 =    t3 - t2
 
+	-- Combine the points and their tangents to get the final position on the curve
 	return h1*p1 + h2*p2 + h3*m1 + h4*m2
 end
 
@@ -104,16 +92,9 @@ end
 
 function CatmullRomSpline:GetTangent(t)
 	local h = 0.001
-	-- clamp endpoints to avoid NaNs
-	if t <= 0 then t = 0.0005 elseif t >= 1 then t = 0.9995 end
 	local p1 = self:GetPoint(t - h)
 	local p2 = self:GetPoint(t + h)
-	local v = p2 - p1
-	local mag = v.Magnitude
-	if mag < 1e-6 or mag ~= mag then
-		return Vector3.new(0,0,-1)
-	end
-	return v / mag
+	return (p2 - p1).Unit
 end
 
 function CatmullRomSpline:GetLength(stepsPerSegment)
@@ -150,7 +131,7 @@ function CatmullRomSpline:_calculateArcLengths()
 		lastPoint = currentPoint
 	end
 
-	-- Normalize
+	-- Normalize the arc lengths
 	for i = 1, #self.arcLengths do
 		self.arcLengths[i] = self.arcLengths[i] / totalLength
 	end
@@ -164,6 +145,7 @@ function CatmullRomSpline:_mapToNonUniform(t)
 	local high = #self.arcLengths
 	local index = 1
 
+	-- Binary search to find the segment
 	while low < high do
 		index = low + math.floor((high - low) / 2)
 		if self.arcLengths[index] < targetArcLength then
