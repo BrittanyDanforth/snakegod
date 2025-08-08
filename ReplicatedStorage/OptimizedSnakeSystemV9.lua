@@ -242,9 +242,15 @@ function SkinnedSnake:createSkinnedMesh()
             local seg = Instance.new("Part")
             seg.Name = string.format("SnakeSeg_%02d", i)
             seg.Shape = Enum.PartType.Ball
-            seg.Size = Vector3.new(1.2, 1.2, 1.2) * self.scale
+            -- Size: head uses HeadSize if provided, body uses SegmentSize or scaled head
+            local headSize = (self.config.HeadSize and Vector3.new(self.config.HeadSize.X, self.config.HeadSize.Y, self.config.HeadSize.Z)) or Vector3.new(3, 3, 3)
+            local bodySize = (self.config.SegmentSize and Vector3.new(self.config.SegmentSize.X, self.config.SegmentSize.Y, self.config.SegmentSize.Z)) or (headSize * 0.6)
+            seg.Size = (i == 1) and (headSize) or (bodySize)
             seg.Material = Enum.Material.Neon
-            seg.Color = self.config.BodyColors[1] or Color3.fromRGB(76, 217, 100)
+            -- Color: head uses HeadColor, body uses first body color
+            local headColor = (self.config.HeadColor and typeof(self.config.HeadColor) == "Color3") and self.config.HeadColor or Color3.fromRGB(255, 255, 0)
+            local bodyColor = (self.config.BodyColors and typeof(self.config.BodyColors[1]) == "Color3") and self.config.BodyColors[1] or Color3.fromRGB(76, 217, 100)
+            seg.Color = (i == 1) and headColor or bodyColor
             seg.Anchored = true
             seg.CanCollide = false
             seg.CanQuery = false
@@ -259,6 +265,47 @@ function SkinnedSnake:createSkinnedMesh()
         self.bones = {}
         self.originalBoneTransforms = {}
         print("[Snake] Using fallback segmented body (no skinned mesh found)")
+
+        -- Immediately position segments so the player sees the body before first heartbeat
+        self:rebuildSpline()
+        local useSpline = (self.splineAvailable and self.spline ~= nil)
+        local count = #self.segmentParts
+        for i = 1, count do
+            local targetPos, targetLook
+            if useSpline then
+                local t = count > 1 and math.max(0, 1 - (i - 1) / (count - 1)) or 1
+                local pos = self.spline:GetPoint(t)
+                local tan = self.spline:GetTangent(t)
+                targetPos = pos
+                targetLook = tan
+            else
+                local segmentOffset = (i - 1) * math.max(1, self.length / count)
+                local historicalData = self:getHistoricalPosition(segmentOffset)
+                targetPos = historicalData.position
+                targetLook = historicalData.lookVector
+            end
+            if targetLook.Magnitude < 1e-6 then
+                targetLook = Vector3.new(0, 0, -1)
+            end
+            self.segmentParts[i].CFrame = CFrame.lookAt(targetPos, targetPos + targetLook)
+        end
+
+        -- Ensure selection box is visible on fallback head (local player only)
+        if self.isLocalPlayer and self.meshPart then
+            if not self.selectionBox then
+                self.selectionBox = Instance.new("SelectionBox")
+                self.selectionBox.Adornee = self.meshPart
+                self.selectionBox.Color3 = headColor
+                self.selectionBox.LineThickness = 0.1
+                self.selectionBox.Transparency = 0.5
+                self.selectionBox.Parent = self.meshPart
+            else
+                self.selectionBox.Adornee = self.meshPart
+                self.selectionBox.Color3 = headColor
+                self.selectionBox.LineThickness = 0.1
+                self.selectionBox.Transparency = 0.5
+            end
+        end
     end
     
     -- Add visual effects (attach to self.meshPart, which is head in both cases)
