@@ -421,17 +421,25 @@ function Snake:updateBones(deltaTime)
 		local targetDistance = (i - 1) * currentSegmentGap
 		
 		-- 2. Find the exact point in our position history that matches this target distance.
-		--    Instead of just grabbing a far-off point (like your old system), we now iterate
-		--    backwards through the high-fidelity history to find the *precise* CFrame.
+		--    We iterate backwards through the history to find the *precise* CFrame.
 		local historicalData = nil
 		local distanceTraveled = 0
 		local lastPosition = self.rootPart.Position
+		
+		-- CRITICAL FIX: Track the last valid historical point we encounter
+		-- This ensures bones at the end have somewhere sensible to go
+		local lastValidHistoricalPoint = nil
+		local furthestBackIndex = 0
 		
 		for j = 1, HISTORY_SIZE - 1 do
 			local historyIndex = ((self.historyIndex - j - 1) % HISTORY_SIZE) + 1
 			local historicalPoint = self.positionHistory[historyIndex]
 			
 			if not historicalPoint then break end
+			
+			-- Always track the last valid point we see
+			lastValidHistoricalPoint = historicalPoint
+			furthestBackIndex = j
 			
 			-- Add the distance between this history point and the previous one
 			distanceTraveled = distanceTraveled + (lastPosition - historicalPoint.position).Magnitude
@@ -445,24 +453,37 @@ function Snake:updateBones(deltaTime)
 			lastPosition = historicalPoint.position
 		end
 		
-		-- Fallback: If the history isn't long enough, use the last available point.
+		-- IMPROVED FALLBACK: Handle "running out of path" gracefully
 		if not historicalData then
-			historicalData = self:getHistoricalData(HISTORY_SIZE - 1)
+			if lastValidHistoricalPoint then
+				-- Use the furthest valid point we found
+				historicalData = lastValidHistoricalPoint
+			else
+				-- Extreme fallback: position relative to root
+				-- This creates a natural "coiled" look when spawning
+				local coilOffset = Vector3.new(
+					math.sin(i * 0.5) * currentSegmentGap,
+					0,
+					math.cos(i * 0.5) * currentSegmentGap
+				)
+				historicalData = {
+					position = self.rootPart.Position - self.rootPart.CFrame.LookVector * targetDistance + coilOffset,
+					direction = self.rootPart.CFrame.LookVector
+				}
+			end
 		end
 
 		if historicalData then
-			-- 3. This is the magic. We define the target CFrame for the bone.
-			--    Position: The historical position.
-			--    Rotation: Pointing in the historical direction of movement.
+			-- 3. Define the target CFrame for the bone
 			local targetCFrame = CFrame.lookAt(
 				historicalData.position,
 				historicalData.position + historicalData.direction
 			)
 
-			-- 4. Snap the bone to the target CFrame with extremely high interpolation.
-			--    This eliminates the lag and makes the body perfectly adhere to the path,
-			--    creating that iconic fluid motion.
-			bone.WorldCFrame = bone.WorldCFrame:Lerp(targetCFrame, INTERPOLATION_SPEED)
+			-- 4. Snap the bone to the target CFrame with high interpolation
+			-- For initial positioning (first few frames), use instant placement
+			local interpSpeed = (furthestBackIndex < 5 and i > 5) and 1.0 or INTERPOLATION_SPEED
+			bone.WorldCFrame = bone.WorldCFrame:Lerp(targetCFrame, interpSpeed)
 		end
 	end
 end
