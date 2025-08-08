@@ -406,9 +406,9 @@ function Snake:updateBones(deltaTime)
 		  this should be extremely high. 1.0 is instant, 0.95 is extremely fast but can smooth over
 		  tiny network jitters. A low value (like your old 0.5) is what causes ugly, lagging turns.
 	]]
-	local NORMAL_SEGMENT_GAP = 0.75 
-	local BOOST_SEGMENT_GAP = 1.5  
-	local INTERPOLATION_SPEED = 0.95 
+	local NORMAL_SEGMENT_GAP = 2.5   -- Increased for more visible segments
+	local BOOST_SEGMENT_GAP = 4.0   -- Dramatic stretch when boosting
+	local INTERPOLATION_SPEED = 0.98 -- Near-instant for that snappy slither.io feel 
 
 	-- Determine the current gap distance based on whether the snake is boosting
 	local currentSegmentGap = self.isBoosting and BOOST_SEGMENT_GAP or NORMAL_SEGMENT_GAP
@@ -459,15 +459,10 @@ function Snake:updateBones(deltaTime)
 				-- Use the furthest valid point we found
 				historicalData = lastValidHistoricalPoint
 			else
-				-- Extreme fallback: position relative to root
-				-- This creates a natural "coiled" look when spawning
-				local coilOffset = Vector3.new(
-					math.sin(i * 0.5) * currentSegmentGap,
-					0,
-					math.cos(i * 0.5) * currentSegmentGap
-				)
+				-- Extreme fallback: create a straight line behind the snake
+				-- This prevents any bunching or weird coiling at spawn
 				historicalData = {
-					position = self.rootPart.Position - self.rootPart.CFrame.LookVector * targetDistance + coilOffset,
+					position = self.rootPart.Position - self.rootPart.CFrame.LookVector * targetDistance,
 					direction = self.rootPart.CFrame.LookVector
 				}
 			end
