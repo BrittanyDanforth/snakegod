@@ -234,6 +234,15 @@ function SkinnedSnake:createSkinnedMesh()
     cloned.Name = "SnakeBody"
     cloned.Parent = self.model
 
+    -- Disable collisions on all BaseParts to avoid physics conflicts
+    for _, d in ipairs(cloned:GetDescendants()) do
+        if d:IsA("BasePart") then
+            d.CanCollide = false
+            d.CanQuery = false
+            d.Massless = true
+        end
+    end
+
     -- If it's a model, prefer MeshPart named 'Circle', else first MeshPart
     if cloned:IsA("Model") then
         self.meshPart = cloned:FindFirstChild("Circle")
