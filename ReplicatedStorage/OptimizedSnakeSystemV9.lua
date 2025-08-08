@@ -10,6 +10,9 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
+-- Add spline dependency for smooth, arc-length based sampling
+local CatmullRomSpline = require(ReplicatedStorage:WaitForChild("CatmullRomSpline"))
+
 -- Constants for the skinned mesh system
 local MESH_ASSET_ID = "rbxassetid://YOUR_MESH_ID" -- Will be replaced with actual asset ID
 local BONE_COUNT = 15 -- Should match the number of bones in your Blender model
@@ -37,6 +40,11 @@ local WAVE_FREQUENCY = 2.0 -- How fast the wave travels down the body
 -- Growth Constants
 local GROWTH_RATE = 0.1 -- How fast the snake grows (units per food)
 local SCALE_PER_LENGTH = 0.005 -- How much the scale increases per length unit
+
+-- NEW smoothing/spacing constants for bones
+local DEFAULT_BONE_SPACING = 2.5 -- Studs between bones along the spline
+local BONE_BLEND_FACTOR = 0.6 -- 0..1 smoothing each frame (higher = snappier)
+local CONTROL_POINT_COUNT = 10 -- Control points to build the spline from recent motion
 
 -- LOD System for performance
 local LOD_DISTANCES = {
@@ -80,6 +88,13 @@ function SkinnedSnake.new(character, config)
     self.historyIndex = 0
     self.wavePhase = 0
     self.targetDirection = self.rootPart.CFrame.LookVector
+
+    -- Bone animation state
+    self.boneSpacing = DEFAULT_BONE_SPACING
+    self.originalBoneTransforms = {}
+    self.previousTransforms = {}
+    self.boneOffsets = {}
+    self.previousUpVectors = {}
     
     -- Visual state
     self.currentColorIndex = 1
@@ -135,11 +150,115 @@ function SkinnedSnake:createSkinnedMesh()
     self.model.Name = "SkinnedSnake_" .. self.player.Name
     self.model.Parent = workspace
     
-    -- Load the skinned mesh from ReplicatedStorage
-    local meshTemplate = ReplicatedStorage:WaitForChild("Meshes"):WaitForChild("untitledsnakeeeee")
-    self.meshPart = meshTemplate:Clone()
-    self.meshPart.Name = "SnakeBody"
-    self.meshPart.Parent = self.model
+    -- Try to locate a skinned mesh template in ReplicatedStorage
+    local templateModel = ReplicatedStorage:FindFirstChild("SkinnedSnakeTemplate")
+        or ReplicatedStorage:FindFirstChild("slither_snake_rigged")
+        or ReplicatedStorage:FindFirstChild("untitledsnakeeeee")
+
+    -- Fallback: look under a Meshes folder or any MeshPart child
+    if not templateModel then
+        local meshesFolder = ReplicatedStorage:FindFirstChild("Meshes")
+        if meshesFolder then
+            templateModel = meshesFolder:FindFirstChildOfClass("MeshPart")
+                or meshesFolder:FindFirstChildOfClass("Model")
+        end
+    end
+
+    -- Final fallback: search any MeshPart directly under ReplicatedStorage
+    if not templateModel then
+        for _, child in ipairs(ReplicatedStorage:GetChildren()) do
+            if child:IsA("MeshPart") or child:IsA("Model") then
+                templateModel = child
+                break
+            end
+        end
+    end
+
+    if not templateModel then
+        warn("[OptimizedSnakeSystemV9] No skinned mesh template found in ReplicatedStorage. Using fallback part.")
+        -- Minimal fallback visual so game continues without errors
+        local fallback = Instance.new("Part")
+        fallback.Name = "SnakeFallback"
+        fallback.Size = Vector3.new(4, 4, 4)
+        fallback.Material = Enum.Material.Neon
+        fallback.Color = self.config.HeadColor
+        fallback.CanCollide = false
+        fallback.CanQuery = false
+        fallback.Anchored = false
+        fallback.Parent = self.model
+        self.meshPart = fallback
+
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0 = self.meshPart
+        weld.Part1 = self.rootPart
+        weld.Parent = self.meshPart
+        self.meshPart.CFrame = self.rootPart.CFrame
+
+        self.bones = {}
+        self:addVisualEffects()
+        return
+    end
+
+    -- Clone the template
+    local cloned
+    if templateModel:IsA("MeshPart") then
+        cloned = templateModel:Clone()
+    elseif templateModel:IsA("Model") then
+        cloned = templateModel:Clone()
+    else
+        warn("[OptimizedSnakeSystemV9] Template found but not a Model/MeshPart. Using fallback part.")
+        local fallback = Instance.new("Part")
+        fallback.Name = "SnakeFallback"
+        fallback.Size = Vector3.new(4, 4, 4)
+        fallback.Material = Enum.Material.Neon
+        fallback.Color = self.config.HeadColor
+        fallback.CanCollide = false
+        fallback.CanQuery = false
+        fallback.Anchored = false
+        fallback.Parent = self.model
+        self.meshPart = fallback
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0 = self.meshPart
+        weld.Part1 = self.rootPart
+        weld.Parent = self.meshPart
+        self.meshPart.CFrame = self.rootPart.CFrame
+        self.bones = {}
+        self:addVisualEffects()
+        return
+    end
+
+    -- Adopt cloned asset
+    cloned.Name = "SnakeBody"
+    cloned.Parent = self.model
+
+    -- If it's a model, find its MeshPart
+    if cloned:IsA("Model") then
+        self.meshPart = cloned:FindFirstChildOfClass("MeshPart")
+    else
+        self.meshPart = cloned
+    end
+
+    if not self.meshPart then
+        warn("[OptimizedSnakeSystemV9] Cloned template does not contain a MeshPart. Using fallback part.")
+        local fallback = Instance.new("Part")
+        fallback.Name = "SnakeFallback"
+        fallback.Size = Vector3.new(4, 4, 4)
+        fallback.Material = Enum.Material.Neon
+        fallback.Color = self.config.HeadColor
+        fallback.CanCollide = false
+        fallback.CanQuery = false
+        fallback.Anchored = false
+        fallback.Parent = self.model
+        self.meshPart = fallback
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0 = self.meshPart
+        weld.Part1 = self.rootPart
+        weld.Parent = self.meshPart
+        self.meshPart.CFrame = self.rootPart.CFrame
+        self.bones = {}
+        self:addVisualEffects()
+        return
+    end
     
     -- Set up the mesh properties
     self.meshPart.Anchored = false
@@ -155,45 +274,36 @@ function SkinnedSnake:createSkinnedMesh()
     self.meshPart:SetAttribute("OwnerName", self.player.Name)
     self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
     
-    -- Find the armature and bones
-    self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController")
-    if not self.armature then
-        -- Look for bones directly
-        self.bones = {}
-        local function findBones(parent)
-            for _, child in pairs(parent:GetChildren()) do
-                if child:IsA("Bone") then
-                    table.insert(self.bones, child)
-                elseif child:IsA("Model") or child:IsA("Folder") then
-                    findBones(child)
-                end
-            end
-        end
-        findBones(self.meshPart)
-        
-        -- Sort bones by name or position
-        table.sort(self.bones, function(a, b)
-            return a.Name < b.Name
-        end)
-    else
-        -- Get bones from armature
-        self.bones = {}
-        local rootBone = self.armature:FindFirstChild("Bone")
-        if rootBone then
-            local currentBone = rootBone
-            while currentBone do
-                table.insert(self.bones, currentBone)
-                currentBone = currentBone:FindFirstChildOfClass("Bone")
+    -- Find bones directly under the mesh
+    self.bones = {}
+    local function findBones(parent)
+        for _, child in pairs(parent:GetChildren()) do
+            if child:IsA("Bone") then
+                table.insert(self.bones, child)
+            else
+                findBones(child)
             end
         end
     end
-    
+    findBones(self.meshPart)
+
+    -- If multiple naming schemes, try sorting by name as fallback
+    table.sort(self.bones, function(a, b)
+        return a.Name < b.Name
+    end)
+
     print("Found", #self.bones, "bones in the mesh")
-    
-    -- Store original bone transforms
+
+    -- Store original bone transforms and initialize smoothing state
     self.originalBoneTransforms = {}
+    self.previousTransforms = {}
+    self.boneOffsets = {}
+    self.previousUpVectors = {}
     for i, bone in ipairs(self.bones) do
         self.originalBoneTransforms[i] = bone.Transform
+        self.boneOffsets[bone] = bone.Transform
+        self.previousTransforms[bone] = bone.Transform
+        self.previousUpVectors[bone] = Vector3.new(0, 1, 0)
     end
     
     -- Add visual effects
@@ -286,46 +396,118 @@ function SkinnedSnake:getHistoricalPosition(segmentsBack)
     return self.positionHistory[targetIndex] or self.positionHistory[self.historyIndex]
 end
 
+local function computeStableUp(prevUp: Vector3, tangent: Vector3)
+    local worldUp = Vector3.new(0, 1, 0)
+    local t = tangent.Magnitude > 0 and tangent.Unit or Vector3.new(0, 0, -1)
+
+    -- Project previous up onto plane perpendicular to tangent (parallel transport)
+    local upProj = prevUp - t * prevUp:Dot(t)
+    if upProj.Magnitude < 1e-3 then
+        -- Fallback to world up if projection is near zero (tangent ~ parallel to up)
+        upProj = worldUp - t * worldUp:Dot(t)
+        if upProj.Magnitude < 1e-3 then
+            -- Final fallback: any orthonormal up
+            upProj = Vector3.new(1, 0, 0)
+        end
+    end
+    local up = upProj.Unit
+    local right = t:Cross(up).Unit
+    -- Re-orthogonalize up to ensure perfect basis
+    up = right:Cross(t).Unit
+
+    return up
+end
+
+local function buildControlPointsFromHistory(self, count)
+    local points = {}
+    if not self.positionHistory or self.historyIndex == 0 then
+        return points
+    end
+
+    -- Sample evenly from recent history
+    local step = math.max(1, math.floor(HISTORY_SIZE / math.max(4, count)))
+    local idx = self.historyIndex
+    for i = 1, count do
+        local h = self.positionHistory[idx]
+        if h then
+            table.insert(points, 1, h.position) -- prepend to keep chronological order
+        end
+        idx = ((idx - step - 1) % HISTORY_SIZE) + 1
+    end
+
+    -- Ensure at least 4 points by duplicating ends if needed
+    while #points < 4 do
+        if #points == 0 then
+            table.insert(points, self.rootPart.Position)
+        else
+            table.insert(points, points[#points])
+        end
+    end
+
+    return points
+end
+
 function SkinnedSnake:updateBones(deltaTime)
     if not self.bones or #self.bones == 0 then return end
-    
-    -- Update wave phase for natural movement
-    self.wavePhase = self.wavePhase + WAVE_FREQUENCY * deltaTime
-    
-    -- Calculate how many segments each bone represents
-    local segmentsPerBone = math.max(1, self.length / #self.bones)
-    
+
+    -- Build a spline from recent motion for arc-length sampling
+    local controlPoints = buildControlPointsFromHistory(self, CONTROL_POINT_COUNT)
+    if #controlPoints < 4 then return end
+
+    local spline = CatmullRomSpline.new(controlPoints)
+    if not spline then return end
+    spline:SetUniform(true)
+
+    -- Determine total spline length
+    local splineLength = spline:GetLength()
+    if splineLength <= 0 then return end
+
+    -- Total length needed for all bones along body
+    local totalBoneLength = math.max(0, (#self.bones - 1) * self.boneSpacing)
+    local startOffset = math.max(0, splineLength - totalBoneLength)
+
+    local meshCFrame = self.meshPart.CFrame
+
+    -- Propagate a stable up-vector along the chain to prevent roll/poking
+    local chainPrevUp = Vector3.new(0, 1, 0)
+
     for i, bone in ipairs(self.bones) do
-        -- Get historical position for this bone
-        local segmentOffset = (i - 1) * segmentsPerBone
-        local historicalData = self:getHistoricalPosition(segmentOffset)
-        
-        -- Calculate the target position for this bone
-        local targetPos = historicalData.position
-        local targetLook = historicalData.lookVector
-        
-        -- Add wave motion for natural slithering
-        local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * WAVE_AMPLITUDE
-        local perpendicular = targetLook:Cross(Vector3.new(0, 1, 0)).Unit
-        
-        -- Apply wave motion
-        local wavePosition = targetPos + perpendicular * waveOffset
-        
-        -- Calculate bone transform
-        local boneOffset = i == 1 and 0 or (i - 1) / (#self.bones - 1)
-        local scaleFactor = 1 - (boneOffset * 0.3) -- Taper towards tail
-        
-        -- Apply the transform to the bone
-        if i == 1 then
-            -- Head bone follows root part more closely
-            bone.Transform = self.originalBoneTransforms[i] * CFrame.new(0, 0, 0)
-        else
-            -- Body bones follow with wave motion
-            local localOffset = self.meshPart.CFrame:ToObjectSpace(CFrame.new(wavePosition))
-            bone.Transform = self.originalBoneTransforms[i] * 
-                           CFrame.new(localOffset.Position * 0.1) * 
-                           CFrame.Angles(0, waveOffset * 0.1, 0)
+        local distance = startOffset + (i - 1) * self.boneSpacing
+        local t = math.clamp(distance / splineLength, 0, 1)
+
+        local position = spline:GetPoint(t)
+        local tangent = spline:GetTangent(t)
+
+        -- Stable frame with minimal roll change
+        local up = computeStableUp(self.previousUpVectors[bone] or chainPrevUp, tangent)
+        chainPrevUp = up
+        self.previousUpVectors[bone] = up
+
+        -- Build a stable frame to lock roll
+        local t = tangent.Unit
+        local right = t:Cross(up).Unit
+        local trueUp = right:Cross(t).Unit
+        local worldCFrame = CFrame.fromMatrix(position, right, trueUp)
+
+        -- Optional subtle waving in local right axis for life-like motion
+        local wave = math.sin((tick() * WAVE_FREQUENCY) - i * 0.3) * (WAVE_AMPLITUDE * 0.1)
+        worldCFrame = worldCFrame * CFrame.Angles(0, 0, wave)
+
+        -- Convert to mesh-local space
+        local relativeTransform = meshCFrame:Inverse() * worldCFrame
+
+        -- Apply initial bone offset from rig
+        local initialOffset = self.boneOffsets[bone] or CFrame.new()
+        relativeTransform = relativeTransform * initialOffset
+
+        -- Smooth the transform to avoid jitter
+        local previous = self.previousTransforms[bone]
+        if previous then
+            relativeTransform = previous:Lerp(relativeTransform, BONE_BLEND_FACTOR)
         end
+
+        bone.Transform = relativeTransform
+        self.previousTransforms[bone] = relativeTransform
     end
 end
 
@@ -420,6 +602,22 @@ function SkinnedSnake:updateColors()
     end
 end
 
+function SkinnedSnake:updateLength(newLength)
+    self.length = math.clamp(tonumber(newLength) or self.length, MIN_SNAKE_LENGTH, MAX_SNAKE_LENGTH)
+end
+
+function SkinnedSnake:updateConfig(newConfig)
+    if not newConfig then return end
+    if newConfig.HeadColor then
+        self.config.HeadColor = newConfig.HeadColor
+        if self.headLight then self.headLight.Color = newConfig.HeadColor end
+        if self.boostParticles then self.boostParticles.Color = ColorSequence.new(newConfig.HeadColor) end
+    end
+    if newConfig.BodyColors and typeof(newConfig.BodyColors) == "table" and #newConfig.BodyColors > 0 then
+        self.config.BodyColors = newConfig.BodyColors
+    end
+end
+
 function SkinnedSnake:startUpdateLoop()
     self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
         if not self.isAlive then return end
@@ -464,4 +662,24 @@ function SkinnedSnake:destroy()
 end
 
 -- Module return
-return SkinnedSnake
+local OptimizedSnakeSystemV9 = {}
+
+function OptimizedSnakeSystemV9.init()
+    print("[OptimizedSnakeSystemV9] Initialized (Skinned Mesh, Bone-driven)")
+end
+
+function OptimizedSnakeSystemV9.createSnake(character, config)
+    return SkinnedSnake.new(character, config)
+end
+
+function OptimizedSnakeSystemV9.createSnakeFromSavedState(character, config, savedState)
+    local snake = SkinnedSnake.new(character, config)
+    if savedState and snake then
+        if savedState.length then
+            snake:updateLength(savedState.length)
+        end
+    end
+    return snake
+end
+
+return OptimizedSnakeSystemV9
