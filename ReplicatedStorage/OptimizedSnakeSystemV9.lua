@@ -668,19 +668,31 @@ function SkinnedSnake:setBoost(boosting)
 end
 
 function SkinnedSnake:updateColors()
+    if not self.headLight or not self.boostParticles then return end
+
     -- Cycle through body colors or apply rainbow mode
     if self.rainbowMode then
         local hue = (tick() * 0.5) % 1
         local color = Color3.fromHSV(hue, 1, 1)
         self.headLight.Color = color
         self.boostParticles.Color = ColorSequence.new(color)
-    else
-        -- Normal color cycling
-        self.currentColorIndex = (self.currentColorIndex % #self.config.BodyColors) + 1
-        local color = self.config.BodyColors[self.currentColorIndex]
-        self.headLight.Color = color
-        self.boostParticles.Color = ColorSequence.new(color)
+        return
     end
+
+    -- Normal color cycling with robust fallbacks
+    local colors = self.config and self.config.BodyColors or nil
+    local count = (type(colors) == "table") and #colors or 0
+    local color
+    if count > 0 then
+        self.currentColorIndex = (self.currentColorIndex % count) + 1
+        color = colors[self.currentColorIndex]
+    end
+    if typeof(color) ~= "Color3" then
+        color = self.config and self.config.HeadColor or Color3.fromRGB(76, 217, 100)
+    end
+
+    self.headLight.Color = color
+    self.boostParticles.Color = ColorSequence.new(color)
 end
 
 function SkinnedSnake:updateLength(newLength)
