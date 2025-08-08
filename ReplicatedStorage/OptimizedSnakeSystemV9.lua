@@ -37,7 +37,7 @@ local PARTICLE_RATE = 100 -- Base particle emission rate
 local BASE_SPEED = 20 -- Base movement speed
 local BOOST_MULTIPLIER = 1.5 -- Speed multiplier when boosting
 local TURN_RATE = 2.5 -- Radians per second
-local WAVE_AMPLITUDE = 1.2 -- Side-to-side movement amplitude
+local WAVE_AMPLITUDE = 0.6 -- Side-to-side movement amplitude (temporarily reduced for stability)
 local WAVE_FREQUENCY = 2.0 -- How fast the wave travels down the body
 
 -- Growth Constants
@@ -45,8 +45,8 @@ local GROWTH_RATE = 0.1 -- How fast the snake grows (units per food)
 local SCALE_PER_LENGTH = 0.005 -- How much the scale increases per length unit
 
 -- NEW smoothing/spacing constants for bones
-local DEFAULT_BONE_SPACING = 2.5 -- Studs between bones along the spline
-local BONE_BLEND_FACTOR = 0.6 -- 0..1 smoothing each frame (higher = snappier)
+local DEFAULT_BONE_SPACING = 2.0 -- Studs between bones along the spline (tighter for stability)
+local BONE_BLEND_FACTOR = 0.45 -- 0..1 smoothing each frame (lower = smoother, more damped)
 local CONTROL_POINT_COUNT = 10 -- Control points to build the spline from recent motion
 
 -- LOD System for performance
@@ -244,20 +244,64 @@ function SkinnedSnake:createSkinnedMesh()
         end
     end
 
-    -- Numeric-aware sort: Bone, Bone.001, Bone.002, ...
-    local function boneOrder(name)
-        if name == "Bone" then return -1 end
-        local n = name:match("Bone%.(%d+)") or name:match("Bone[_ ]?(%d+)")
-        return tonumber(n) or math.huge
+    -- Build main bone chain by traversing Bone->Bone children and selecting the longest path
+    local childrenMap = {}
+    local boneSet = {}
+    for _, b in ipairs(self.bones) do
+        boneSet[b] = true
     end
-    table.sort(self.bones, function(a, b)
-        local oa, ob = boneOrder(a.Name), boneOrder(b.Name)
-        if oa ~= ob then return oa < ob end
-        return a.Name < b.Name
-    end)
+    local roots = {}
+    for _, b in ipairs(self.bones) do
+        if b.Parent and b.Parent:IsA("Bone") and boneSet[b.Parent] then
+            local list = childrenMap[b.Parent]
+            if not list then list = {}; childrenMap[b.Parent] = list end
+            table.insert(list, b)
+        else
+            table.insert(roots, b)
+        end
+    end
+
+    local bestPath = {}
+    local path = {}
+    local function dfs(node)
+        table.insert(path, node)
+        local kids = childrenMap[node]
+        if not kids or #kids == 0 then
+            if #path > #bestPath then
+                bestPath = table.clone(path)
+            end
+        else
+            for _, k in ipairs(kids) do dfs(k) end
+        end
+        table.remove(path)
+    end
+    for _, r in ipairs(roots) do dfs(r) end
+
+    if #bestPath >= 2 then
+        self.bones = bestPath
+    else
+        -- fallback to name sort if chain build failed
+        local function boneOrder(name)
+            if name == "Bone" then return -1 end
+            local n = name:match("Bone%.(%d+)") or name:match("Bone[_ ]?(%d+)")
+            return tonumber(n) or math.huge
+        end
+        table.sort(self.bones, function(a, b)
+            local oa, ob = boneOrder(a.Name), boneOrder(b.Name)
+            if oa ~= ob then return oa < ob end
+            return a.Name < b.Name
+        end)
+    end
+
+    -- Enforce configured BONE_COUNT by trimming the chain from the tail if longer
+    if BONE_COUNT and type(BONE_COUNT) == "number" and BONE_COUNT >= 2 and #self.bones > BONE_COUNT then
+        local trimmed = {}
+        for i = 1, BONE_COUNT do trimmed[i] = self.bones[i] end
+        self.bones = trimmed
+    end
 
     print("Found", #self.bones, "bones in the mesh")
-    if #self.bones ~= BONE_COUNT then
+    if BONE_COUNT and #self.bones ~= BONE_COUNT then
         warn(string.format("[OptimizedSnakeSystemV9] Bone count mismatch: expected %d, found %d", BONE_COUNT, #self.bones))
     end
 
@@ -679,19 +723,26 @@ function SkinnedSnake:setBoost(boosting)
 end
 
 function SkinnedSnake:updateColors()
+    if not self.headLight or not self.boostParticles then return end
     -- Cycle through body colors or apply rainbow mode
     if self.rainbowMode then
         local hue = (tick() * 0.5) % 1
         local color = Color3.fromHSV(hue, 1, 1)
         self.headLight.Color = color
         self.boostParticles.Color = ColorSequence.new(color)
-    else
-        -- Normal color cycling
-        self.currentColorIndex = (self.currentColorIndex % #self.config.BodyColors) + 1
-        local color = self.config.BodyColors[self.currentColorIndex]
-        self.headLight.Color = color
-        self.boostParticles.Color = ColorSequence.new(color)
+        return
     end
+    -- Safe color fallback logic
+    local chosen = nil
+    if self.config and type(self.config.BodyColors) == "table" and #self.config.BodyColors > 0 then
+        self.currentColorIndex = (self.currentColorIndex % #self.config.BodyColors) + 1
+        chosen = self.config.BodyColors[self.currentColorIndex]
+    end
+    if typeof(chosen) ~= "Color3" then
+        chosen = (self.config and self.config.HeadColor) or Color3.fromRGB(76,217,100)
+    end
+    self.headLight.Color = chosen
+    self.boostParticles.Color = ColorSequence.new(chosen)
 end
 
 function SkinnedSnake:startUpdateLoop()
