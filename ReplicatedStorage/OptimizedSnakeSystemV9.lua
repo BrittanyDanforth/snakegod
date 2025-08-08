@@ -481,7 +481,7 @@ function SkinnedSnake:updateBones(deltaTime)
         return
     end
     
-    -- Original bone-driven path
+    -- Original bone-driven path replaced with robust CFrame-based posing
     
     -- Update wave phase for natural movement
     self.wavePhase = self.wavePhase + WAVE_FREQUENCY * deltaTime
@@ -492,59 +492,50 @@ function SkinnedSnake:updateBones(deltaTime)
     end
     local useSpline = (self.splineAvailable and self.spline ~= nil)
     
-    -- Calculate how many segments each bone represents
-    local segmentsPerBone = math.max(1, self.length / #self.bones)
-    
+    local boneCount = #self.bones
+    if boneCount == 0 then return end
+
+    -- For spline sampling: use arc-length-uniform t across bones (head at t=1)
     for i, bone in ipairs(self.bones) do
-        -- Determine target position and direction for this bone
-        local targetPos
-        local targetLook
+        local targetPos, targetTan
         if useSpline then
-            local t
-            if #self.bones > 1 then
-                t = math.max(0, 1 - (i - 1) / (#self.bones - 1))
-            else
-                t = 1
-            end
-            local pos = self.spline:GetPoint(t)
-            local tan = self.spline:GetTangent(t)
-            targetPos = pos
-            targetLook = tan
+            local t = (boneCount > 1) and math.max(0, 1 - (i - 1) / (boneCount - 1)) or 1
+            targetPos = self.spline:GetPoint(t)
+            targetTan = self.spline:GetTangent(t)
         else
-            local segmentOffset = (i - 1) * segmentsPerBone
-            local historicalData = self:getHistoricalPosition(segmentOffset)
-            targetPos = historicalData.position
-            targetLook = historicalData.lookVector
+            -- History fallback orientation from neighbors
+            local segmentOffset = (i - 1) * math.max(1, self.length / boneCount)
+            local curr = self:getHistoricalPosition(segmentOffset)
+            local nextH = self:getHistoricalPosition(segmentOffset - 1)
+            local prevH = self:getHistoricalPosition(segmentOffset + 1)
+            targetPos = curr.position
+            local dir = (nextH.position - prevH.position)
+            if dir.Magnitude < 1e-6 then dir = curr.lookVector end
+            targetTan = dir.Unit
         end
-        
-        -- Add wave motion for natural slithering
+
+        -- Build a stable frame: compute a consistent up to avoid roll issues
+        local worldUp = Vector3.new(0, 1, 0)
+        local forward = targetTan.Magnitude > 1e-6 and targetTan.Unit or Vector3.new(0, 0, -1)
+        local right = forward:Cross(worldUp)
+        if right.Magnitude < 1e-6 then
+            -- Forward is near-parallel to world up; choose another up
+            worldUp = Vector3.new(1, 0, 0)
+            right = forward:Cross(worldUp)
+        end
+        right = right.Unit
+        local up = right:Cross(forward).Unit
+
+        -- Wave offset laterally along right vector for natural slither
         local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * WAVE_AMPLITUDE
-        local up = Vector3.new(0, 1, 0)
-        local perpendicular = targetLook:Cross(up)
-        if perpendicular.Magnitude > 1e-6 then
-            perpendicular = perpendicular.Unit
-        else
-            perpendicular = Vector3.new(1, 0, 0)
-        end
-        
-        -- Apply wave motion
-        local wavePosition = targetPos + perpendicular * waveOffset
-        
-        -- Calculate bone transform
-        local boneOffset = i == 1 and 0 or (i - 1) / ( #self.bones > 1 and (#self.bones - 1) or 1 )
-        local _scaleFactor = 1 - (boneOffset * 0.3) -- reserved for taper if needed
-        
-        -- Apply the transform to the bone
-        if i == 1 then
-            -- Head bone follows root part more closely
-            bone.Transform = self.originalBoneTransforms[i] * CFrame.new(0, 0, 0)
-        else
-            -- Body bones follow with wave motion
-            local localOffset = self.meshPart.CFrame:ToObjectSpace(CFrame.new(wavePosition))
-            bone.Transform = self.originalBoneTransforms[i]
-                * CFrame.new(localOffset.Position * 0.1)
-                * CFrame.Angles(0, waveOffset * 0.1, 0)
-        end
+        local wavePosition = targetPos + right * waveOffset
+
+        -- World CFrame aligned to the path
+        local worldCFrame = CFrame.lookAt(wavePosition, wavePosition + forward, up)
+
+        -- Convert to mesh local space and apply to bone
+        local localCFrame = self.meshPart.CFrame:ToObjectSpace(worldCFrame)
+        bone.Transform = localCFrame
     end
 end
 
