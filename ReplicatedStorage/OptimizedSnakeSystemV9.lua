@@ -45,13 +45,13 @@ local GROWTH_RATE = 0.1 -- How fast the snake grows (units per food)
 local SCALE_PER_LENGTH = 0.005 -- How much the scale increases per length unit
 
 -- NEW smoothing/spacing constants for bones
-local DEFAULT_BONE_SPACING = 2.0 -- Reduced from 2.5 for tighter following
-local BONE_BLEND_FACTOR = 0.8 -- Increased from 0.6 for smoother transitions
+local DEFAULT_BONE_SPACING = 0.5 -- Much smaller for tight snake body
+local BONE_BLEND_FACTOR = 0.9 -- Even smoother transitions
 local CONTROL_POINT_COUNT = 10 -- Control points to build the spline from recent motion
 
 -- NEW: Transform limits to prevent explosion
-local MAX_BONE_OFFSET = 10 -- Maximum distance a bone can be from its rest position
-local MAX_ROTATION_ANGLE = math.rad(45) -- Maximum rotation per bone
+local MAX_BONE_OFFSET = 5 -- Reduced - keeps bones closer together
+local MAX_ROTATION_ANGLE = math.rad(30) -- Reduced rotation limit
 
 -- LOD System for performance
 local LOD_DISTANCES = {
@@ -343,9 +343,12 @@ function SkinnedSnake:initializeHistory()
 	local startPos = self.rootPart.Position
 	local startLook = self.rootPart.CFrame.LookVector
 
+	-- Initialize with positions very close to the character
 	for i = 1, HISTORY_SIZE do
+		-- Much smaller offset - keep the snake close to the body
+		local offset = (i - 1) * 0.1 -- Changed from 0.5 to 0.1
 		self.positionHistory[i] = {
-			position = startPos - startLook * (i * 0.5),
+			position = startPos - startLook * offset,
 			lookVector = startLook,
 			time = tick()
 		}
@@ -543,6 +546,29 @@ function SkinnedSnake:updateBones(deltaTime)
 		return
 	end
 
+	-- For the first few frames, keep bones close to rest pose
+	if self.frameCount < 30 then
+		-- Gradually transition from rest pose to following pose
+		local transitionFactor = self.frameCount / 30
+		
+		for i, bone in ipairs(self.bones) do
+			local restTransform = self.originalBoneTransforms[bone] or CFrame.new()
+			
+			if i == 1 then
+				-- Head bone stays at rest pose
+				bone.Transform = restTransform
+			else
+				-- Other bones gradually start following
+				local currentTransform = bone.Transform
+				bone.Transform = currentTransform:Lerp(restTransform, 1 - transitionFactor)
+			end
+			
+			self.previousTransforms[bone] = bone.Transform
+		end
+		
+		return
+	end
+
 	local chainPrevUp = Vector3.new(0, 1, 0)
 
 	local function setBoneFromWorld(bone, position, tangent, index)
@@ -550,6 +576,17 @@ function SkinnedSnake:updateBones(deltaTime)
 		if not isValidVector3(position) or not isValidVector3(tangent) then
 			warn(string.format("Invalid bone data for bone %d", index))
 			return
+		end
+
+		-- Get the mesh position to calculate relative offset
+		local meshPos = self.meshPart.Position
+		local relativePos = position - meshPos
+		
+		-- Limit how far bones can be from the mesh center
+		local maxDistance = 20 -- Maximum distance from mesh center
+		if relativePos.Magnitude > maxDistance then
+			relativePos = relativePos.Unit * maxDistance
+			position = meshPos + relativePos
 		end
 
 		-- Smooth tangent to prevent flips
@@ -617,9 +654,9 @@ function SkinnedSnake:updateBones(deltaTime)
 
 	-- Use simpler history-based approach without spline for now
 	for i, bone in ipairs(self.bones) do
-		-- Scale bone spacing based on index to create natural taper
-		local spacingMultiplier = 1 + (i - 1) * 0.05 -- Slight increase per bone
-		local backDistance = (i - 1) * self.boneSpacing * spacingMultiplier
+		-- Much smaller bone spacing for a tighter snake
+		local spacingMultiplier = 0.8 + (i - 1) * 0.02 -- Reduced from 1 + 0.05
+		local backDistance = (i - 1) * self.boneSpacing * spacingMultiplier * 0.5 -- Added 0.5 multiplier
 		
 		local sample = getHistoryAtBackDistance(self, backDistance)
 		if sample then
