@@ -392,48 +392,106 @@ end
 function Snake:updateBones(deltaTime)
 	if not self.boneChain or #self.boneChain == 0 then return end
 
-	-- SIMPLIFIED BONE ANIMATION FOR SKINNED MESHES
-	-- The key is to bend bones relative to each other, not position them in world space
+	-- FOLLOW THE LEADER: Perfect slither.io style movement for skinned meshes
+	local SEGMENT_GAP = 0.8      -- Distance between each bone (in studs)
+	local LERP_SPEED = 0.95      -- How quickly bones snap to position (0.9-1.0 for instant)
 	
-	local BEND_STRENGTH = 0.3  -- How much each bone can bend (0-1)
-	local SMOOTHING = 0.15     -- How smoothly bones follow movement (0-1)
+	-- For skinned meshes, we need to calculate the angle between segments
+	-- and apply that as a rotation to each bone's Transform
 	
-	-- Get the current movement direction
-	local currentDir = self.rootPart.CFrame.LookVector
-	local previousDir = self:getHistoricalData(10).direction or currentDir
+	local prevPosition = self.rootPart.Position
+	local prevDirection = self.rootPart.CFrame.LookVector
 	
-	-- Calculate how much we're turning
-	local turnAmount = 1 - currentDir:Dot(previousDir)
-	local turnAxis = currentDir:Cross(previousDir).Unit
-	
-	-- Apply bending to each bone based on turn amount
 	for i, bone in ipairs(self.boneChain) do
-		local boneInfo = self.boneData[bone.Name]
-		if not boneInfo then continue end
+		-- Calculate how far back in the path this bone should be
+		local targetDistance = i * SEGMENT_GAP
 		
-		-- Each bone bends less than the previous (creates smooth curve)
-		local bendFactor = (1 - (i / #self.boneChain)) * BEND_STRENGTH
+		-- Find the exact position on the path for this bone
+		local pathData = self:getPositionOnPath(targetDistance)
 		
-		-- Calculate this bone's bend based on the turn
-		local bendAngle = turnAmount * bendFactor * math.pi
+		if pathData then
+			-- Calculate the angle this bone needs to bend to point towards the next position
+			local currentPos = prevPosition
+			local targetPos = pathData.position
+			local targetDir = pathData.direction
+			
+			-- Get the angle between the previous segment and this one
+			local angle = math.atan2(
+				(targetPos - currentPos):Cross(prevDirection).Y,
+				(targetPos - currentPos):Dot(prevDirection)
+			)
+			
+			-- Apply this as a bend to the bone
+			-- This maintains the skinned mesh deformation while following the path
+			local boneInfo = self.boneData[bone.Name]
+			if boneInfo then
+				-- Create a rotation based on the path curvature
+				local bendRotation = CFrame.Angles(0, -angle * 0.5, 0)
+				
+				-- Apply to the bone's transform (relative to parent)
+				local targetTransform = boneInfo.originalTransform * bendRotation
+				
+				-- Snap to position quickly for that slither.io responsiveness
+				bone.Transform = bone.Transform:Lerp(targetTransform, LERP_SPEED)
+			end
+			
+			-- Update for next bone
+			prevPosition = targetPos
+			prevDirection = targetDir
+		end
+	end
+end
+
+-- Helper function to find exact position on path at given distance
+function Snake:getPositionOnPath(targetDistance)
+	if targetDistance <= 0 then
+		return {
+			position = self.rootPart.Position,
+			direction = self.rootPart.CFrame.LookVector
+		}
+	end
+	
+	local distanceTraveled = 0
+	local lastPosition = self.rootPart.Position
+	
+	-- Walk backwards through history accumulating distance
+	for j = 1, HISTORY_SIZE - 1 do
+		local historyIndex = ((self.historyIndex - j - 1) % HISTORY_SIZE) + 1
+		local historicalPoint = self.positionHistory[historyIndex]
 		
-		-- Add some organic wave motion
-		local waveAngle = math.sin(tick() * 2 + i * 0.3) * 0.05
-		
-		-- Create the bent transform
-		local bentTransform = boneInfo.originalTransform
-		
-		if turnAmount > 0.01 then
-			-- Apply turn-based bending
-			bentTransform = bentTransform * CFrame.fromAxisAngle(Vector3.new(0, 1, 0), bendAngle)
+		if not historicalPoint then 
+			-- Return last known position if we run out of history
+			return {
+				position = lastPosition,
+				direction = self.rootPart.CFrame.LookVector
+			}
 		end
 		
-		-- Add subtle wave motion
-		bentTransform = bentTransform * CFrame.Angles(0, waveAngle, 0)
+		-- Calculate segment length
+		local segmentLength = (lastPosition - historicalPoint.position).Magnitude
 		
-		-- Smoothly apply the new transform
-		bone.Transform = bone.Transform:Lerp(bentTransform, SMOOTHING)
+		-- Check if target distance is within this segment
+		if distanceTraveled + segmentLength >= targetDistance then
+			-- Interpolate position within this segment
+			local remainingDistance = targetDistance - distanceTraveled
+			local t = math.clamp(remainingDistance / segmentLength, 0, 1)
+			
+			return {
+				position = lastPosition:Lerp(historicalPoint.position, t),
+				direction = historicalPoint.direction
+			}
+		end
+		
+		-- Continue to next segment
+		distanceTraveled = distanceTraveled + segmentLength
+		lastPosition = historicalPoint.position
 	end
+	
+	-- If we've exhausted history, return the furthest point
+	return self.positionHistory[((self.historyIndex - HISTORY_SIZE + 1) % HISTORY_SIZE) + 1] or {
+		position = self.rootPart.Position,
+		direction = self.rootPart.CFrame.LookVector
+	}
 end
 
 function Snake:updateLOD()
