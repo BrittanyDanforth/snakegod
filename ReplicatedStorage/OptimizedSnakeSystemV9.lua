@@ -10,6 +10,12 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
+-- Add spline dependency for smooth, arc-length based sampling (safe require with timeout)
+local CatmullRomSpline = nil
+pcall(function()
+	CatmullRomSpline = require(ReplicatedStorage:WaitForChild("CatmullRomSpline", 1))
+end)
+
 -- Constants for the skinned mesh system
 local MESH_ASSET_ID = "rbxassetid://YOUR_MESH_ID" -- Will be replaced with actual asset ID
 local BONE_COUNT = 15 -- Should match the number of bones in your Blender model
@@ -37,6 +43,11 @@ local WAVE_FREQUENCY = 2.0 -- How fast the wave travels down the body
 -- Growth Constants
 local GROWTH_RATE = 0.1 -- How fast the snake grows (units per food)
 local SCALE_PER_LENGTH = 0.005 -- How much the scale increases per length unit
+
+-- NEW smoothing/spacing constants for bones
+local DEFAULT_BONE_SPACING = 2.5 -- Studs between bones along the spline
+local BONE_BLEND_FACTOR = 0.6 -- 0..1 smoothing each frame (higher = snappier)
+local CONTROL_POINT_COUNT = 10 -- Control points to build the spline from recent motion
 
 -- LOD System for performance
 local LOD_DISTANCES = {
@@ -81,6 +92,15 @@ function SkinnedSnake.new(character, config)
     self.wavePhase = 0
     self.targetDirection = self.rootPart.CFrame.LookVector
     
+    -- Bone animation state
+    self.boneSpacing = DEFAULT_BONE_SPACING
+    self.originalBoneTransforms = {}
+    self.previousTransforms = {}
+    self.boneOffsets = {}
+    self.previousUpVectors = {}
+    self.restBoneCFrames = {}
+    self.previousTangents = {}
+    
     -- Visual state
     self.currentColorIndex = 1
     self.rainbowMode = false
@@ -124,7 +144,7 @@ function SkinnedSnake:hideCharacter()
     end
     
     self.rootPart.Transparency = 1
-    self.rootPart.CanCollide = true
+    self.rootPart.CanCollide = false
     self.rootPart.CanQuery = false
     self.humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 end
@@ -155,47 +175,50 @@ function SkinnedSnake:createSkinnedMesh()
     self.meshPart:SetAttribute("OwnerName", self.player.Name)
     self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
     
-    -- Find the armature and bones
-    self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController")
-    if not self.armature then
-        -- Look for bones directly
-        self.bones = {}
-        local function findBones(parent)
-            for _, child in pairs(parent:GetChildren()) do
-                if child:IsA("Bone") then
-                    table.insert(self.bones, child)
-                elseif child:IsA("Model") or child:IsA("Folder") then
-                    findBones(child)
-                end
-            end
+    -- Find bones: collect all Bone descendants under the mesh
+    self.bones = {}
+    for _, desc in ipairs(self.meshPart:GetDescendants()) do
+        if desc:IsA("Bone") then
+            table.insert(self.bones, desc)
         end
-        findBones(self.meshPart)
-        
-        -- Sort bones by name or position
-        table.sort(self.bones, function(a, b)
-            return a.Name < b.Name
-        end)
-    else
-        -- Get bones from armature
+    end
+    -- If not found under mesh, fallback: search entire cloned model
+    if #self.bones < 2 then
         self.bones = {}
-        local rootBone = self.armature:FindFirstChild("Bone")
-        if rootBone then
-            local currentBone = rootBone
-            while currentBone do
-                table.insert(self.bones, currentBone)
-                currentBone = currentBone:FindFirstChildOfClass("Bone")
+        for _, desc in ipairs(self.model:GetDescendants()) do
+            if desc:IsA("Bone") then
+                table.insert(self.bones, desc)
             end
         end
     end
-    
+
+    -- Numeric-aware sort: Bone, Bone.001, Bone.002, ...
+    local function boneOrder(name)
+        if name == "Bone" then return -1 end
+        local n = name:match("Bone%.(%d+)") or name:match("Bone[_ ]?(%d+)")
+        return tonumber(n) or math.huge
+    end
+    table.sort(self.bones, function(a, b)
+        local oa, ob = boneOrder(a.Name), boneOrder(b.Name)
+        if oa ~= ob then return oa < ob end
+        return a.Name < b.Name
+    end)
+
     print("Found", #self.bones, "bones in the mesh")
-    
-    -- Store original bone transforms
+
+    -- Store rest pose and initialize smoothing state
     self.originalBoneTransforms = {}
-    for i, bone in ipairs(self.bones) do
-        self.originalBoneTransforms[i] = bone.Transform
+    self.previousTransforms = {}
+    self.previousUpVectors = {}
+    self.restBoneCFrames = {}
+    self.previousTangents = {}
+    for _, bone in ipairs(self.bones) do
+        self.originalBoneTransforms[bone] = bone.Transform
+        self.previousTransforms[bone] = nil
+        self.previousUpVectors[bone] = Vector3.new(0, 1, 0)
+        self.restBoneCFrames[bone] = bone.CFrame
     end
-    
+
     -- Add visual effects
     self:addVisualEffects()
     
@@ -286,45 +309,221 @@ function SkinnedSnake:getHistoricalPosition(segmentsBack)
     return self.positionHistory[targetIndex] or self.positionHistory[self.historyIndex]
 end
 
+-- Helper: sample history by traveled distance backwards from current index
+local function getHistoryAtBackDistance(self, targetBackDistance)
+    if not self.positionHistory or self.historyIndex == 0 then
+        return nil
+    end
+    local accumulated = 0
+    local idx = self.historyIndex
+    local current = self.positionHistory[idx]
+    local prevIdx = ((idx - 2) % HISTORY_SIZE) + 1
+    while accumulated < targetBackDistance do
+        local prev = self.positionHistory[prevIdx]
+        if not prev then break end
+        local segment = (current.position - prev.position).Magnitude
+        accumulated = accumulated + segment
+        if accumulated >= targetBackDistance then
+            -- Interpolate between prev and current to hit exact distance
+            local overshoot = accumulated - targetBackDistance
+            local t = segment > 0 and (1 - overshoot / segment) or 1
+            local pos = prev.position:Lerp(current.position, t)
+            local dir = (current.position - prev.position)
+            dir = dir.Magnitude > 1e-3 and dir.Unit or Vector3.new(0, 0, -1)
+            return { position = pos, direction = dir }
+        end
+        -- step back
+        current = prev
+        idx = prevIdx
+        prevIdx = ((prevIdx - 2) % HISTORY_SIZE) + 1
+        if prevIdx == idx then break end
+    end
+    -- Fallback to oldest available
+    return {
+        position = current and current.position or self.rootPart.Position,
+        direction = current and (current.direction or self.rootPart.CFrame.LookVector) or self.rootPart.CFrame.LookVector
+    }
+end
+
+-- === Robust, NaN-safe vector and frame helpers ===
+local EPS = 1e-6
+
+local function isValidVector3(v)
+    return v and (v.X == v.X) and (v.Y == v.Y) and (v.Z == v.Z)
+end
+
+local function safeNormalize(v, fallback)
+    if not isValidVector3(v) then return fallback end
+    local m = v.Magnitude
+    if not m or m < EPS or m ~= m then
+        return fallback
+    end
+    return v / m
+end
+
+local WORLD_AXES = {
+    Vector3.new(1, 0, 0),
+    Vector3.new(0, 1, 0),
+    Vector3.new(0, 0, 1)
+}
+
+local function orthonormalBasis(prevUp, tangent)
+    local t = safeNormalize(tangent, Vector3.new(0, 0, -1))
+
+    -- Try parallel transport from previous up
+    local up = prevUp - t * prevUp:Dot(t)
+    up = safeNormalize(up, Vector3.new(0, 1, 0))
+
+    -- If still near-degenerate, choose the world axis least parallel to t
+    if up.Magnitude < 0.5 then
+        local bestAxis = WORLD_AXES[1]
+        local bestDot = math.abs(t:Dot(bestAxis))
+        for i = 2, #WORLD_AXES do
+            local dotv = math.abs(t:Dot(WORLD_AXES[i]))
+            if dotv < bestDot then
+                bestDot = dotv
+                bestAxis = WORLD_AXES[i]
+            end
+        end
+        up = bestAxis - t * bestAxis:Dot(t)
+        up = safeNormalize(up, Vector3.new(0, 1, 0))
+    end
+
+    local right = t:Cross(up)
+    right = safeNormalize(right, Vector3.new(1, 0, 0))
+    up = right:Cross(t)
+    up = safeNormalize(up, Vector3.new(0, 1, 0))
+
+    return t, right, up
+end
+
+local function safeCFrameFromTRU(pos, t, r, u)
+    -- Validate vectors; rebuild basis if necessary
+    if not isValidVector3(pos) then pos = Vector3.new() end
+    local tt = safeNormalize(t, Vector3.new(0, 0, -1))
+    local rr = r
+    local uu = u
+
+    -- Ensure rr, uu are valid and orthonormal to t
+    if not isValidVector3(rr) or rr.Magnitude < 0.5 then
+        rr = tt:Cross(Vector3.new(0, 1, 0))
+        if rr.Magnitude < EPS then
+            rr = tt:Cross(Vector3.new(1, 0, 0))
+        end
+        rr = safeNormalize(rr, Vector3.new(1, 0, 0))
+    end
+    uu = rr:Cross(tt)
+    uu = safeNormalize(uu, Vector3.new(0, 1, 0))
+
+    -- Final re-orthogonalization
+    rr = tt:Cross(uu)
+    rr = safeNormalize(rr, Vector3.new(1, 0, 0))
+    uu = rr:Cross(tt)
+    uu = safeNormalize(uu, Vector3.new(0, 1, 0))
+
+    local cf = CFrame.fromMatrix(pos, rr, uu)
+    return cf
+end
+
+local function buildControlPointsFromHistory(self, count)
+    local points = {}
+    if not self.positionHistory or self.historyIndex == 0 then
+        return points
+    end
+
+    -- Sample evenly from recent history
+    local step = math.max(1, math.floor(HISTORY_SIZE / math.max(4, count)))
+    local idx = self.historyIndex
+    for i = 1, count do
+        local h = self.positionHistory[idx]
+        if h then
+            table.insert(points, 1, h.position) -- prepend to keep chronological order
+        end
+        idx = ((idx - step - 1) % HISTORY_SIZE) + 1
+    end
+
+    -- Ensure at least 4 points by duplicating ends if needed
+    while #points < 4 do
+        if #points == 0 then
+            table.insert(points, self.rootPart.Position)
+        else
+            table.insert(points, points[#points])
+        end
+    end
+
+    return points
+end
+
 function SkinnedSnake:updateBones(deltaTime)
     if not self.bones or #self.bones == 0 then return end
-    
-    -- Update wave phase for natural movement
-    self.wavePhase = self.wavePhase + WAVE_FREQUENCY * deltaTime
-    
-    -- Calculate how many segments each bone represents
-    local segmentsPerBone = math.max(1, self.length / #self.bones)
-    
-    for i, bone in ipairs(self.bones) do
-        -- Get historical position for this bone
-        local segmentOffset = (i - 1) * segmentsPerBone
-        local historicalData = self:getHistoricalPosition(segmentOffset)
-        
-        -- Calculate the target position for this bone
-        local targetPos = historicalData.position
-        local targetLook = historicalData.lookVector
-        
-        -- Add wave motion for natural slithering
-        local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * WAVE_AMPLITUDE
-        local perpendicular = targetLook:Cross(Vector3.new(0, 1, 0)).Unit
-        
-        -- Apply wave motion
-        local wavePosition = targetPos + perpendicular * waveOffset
-        
-        -- Calculate bone transform
-        local boneOffset = i == 1 and 0 or (i - 1) / (#self.bones - 1)
-        local scaleFactor = 1 - (boneOffset * 0.3) -- Taper towards tail
-        
-        -- Apply the transform to the bone
-        if i == 1 then
-            -- Head bone follows root part more closely
-            bone.Transform = self.originalBoneTransforms[i] * CFrame.new(0, 0, 0)
-        else
-            -- Body bones follow with wave motion
-            local localOffset = self.meshPart.CFrame:ToObjectSpace(CFrame.new(wavePosition))
-            bone.Transform = self.originalBoneTransforms[i] * 
-                           CFrame.new(localOffset.Position * 0.1) * 
-                           CFrame.Angles(0, waveOffset * 0.1, 0)
+    if not self.meshPart or not self.meshPart.Parent then return end
+
+    local meshCFrame = self.meshPart.CFrame
+    local chainPrevUp = Vector3.new(0, 1, 0)
+
+    local function setBoneFromWorld(bone, position, tangent, index)
+        -- Smooth tangent to prevent flips
+        local prevT = self.previousTangents[bone] or tangent
+        local smoothedT = safeNormalize(prevT * 0.6 + tangent * 0.4, tangent)
+        self.previousTangents[bone] = smoothedT
+
+        -- Build stable frame by parallel transport
+        local tVec, rVec, uVec = orthonormalBasis(self.previousUpVectors[bone] or chainPrevUp, smoothedT)
+        chainPrevUp = uVec
+        self.previousUpVectors[bone] = uVec
+
+        -- World frame
+        local worldCFrame = safeCFrameFromTRU(position, tVec, rVec, uVec)
+
+        -- Subtle wave
+        local wave = math.clamp(math.sin((tick() * WAVE_FREQUENCY) - index * 0.3) * (WAVE_AMPLITUDE * 0.1), -0.2, 0.2)
+        worldCFrame = worldCFrame * CFrame.Angles(0, 0, wave)
+
+        -- Convert to object space, then to relative transform from rest pose
+        local desiredObjectCF = meshCFrame:ToObjectSpace(worldCFrame)
+        local restObjectCF = self.restBoneCFrames[bone] or CFrame.new()
+        local relativeTransform = restObjectCF:ToObjectSpace(desiredObjectCF)
+
+        -- Smooth transform
+        local prevRel = self.previousTransforms[bone]
+        if prevRel then
+            relativeTransform = prevRel:Lerp(relativeTransform, BONE_BLEND_FACTOR)
+        end
+
+        bone.Transform = relativeTransform
+        self.previousTransforms[bone] = relativeTransform
+    end
+
+    if CatmullRomSpline then
+        -- Spline-based sampling
+        local controlPoints = buildControlPointsFromHistory(self, CONTROL_POINT_COUNT)
+        if #controlPoints < 4 then return end
+
+        local spline = CatmullRomSpline.new(controlPoints)
+        if not spline then return end
+        spline:SetUniform(true)
+
+        local splineLength = spline:GetLength()
+        if splineLength <= 0 then return end
+
+        local totalBoneLength = math.max(0, (#self.bones - 1) * self.boneSpacing)
+        local startOffset = math.max(0, splineLength - totalBoneLength)
+
+        for i, bone in ipairs(self.bones) do
+            local distance = startOffset + (i - 1) * self.boneSpacing
+            local tParam = math.clamp(distance / splineLength, 0, 1)
+            local pos = spline:GetPoint(tParam)
+            local tan = safeNormalize(spline:GetTangent(tParam), Vector3.new(0, 0, -1))
+            setBoneFromWorld(bone, pos, tan, i)
+        end
+    else
+        -- History-distance fallback
+        for i, bone in ipairs(self.bones) do
+            local backDistance = (i - 1) * self.boneSpacing
+            local sample = getHistoryAtBackDistance(self, backDistance)
+            local pos = sample.position
+            local tan = safeNormalize(sample.direction, Vector3.new(0, 0, -1))
+            setBoneFromWorld(bone, pos, tan, i)
         end
     end
 end
