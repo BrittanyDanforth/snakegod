@@ -593,27 +593,52 @@ function SkinnedSnake:updateColors()
     if self.rainbowMode then
         local hue = (tick() * 0.5) % 1
         local color = Color3.fromHSV(hue, 1, 1)
-        self.headLight.Color = color
-        self.boostParticles.Color = ColorSequence.new(color)
-    else
-        -- Normal color cycling
-        self.currentColorIndex = (self.currentColorIndex % #self.config.BodyColors) + 1
-        local color = self.config.BodyColors[self.currentColorIndex]
-        self.headLight.Color = color
-        self.boostParticles.Color = ColorSequence.new(color)
+        if self.headLight then self.headLight.Color = color end
+        if self.boostParticles then self.boostParticles.Color = ColorSequence.new(color) end
+        return
     end
+
+    -- Build a safe palette
+    local palette = {}
+    if self.config and self.config.BodyColors then
+        for _, c in ipairs(self.config.BodyColors) do
+            if typeof(c) == "Color3" then
+                table.insert(palette, c)
+            end
+        end
+    end
+    if #palette == 0 then
+        local fallback = (self.config and typeof(self.config.HeadColor) == "Color3") and self.config.HeadColor or Color3.fromRGB(76, 217, 100)
+        palette = { fallback }
+        self.currentColorIndex = 1
+    end
+
+    -- Advance index and apply
+    self.currentColorIndex = (self.currentColorIndex % #palette) + 1
+    local color = palette[self.currentColorIndex]
+    if self.headLight then self.headLight.Color = color end
+    if self.boostParticles then self.boostParticles.Color = ColorSequence.new(color) end
 end
 
 -- Minimal update methods to satisfy client optional calls
 function SkinnedSnake:updateConfig(newConfig)
     if not newConfig then return end
-    if newConfig.HeadColor then
+    if newConfig.HeadColor and typeof(newConfig.HeadColor) == "Color3" then
         self.config.HeadColor = newConfig.HeadColor
         if self.headLight then self.headLight.Color = newConfig.HeadColor end
         if self.boostParticles then self.boostParticles.Color = ColorSequence.new(newConfig.HeadColor) end
     end
     if newConfig.BodyColors and #newConfig.BodyColors > 0 then
-        self.config.BodyColors = newConfig.BodyColors
+        local sanitized = {}
+        for _, c in ipairs(newConfig.BodyColors) do
+            if typeof(c) == "Color3" then
+                table.insert(sanitized, c)
+            end
+        end
+        if #sanitized > 0 then
+            self.config.BodyColors = sanitized
+            self.currentColorIndex = 0 -- reset cycle to start of new palette
+        end
     end
 end
 
