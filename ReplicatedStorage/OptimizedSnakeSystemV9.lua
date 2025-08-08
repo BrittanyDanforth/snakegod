@@ -260,7 +260,8 @@ function SkinnedSnake:createSkinnedMesh()
 		self.meshPart = part
 	end
 
-	self.meshPart.Anchored = false
+	-- Anchor the mesh and drive via CFrame to avoid physics
+	self.meshPart.Anchored = true
 	self.meshPart.CanCollide = false
 	self.meshPart.CanQuery = true
 	self.meshPart.CanTouch = false
@@ -295,11 +296,7 @@ function SkinnedSnake:createSkinnedMesh()
 	end
 
 	self:addVisualEffects()
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = self.meshPart
-	weld.Part1 = self.rootPart
-	weld.Parent = self.meshPart
-	self.welded = true
+	self.welded = false
 	self.meshPart.CFrame = self.rootPart.CFrame
 end
 
@@ -339,6 +336,9 @@ end
 function SkinnedSnake:initializeHistory()
 	local startPos = self.rootPart.Position
 	local startLook = self.rootPart.CFrame.LookVector
+	-- Initialize filtered head pose
+	self.filteredPos = startPos
+	self.filteredDir = startLook
 	for i=1,HISTORY_SIZE do
 		self.positionHistory[i] = { position = startPos - startLook * (i*0.5), direction = startLook, time = tick() }
 	end
@@ -346,8 +346,15 @@ function SkinnedSnake:initializeHistory()
 end
 
 function SkinnedSnake:updateHistory()
+	-- Smooth head pose to avoid jitter
+	local alpha = 0.25
+	local headPos = self.rootPart.Position
+	local headDir = self.rootPart.CFrame.LookVector
+	self.filteredPos = self.filteredPos and self.filteredPos:Lerp(headPos, alpha) or headPos
+	self.filteredDir = safeNormalize((self.filteredDir or headDir)* (1-alpha) + headDir*alpha, headDir)
+
 	self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
-	self.positionHistory[self.historyIndex] = { position = self.rootPart.Position, direction = self.rootPart.CFrame.LookVector, time = tick() }
+	self.positionHistory[self.historyIndex] = { position = self.filteredPos, direction = self.filteredDir, time = tick() }
 end
 
 function SkinnedSnake:updateBones(deltaTime)
@@ -508,7 +515,8 @@ function SkinnedSnake:startUpdateLoop()
 		self:updateBones(dt)
 		if self.frameCount % 5 == 0 then self:updateLOD() end
 		if self.frameCount % 30 == 0 then self:updateColors() end
-		if self.meshPart and self.meshPart.Parent and not self.welded then
+		-- Drive mesh to root CFrame each frame (anchored, no physics)
+		if self.meshPart and self.meshPart.Parent then
 			self.meshPart.CFrame = self.rootPart.CFrame
 		end
 	end)
