@@ -20,8 +20,8 @@ local BOOST_MULTIPLIER = 1.5
 local DEFAULT_BONE_SPACING = 2.0
 local HEAD_FILTER_ALPHA = 0.25 -- head smoothing
 local TANGENT_SMOOTH_ALPHA = 0.85 -- 85% prev, 15% new
-local HEAD_LERP = 0.35
-local TAIL_LERP = 0.85
+local HEAD_LERP = 0.30
+local TAIL_LERP = 0.90
 local WAVE_AMPLITUDE = 0.35
 local WAVE_FREQUENCY = 1.5
 local MAX_LATERAL_OFFSET_FACTOR = 0.22
@@ -361,7 +361,7 @@ function SkinnedSnake:updateBones(dt)
 	local meshCFrame = self.meshPart.CFrame
 	local chainPrevUp = Vector3.new(0,1,0)
 
-	local function setBoneFromWorld(bone, position, tangent, index)
+	local function setBoneFromWorld(bone, position, tangent, index, curvatureFactor)
 		if not isValidVector3(position) or not isValidVector3(tangent) then return end
 		local prevT = self.previousTangents[bone] or tangent
 		local smoothedT = safeNormalize(prevT*TANGENT_SMOOTH_ALPHA + tangent*(1-TANGENT_SMOOTH_ALPHA), tangent)
@@ -371,16 +371,17 @@ function SkinnedSnake:updateBones(dt)
 		chainPrevUp = uVec
 		self.previousUpVectors[bone] = uVec
 
-		-- Lateral offset (gentle) with yaw scaling and tail taper
+		-- Lateral offset (gentle) with yaw & curvature scaling and tail taper
 		local n = math.max(1, #self.bones)
 		local tailFactor = math.pow((index-1)/math.max(1,(n-1)), 1.35)
 		local yawScale = math.clamp(math.abs(self.yawRate) * 0.04, 0, 0.35)
-		local effAmp = (0.04 + yawScale) * tailFactor
+		local curveAtten = 1 - math.clamp(curvatureFactor or 0, 0, 1) * 0.7 -- reduce swing on tight turns
+		local effAmp = (0.04 + yawScale) * tailFactor * curveAtten
 		local wave = math.sin((tick()*WAVE_FREQUENCY) - index*0.35) * effAmp
-		local maxOffset = (self.boneSpacing or DEFAULT_BONE_SPACING) * MAX_LATERAL_OFFSET_FACTOR
+		local maxOffset = (self.boneSpacing or DEFAULT_BONE_SPACING) * (MAX_LATERAL_OFFSET_FACTOR * curveAtten)
 		local slitherPos = position + rVec * math.clamp(wave * (self.boneSpacing or DEFAULT_BONE_SPACING), -maxOffset, maxOffset)
 		local worldCFrame = safeCFrameFromTRU(slitherPos, tVec, rVec, uVec)
-		worldCFrame = worldCFrame * CFrame.Angles(0, math.clamp(wave*0.06, -0.12, 0.12), 0)
+		worldCFrame = worldCFrame * CFrame.Angles(0, math.clamp(wave*0.06, -0.12, 0.12) * curveAtten, 0)
 
 		local desiredObjectCF = meshCFrame:ToObjectSpace(worldCFrame)
 		local restObjectCF = self.restBoneCFrames[bone] or CFrame.new()
@@ -388,7 +389,8 @@ function SkinnedSnake:updateBones(dt)
 
 		local prevRel = self.previousTransforms[bone]
 		if prevRel then
-			local t = math.clamp(HEAD_LERP + (TAIL_LERP - HEAD_LERP) * tailFactor, 0.25, 0.9)
+			local base = HEAD_LERP + (TAIL_LERP - HEAD_LERP) * tailFactor
+			local t = math.clamp(base + (curvatureFactor or 0) * 0.1, 0.25, 0.95) -- slightly more smoothing in turns
 			targetRel = prevRel:Lerp(targetRel, t)
 		end
 
@@ -435,8 +437,16 @@ function SkinnedSnake:updateBones(dt)
 						local d = startOff + (i-1)*self.boneSpacing
 						local tParam = math.clamp(d / splineLen, 0, 1)
 						local pos = spline:GetPoint(tParam)
+						-- curvature factor from tangent change around t
+						local dh = 1 / math.max(8, #self.bones*4)
+						local tPrev = math.clamp(tParam - dh, 0, 1)
+						local tNext = math.clamp(tParam + dh, 0, 1)
+						local tanPrev = spline:GetTangent(tPrev)
+						local tanNext = spline:GetTangent(tNext)
+						local ang = math.acos(math.clamp(tanPrev:Dot(tanNext), -1, 1))
+						local curvature = math.clamp(ang / 0.5, 0, 1) -- 0..~pi mapped to 0..1 (~0.5 rad is strong turn)
 						local tan = safeNormalize(spline:GetTangent(tParam), Vector3.new(0,0,-1))
-						if isValidVector3(pos) and isValidVector3(tan) then setBoneFromWorld(bone, pos, tan, i) end
+						if isValidVector3(pos) and isValidVector3(tan) then setBoneFromWorld(bone, pos, tan, i, curvature) end
 					end
 				end
 			end
@@ -448,7 +458,7 @@ function SkinnedSnake:updateBones(dt)
 			if sample and isValidVector3(sample.position) and isValidVector3(sample.direction) then
 				local pos = sample.position
 				local tan = safeNormalize(sample.direction, Vector3.new(0,0,-1))
-				setBoneFromWorld(bone, pos, tan, i)
+				setBoneFromWorld(bone, pos, tan, i, 0)
 			end
 		end
 	end
