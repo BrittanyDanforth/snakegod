@@ -191,6 +191,14 @@ function SkinnedSnake:createSkinnedMesh()
         if RunService:IsServer() and self.meshPart and self.meshPart:IsA("MeshPart") and typeof(MESH_ASSET_ID) == "string" and #MESH_ASSET_ID > 0 then
             self.meshPart.MeshId = MESH_ASSET_ID
         end
+        -- Ensure all parts in the cloned asset are non-collidable and massless
+        for _, d in ipairs(cloned:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.CanCollide = false
+                d.CanQuery = false
+                d.Massless = true
+            end
+        end
     else
         -- As a last resort, create a simple neon fallback so client always sees something
         local part = Instance.new("Part")
@@ -208,7 +216,8 @@ function SkinnedSnake:createSkinnedMesh()
     self.meshPart.Anchored = false
     self.meshPart.CanCollide = false
     self.meshPart.CanQuery = true
-    self.meshPart.CanTouch = true
+    self.meshPart.CanTouch = false
+    self.meshPart.Massless = true
 
     -- Apply initial scale
     self.meshPart.Size = self.meshPart.Size * self.scale
@@ -273,8 +282,9 @@ function SkinnedSnake:createSkinnedMesh()
     weld.Part0 = self.meshPart
     weld.Part1 = self.rootPart
     weld.Parent = self.meshPart
-    
-    -- Position the mesh at the character
+    self.welded = true
+
+    -- Position the mesh at the character once
     self.meshPart.CFrame = self.rootPart.CFrame
 end
 
@@ -530,8 +540,21 @@ function SkinnedSnake:updateBones(deltaTime)
         local restObjectCF = self.restBoneCFrames[bone] or CFrame.new()
         local relativeTransform = restObjectCF:ToObjectSpace(desiredObjectCF)
 
-        -- Smooth transform
+        -- Clamp per-frame movement to avoid explosive tail snaps
         local prevRel = self.previousTransforms[bone]
+        if prevRel then
+            local maxStep = (self.boneSpacing or DEFAULT_BONE_SPACING) * 2
+            local prevPos = prevRel.Position
+            local newPos = relativeTransform.Position
+            local delta = (newPos - prevPos)
+            local dMag = delta.Magnitude
+            if dMag > maxStep and dMag < 1e6 then
+                local alpha = maxStep / dMag
+                relativeTransform = CFrame.new(prevPos:Lerp(newPos, alpha)) * (prevRel.Rotation:Lerp(relativeTransform.Rotation, math.clamp(BONE_BLEND_FACTOR, 0.1, 0.9)))
+            end
+        end
+
+        -- Smooth transform
         if prevRel then
             relativeTransform = prevRel:Lerp(relativeTransform, BONE_BLEND_FACTOR)
         end
@@ -688,7 +711,7 @@ function SkinnedSnake:startUpdateLoop()
         end
         
         -- Position mesh at root part
-        if self.meshPart and self.meshPart.Parent then
+        if self.meshPart and self.meshPart.Parent and not self.welded then
             self.meshPart.CFrame = self.rootPart.CFrame
         end
     end)
