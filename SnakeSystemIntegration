@@ -385,4 +385,48 @@ end)
 
 -- Removed auto-spawn - players spawn when clicking Play button
 
+-- Server-side broadcasting for smooth multiplayer rendering
+-- This efficiently broadcasts all snake data to all clients for smooth rendering
+local BROADCAST_RATE = 20 -- Updates per second
+local lastBroadcast = 0
+
+local function ensureBatchEvent()
+    local batchUpdateEvent = remoteEvents:FindFirstChild("BatchSnakeUpdate")
+    if not batchUpdateEvent then
+        batchUpdateEvent = Instance.new("RemoteEvent")
+        batchUpdateEvent.Name = "BatchSnakeUpdate"
+        batchUpdateEvent.Parent = remoteEvents
+    end
+    return batchUpdateEvent
+end
+
+RunService.Heartbeat:Connect(function()
+    local now = tick()
+    if now - lastBroadcast < (1 / BROADCAST_RATE) then
+        return -- Throttle updates to the specified rate
+    end
+    lastBroadcast = now
+
+    local allSnakeData = {}
+    for player, snakeData in pairs(activeSnakes) do
+        if player.Parent and snakeData and snakeData.character and snakeData.character.Parent then
+            local rootPart = snakeData.character:FindFirstChild("HumanoidRootPart")
+            if rootPart then
+                local mouseDirection = snakeData.character:GetAttribute("MouseDirection") or Vector3.new(0, 0, -1)
+                table.insert(allSnakeData, {
+                    PlayerId = player.UserId,
+                    Position = rootPart.Position,
+                    LookVector = mouseDirection,
+                    Length = snakeData.length or 55,
+                    Name = player.Name
+                })
+            end
+        end
+    end
+
+    if #allSnakeData > 0 then
+        ensureBatchEvent():FireAllClients(allSnakeData)
+    end
+end)
+
 print("✅ Snake System Integration loaded!")
