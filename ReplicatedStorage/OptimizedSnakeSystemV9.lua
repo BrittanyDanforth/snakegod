@@ -453,26 +453,84 @@ local function getHistoryAtBackDistance(self, targetBackDistance)
     }
 end
 
-local function computeStableUp(prevUp: Vector3, tangent: Vector3)
-    local worldUp = Vector3.new(0, 1, 0)
-    local t = tangent.Magnitude > 0 and tangent.Unit or Vector3.new(0, 0, -1)
+-- === Robust, NaN-safe vector and frame helpers ===
+local EPS = 1e-6
 
-    -- Project previous up onto plane perpendicular to tangent (parallel transport)
-    local upProj = prevUp - t * prevUp:Dot(t)
-    if upProj.Magnitude < 1e-3 then
-        -- Fallback to world up if projection is near zero (tangent ~ parallel to up)
-        upProj = worldUp - t * worldUp:Dot(t)
-        if upProj.Magnitude < 1e-3 then
-            -- Final fallback: any orthonormal up
-            upProj = Vector3.new(1, 0, 0)
-        end
+local function isValidVector3(v: Vector3): boolean
+    return v and (v.X == v.X) and (v.Y == v.Y) and (v.Z == v.Z)
+end
+
+local function safeNormalize(v: Vector3, fallback: Vector3): Vector3
+    if not isValidVector3(v) then return fallback end
+    local m = v.Magnitude
+    if not m or m < EPS or m ~= m then
+        return fallback
     end
-    local up = upProj.Unit
-    local right = t:Cross(up).Unit
-    -- Re-orthogonalize up to ensure perfect basis
-    up = right:Cross(t).Unit
+    return v / m
+end
 
-    return up
+local WORLD_AXES = {
+    Vector3.new(1, 0, 0),
+    Vector3.new(0, 1, 0),
+    Vector3.new(0, 0, 1)
+}
+
+local function orthonormalBasis(prevUp: Vector3, tangent: Vector3)
+    local t = safeNormalize(tangent, Vector3.new(0, 0, -1))
+
+    -- Try parallel transport from previous up
+    local up = prevUp - t * prevUp:Dot(t)
+    up = safeNormalize(up, Vector3.new(0, 1, 0))
+
+    -- If still near-degenerate, choose the world axis least parallel to t
+    if up.Magnitude < 0.5 then
+        local bestAxis = WORLD_AXES[1]
+        local bestDot = math.abs(t:Dot(bestAxis))
+        for i = 2, #WORLD_AXES do
+            local dotv = math.abs(t:Dot(WORLD_AXES[i]))
+            if dotv < bestDot then
+                bestDot = dotv
+                bestAxis = WORLD_AXES[i]
+            end
+        end
+        up = bestAxis - t * bestAxis:Dot(t)
+        up = safeNormalize(up, Vector3.new(0, 1, 0))
+    end
+
+    local right = t:Cross(up)
+    right = safeNormalize(right, Vector3.new(1, 0, 0))
+    up = right:Cross(t)
+    up = safeNormalize(up, Vector3.new(0, 1, 0))
+
+    return t, right, up
+end
+
+local function safeCFrameFromTRU(pos: Vector3, t: Vector3, r: Vector3, u: Vector3)
+    -- Validate vectors; rebuild basis if necessary
+    if not isValidVector3(pos) then pos = Vector3.new() end
+    local tt = safeNormalize(t, Vector3.new(0, 0, -1))
+    local rr = r
+    local uu = u
+
+    -- Ensure rr, uu are valid and orthonormal to t
+    if not isValidVector3(rr) or rr.Magnitude < 0.5 then
+        rr = tt:Cross(Vector3.new(0, 1, 0))
+        if rr.Magnitude < EPS then
+            rr = tt:Cross(Vector3.new(1, 0, 0))
+        end
+        rr = safeNormalize(rr, Vector3.new(1, 0, 0))
+    end
+    uu = rr:Cross(tt)
+    uu = safeNormalize(uu, Vector3.new(0, 1, 0))
+
+    -- Final re-orthogonalization
+    rr = tt:Cross(uu)
+    rr = safeNormalize(rr, Vector3.new(1, 0, 0))
+    uu = rr:Cross(tt)
+    uu = safeNormalize(uu, Vector3.new(0, 1, 0))
+
+    local cf = CFrame.fromMatrix(pos, rr, uu)
+    return cf
 end
 
 local function buildControlPointsFromHistory(self, count)
@@ -526,29 +584,32 @@ function SkinnedSnake:updateBones(deltaTime)
         local totalBoneLength = math.max(0, (#self.bones - 1) * self.boneSpacing)
         local startOffset = math.max(0, splineLength - totalBoneLength)
 
-        -- Propagate a stable up-vector along the chain to prevent roll/poking
+        -- Propagate stable frame along the chain
         local chainPrevUp = Vector3.new(0, 1, 0)
 
         for i, bone in ipairs(self.bones) do
             local distance = startOffset + (i - 1) * self.boneSpacing
-            local t = math.clamp(distance / splineLength, 0, 1)
+            local tParam = math.clamp(distance / splineLength, 0, 1)
 
-            local position = spline:GetPoint(t)
-            local tangent = spline:GetTangent(t)
+            local position = spline:GetPoint(tParam)
+            local rawTangent = spline:GetTangent(tParam)
 
-            -- Stable frame with minimal roll change
-            local up = computeStableUp(self.previousUpVectors[bone] or chainPrevUp, tangent)
-            chainPrevUp = up
-            self.previousUpVectors[bone] = up
+            -- Smooth tangent to reduce sudden flips
+            local prevT = self.previousTangents and self.previousTangents[bone] or rawTangent
+            local smoothedT = (prevT * 0.6 + rawTangent * 0.4)
+            smoothedT = safeNormalize(smoothedT, rawTangent)
+            self.previousTangents = self.previousTangents or {}
+            self.previousTangents[bone] = smoothedT
 
-            -- Build a stable frame to lock roll
-            local tt = tangent.Unit
-            local right = tt:Cross(up).Unit
-            local trueUp = right:Cross(tt).Unit
-            local worldCFrame = CFrame.fromMatrix(position, right, trueUp)
+            -- Robust orthonormal basis
+            local tVec, rVec, uVec = orthonormalBasis(self.previousUpVectors[bone] or chainPrevUp, smoothedT)
+            chainPrevUp = uVec
+            self.previousUpVectors[bone] = uVec
 
-            -- Optional subtle waving in local right axis for life-like motion
-            local wave = math.sin((tick() * WAVE_FREQUENCY) - i * 0.3) * (WAVE_AMPLITUDE * 0.1)
+            local worldCFrame = safeCFrameFromTRU(position, tVec, rVec, uVec)
+
+            -- Subtle wave, clamped
+            local wave = math.clamp(math.sin((tick() * WAVE_FREQUENCY) - i * 0.3) * (WAVE_AMPLITUDE * 0.1), -0.2, 0.2)
             worldCFrame = worldCFrame * CFrame.Angles(0, 0, wave)
 
             -- Convert to mesh-local space
@@ -576,18 +637,20 @@ function SkinnedSnake:updateBones(deltaTime)
         local backDistance = (i - 1) * self.boneSpacing
         local sample = getHistoryAtBackDistance(self, backDistance)
         local pos = sample.position
-        local tangent = sample.direction
+        local rawTangent = sample.direction
 
-        local up = computeStableUp(self.previousUpVectors[bone] or chainPrevUp, tangent)
-        chainPrevUp = up
-        self.previousUpVectors[bone] = up
+        local prevT = self.previousTangents and self.previousTangents[bone] or rawTangent
+        local smoothedT = (prevT * 0.6 + rawTangent * 0.4)
+        smoothedT = safeNormalize(smoothedT, rawTangent)
+        self.previousTangents = self.previousTangents or {}
+        self.previousTangents[bone] = smoothedT
 
-        local tt = tangent.Unit
-        local right = tt:Cross(up).Unit
-        local trueUp = right:Cross(tt).Unit
-        local worldCFrame = CFrame.fromMatrix(pos, right, trueUp)
+        local tVec, rVec, uVec = orthonormalBasis(self.previousUpVectors[bone] or chainPrevUp, smoothedT)
+        chainPrevUp = uVec
+        self.previousUpVectors[bone] = uVec
 
-        local wave = math.sin((tick() * WAVE_FREQUENCY) - i * 0.3) * (WAVE_AMPLITUDE * 0.1)
+        local worldCFrame = safeCFrameFromTRU(pos, tVec, rVec, uVec)
+        local wave = math.clamp(math.sin((tick() * WAVE_FREQUENCY) - i * 0.3) * (WAVE_AMPLITUDE * 0.1), -0.2, 0.2)
         worldCFrame = worldCFrame * CFrame.Angles(0, 0, wave)
 
         local relativeTransform = meshCFrame:Inverse() * worldCFrame
