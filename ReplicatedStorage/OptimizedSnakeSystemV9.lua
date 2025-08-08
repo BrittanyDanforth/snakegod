@@ -1,5 +1,11 @@
 -- Optimized Snake System V12 - Clean Rebuild
 -- Anchored, spline-driven, NaN-safe, tail-damped bone placement (no physics, no chain reaction)
+-- CHANGELOG 12.1:
+-- - Curvature-adaptive damping for turns (stronger attenuation on tight curves)
+-- - Richer init logs (version, spline mode, bones) so changes are visible in CI/GitHub
+-- - Retuned head/tail smoothing for even calmer tail during turns
+
+local VERSION = "12.1"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -20,8 +26,8 @@ local BOOST_MULTIPLIER = 1.5
 local DEFAULT_BONE_SPACING = 2.0
 local HEAD_FILTER_ALPHA = 0.25 -- head smoothing
 local TANGENT_SMOOTH_ALPHA = 0.85 -- 85% prev, 15% new
-local HEAD_LERP = 0.30
-local TAIL_LERP = 0.90
+local HEAD_LERP = 0.28
+local TAIL_LERP = 0.92
 local WAVE_AMPLITUDE = 0.35
 local WAVE_FREQUENCY = 1.5
 local MAX_LATERAL_OFFSET_FACTOR = 0.22
@@ -187,6 +193,12 @@ function SkinnedSnake.new(character, config)
 	self:initializeHistory()
 	self:startUpdateLoop()
 	print("✅ Skinned Snake created for", self.player and self.player.Name or "Player")
+	if CatmullRomSpline then
+		print(string.format("[OptimizedSnakeSystemV9] Spline: Hermite tension 0.1 (V2) | ControlPoints=%d", CONTROL_POINT_COUNT))
+	else
+		print("[OptimizedSnakeSystemV9] WARNING: CatmullRomSpline not found; using history fallback")
+	end
+	print(string.format("[OptimizedSnakeSystemV9] Detected bones=%d | boneSpacing=%.3f", #self.bones, self.boneSpacing or -1))
 	return self
 end
 
@@ -375,10 +387,10 @@ function SkinnedSnake:updateBones(dt)
 		local n = math.max(1, #self.bones)
 		local tailFactor = math.pow((index-1)/math.max(1,(n-1)), 1.35)
 		local yawScale = math.clamp(math.abs(self.yawRate) * 0.04, 0, 0.35)
-		local curveAtten = 1 - math.clamp(curvatureFactor or 0, 0, 1) * 0.7 -- reduce swing on tight turns
+		local curveAtten = 1 - math.clamp(curvatureFactor or 0, 0, 1) * 0.85 -- stronger reduction on tight turns
 		local effAmp = (0.04 + yawScale) * tailFactor * curveAtten
 		local wave = math.sin((tick()*WAVE_FREQUENCY) - index*0.35) * effAmp
-		local maxOffset = (self.boneSpacing or DEFAULT_BONE_SPACING) * (MAX_LATERAL_OFFSET_FACTOR * curveAtten)
+		local maxOffset = (self.boneSpacing or DEFAULT_BONE_SPACING) * (MAX_LATERAL_OFFSET_FACTOR * (curveAtten * curveAtten))
 		local slitherPos = position + rVec * math.clamp(wave * (self.boneSpacing or DEFAULT_BONE_SPACING), -maxOffset, maxOffset)
 		local worldCFrame = safeCFrameFromTRU(slitherPos, tVec, rVec, uVec)
 		worldCFrame = worldCFrame * CFrame.Angles(0, math.clamp(wave*0.06, -0.12, 0.12) * curveAtten, 0)
@@ -548,7 +560,7 @@ end
 -- Module API
 local OptimizedSnakeSystemV9 = {}
 function OptimizedSnakeSystemV9.init()
-	print("[OptimizedSnakeSystemV9] Initialized (V12, Anchored Spline Driver)")
+	print(string.format("[OptimizedSnakeSystemV9] Initialized (V%s, Anchored Spline Driver, curvature-adaptive)", VERSION))
 end
 function OptimizedSnakeSystemV9.createSnake(character, config)
 	return SkinnedSnake.new(character, config)

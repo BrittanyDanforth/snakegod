@@ -1,3 +1,7 @@
+-- CatmullRomSpline V2.1 (Hermite tension 0.1) - Stable Turning
+-- CHANGELOG:
+-- - V2.1: safer tangent at endpoints, header/version note for CI visibility
+
 --[[
 	Catmull-Rom Spline Module (V2 - Stable Turning)
 	This script creates a smooth, mathematical curve from a series of points.
@@ -89,6 +93,8 @@ end
 
 function CatmullRomSpline:GetTangent(t)
 	local h = 0.001
+	-- clamp endpoints to avoid NaNs
+	if t <= 0 then t = 0.0005 elseif t >= 1 then t = 0.9995 end
 	local p1 = self:GetPoint(t - h)
 	local p2 = self:GetPoint(t + h)
 	local v = p2 - p1
