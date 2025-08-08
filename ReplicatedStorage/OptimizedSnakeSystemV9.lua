@@ -25,6 +25,7 @@ local WAVE_AMPLITUDE = 0.6
 local WAVE_FREQUENCY = 2.0
 local BASE_SPEED = 20
 local BOOST_MULTIPLIER = 1.5
+local CONTROL_POINT_COUNT = 20
 
 -- Visuals
 local BASE_SCALE = 1.0
@@ -266,7 +267,8 @@ function SkinnedSnake:createSkinnedMesh()
 	self.meshPart.CanQuery = true
 	self.meshPart.CanTouch = false
 	self.meshPart.Massless = true
-	self.meshPart.Size = self.meshPart.Size * self.scale
+	-- keep original size to preserve Blender proportions
+	-- self.meshPart.Size = self.meshPart.Size * self.scale
 	CollectionService:AddTag(self.meshPart, "SnakeBody")
 
 	-- build bone chain
@@ -339,19 +341,32 @@ function SkinnedSnake:initializeHistory()
 	-- Initialize filtered head pose
 	self.filteredPos = startPos
 	self.filteredDir = startLook
+	self.prevFilteredDir = startLook
+	self.yawRate = 0
 	for i=1,HISTORY_SIZE do
 		self.positionHistory[i] = { position = startPos - startLook * (i*0.5), direction = startLook, time = tick() }
 	end
 	self.historyIndex = HISTORY_SIZE
 end
 
-function SkinnedSnake:updateHistory()
+function SkinnedSnake:updateHistory(dt)
 	-- Smooth head pose to avoid jitter
 	local alpha = 0.25
 	local headPos = self.rootPart.Position
 	local headDir = self.rootPart.CFrame.LookVector
 	self.filteredPos = self.filteredPos and self.filteredPos:Lerp(headPos, alpha) or headPos
-	self.filteredDir = safeNormalize((self.filteredDir or headDir)* (1-alpha) + headDir*alpha, headDir)
+	local newFilteredDir = safeNormalize((self.filteredDir or headDir)* (1-alpha) + headDir*alpha, headDir)
+	-- Compute yaw rate (signed) based on change in filtered direction
+	if dt and dt > 0 then
+		local prev = self.prevFilteredDir or newFilteredDir
+		local dotv = math.clamp(prev:Dot(newFilteredDir), -1, 1)
+		local crossv = prev:Cross(newFilteredDir)
+		local angle = math.atan2(crossv.Magnitude, dotv)
+		local sign = math.sign((self.rootPart.CFrame.UpVector):Dot(crossv))
+		self.yawRate = (angle * sign) / dt
+	end
+	self.prevFilteredDir = newFilteredDir
+	self.filteredDir = newFilteredDir
 
 	self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
 	self.positionHistory[self.historyIndex] = { position = self.filteredPos, direction = self.filteredDir, time = tick() }
@@ -374,11 +389,17 @@ function SkinnedSnake:updateBones(deltaTime)
 		chainPrevUp = uVec
 		self.previousUpVectors[bone] = uVec
 
-		-- Lateral slither offset and slight yaw instead of roll
-		local wave = math.sin((tick()*WAVE_FREQUENCY) - index*0.35) * WAVE_AMPLITUDE
-		local slitherPos = position + rVec * (wave * (self.boneSpacing or DEFAULT_BONE_SPACING) * 0.3)
+		-- Slither lateral offset with yaw-based amplitude and tail taper
+		local n = math.max(1, #self.bones)
+		local tailFactor = math.pow((index-1)/math.max(1,(n-1)), 1.25)
+		local yawScale = math.clamp(math.abs(self.yawRate) * 0.05, 0, 0.4) -- 0..0.4
+		local baseAmp = 0.05
+		local effAmp = baseAmp + yawScale
+		local wave = math.sin((tick()*WAVE_FREQUENCY) - index*0.35) * effAmp * tailFactor
+		local maxOffset = (self.boneSpacing or DEFAULT_BONE_SPACING) * 0.25
+		local slitherPos = position + rVec * math.clamp(wave * (self.boneSpacing or DEFAULT_BONE_SPACING), -maxOffset, maxOffset)
 		local worldCFrame = safeCFrameFromTRU(slitherPos, tVec, rVec, uVec)
-		worldCFrame = worldCFrame * CFrame.Angles(0, math.clamp(wave*0.1, -0.2, 0.2), 0)
+		worldCFrame = worldCFrame * CFrame.Angles(0, math.clamp(wave*0.08, -0.15, 0.15), 0)
 
 		local desiredObjectCF = meshCFrame:ToObjectSpace(worldCFrame)
 		local restObjectCF = self.restBoneCFrames[bone] or CFrame.new()
@@ -393,9 +414,11 @@ function SkinnedSnake:updateBones(deltaTime)
 			local dMag = delta.Magnitude
 			if dMag and dMag == dMag and dMag > maxStep and dMag < 1e6 then
 				local alpha = maxStep / dMag
-				relativeTransform = CFrame.new(prevPos:Lerp(newPos, alpha)) * (prevRel.Rotation:Lerp(relativeTransform.Rotation, math.clamp(BONE_BLEND_FACTOR, 0.1, 0.9)))
+				relativeTransform = CFrame.new(prevPos:Lerp(newPos, alpha)) * (prevRel.Rotation:Lerp(relativeTransform.Rotation, 0.5))
 			end
-			relativeTransform = prevRel:Lerp(relativeTransform, BONE_BLEND_FACTOR)
+			-- Per-bone smoothing: more on tail
+			local smooth = (0.25 + 0.45 * tailFactor) -- 0.25 head -> 0.7 tail
+			relativeTransform = prevRel:Lerp(relativeTransform, smooth)
 		end
 
 		bone.Transform = relativeTransform
@@ -416,7 +439,20 @@ function SkinnedSnake:updateBones(deltaTime)
 			while #pts < 4 do table.insert(pts, pts[#pts] or self.rootPart.Position) end
 			return pts
 		end
-		local controlPoints = buildPoints(10)
+		local controlPoints = buildPoints(CONTROL_POINT_COUNT)
+		-- Smooth control points to reduce bumps
+		if #controlPoints >= 5 then
+			local smoothed = {}
+			for i=1,#controlPoints do
+				local p0 = controlPoints[math.max(1,i-2)]
+				local p1 = controlPoints[math.max(1,i-1)]
+				local p2 = controlPoints[i]
+				local p3 = controlPoints[math.min(#controlPoints,i+1)]
+				local p4 = controlPoints[math.min(#controlPoints,i+2)]
+				smoothed[i] = (p0 + p1*2 + p2*3 + p3*2 + p4) / 9
+			end
+			controlPoints = smoothed
+		end
 		if #controlPoints >= 4 then
 			local spline = CatmullRomSpline.new(controlPoints)
 			if spline then
@@ -511,7 +547,7 @@ function SkinnedSnake:startUpdateLoop()
 	self.updateConnection = RunService.Heartbeat:Connect(function(dt)
 		if not self.isAlive then return end
 		self.frameCount += 1
-		self:updateHistory()
+		self:updateHistory(dt)
 		self:updateBones(dt)
 		if self.frameCount % 5 == 0 then self:updateLOD() end
 		if self.frameCount % 30 == 0 then self:updateColors() end
