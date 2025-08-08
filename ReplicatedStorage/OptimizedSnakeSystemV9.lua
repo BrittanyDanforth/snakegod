@@ -57,14 +57,14 @@ Snake.__index = Snake
 function Snake.new(character, config)
 	print("🦴 Creating new skinned mesh snake for", character.Name)
 	local self = setmetatable({}, Snake)
-	
+
 	-- Core properties
 	self.character = character
 	self.rootPart = character:WaitForChild("HumanoidRootPart")
 	self.humanoid = character:WaitForChild("Humanoid")
 	self.player = Players:GetPlayerFromCharacter(character)
 	self.config = config or {}
-	
+
 	-- Ensure default configuration
 	self.config.HeadColor = self.config.HeadColor or Color3.fromRGB(76, 217, 100)
 	self.config.BodyColors = self.config.BodyColors or {
@@ -72,38 +72,38 @@ function Snake.new(character, config)
 		Color3.fromRGB(51, 163, 75)
 	}
 	self.config.InitialLength = self.config.InitialLength or 85
-	
+
 	-- State
 	self.isAlive = true
 	self.length = self.config.InitialLength
 	self.frameCount = 0
 	self.lastUpdate = tick()
 	self.isBoosting = false
-	
+
 	-- Movement history
 	self.positionHistory = {}
 	self.historyIndex = 0
-	
+
 	-- LOD state
 	self.lodLevel = "HIGH"
 	self.isLocalPlayer = (self.player == Players.LocalPlayer)
 	self.updateFrequency = 1
-	
+
 	-- Hide character
 	self:hideCharacter()
-	
+
 	-- Create the skinned mesh
 	if not self:createSkinnedMesh() then
 		warn("Failed to create skinned mesh snake for", self.player.Name)
 		return nil
 	end
-	
+
 	-- Initialize position history
 	self:initializeHistory()
-	
+
 	-- Setup update connections
 	self:setupUpdateConnections()
-	
+
 	print("✅ Skinned Mesh Snake created for", self.player.Name)
 	return self
 end
@@ -113,7 +113,7 @@ function Snake:createFallbackSnake()
 	self.model = Instance.new("Model")
 	self.model.Name = "FallbackSnake_" .. self.player.Name
 	self.model.Parent = workspace
-	
+
 	-- Create a simple part
 	self.meshPart = Instance.new("Part")
 	self.meshPart.Name = "SnakeBody"
@@ -126,28 +126,28 @@ function Snake:createFallbackSnake()
 	self.meshPart.Anchored = false
 	self.meshPart.CanCollide = false
 	self.meshPart.Parent = self.model
-	
+
 	-- Tag for collision
 	CollectionService:AddTag(self.meshPart, "SnakeBody")
 	self.meshPart:SetAttribute("OwnerName", self.player.Name)
 	self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
-	
+
 	-- No bones for fallback
 	self.boneChain = {}
 	self.boneData = {}
-	
+
 	-- Weld to character
 	local weld = Instance.new("WeldConstraint")
 	weld.Part0 = self.meshPart
 	weld.Part1 = self.rootPart
 	weld.Parent = self.meshPart
-	
+
 	-- Position at character
 	self.meshPart.CFrame = self.rootPart.CFrame
-	
+
 	-- Add basic visual effects
 	self:addVisualEffects()
-	
+
 	warn("⚠️ Using fallback snake - no bone animation available")
 	return true
 end
@@ -164,7 +164,7 @@ function Snake:hideCharacter()
 			part:Destroy()
 		end
 	end
-	
+
 	self.rootPart.Transparency = 1
 	self.rootPart.CanCollide = true
 	self.rootPart.CanQuery = false
@@ -173,11 +173,11 @@ end
 
 function Snake:createSkinnedMesh()
 	print("🦴 Looking for skinned snake template...")
-	
+
 	-- Get the snake template
 	local templateModel = ReplicatedStorage:FindFirstChild("SkinnedSnakeTemplate") or 
-	                     ReplicatedStorage:FindFirstChild("slither_snake_rigged")
-	
+		ReplicatedStorage:FindFirstChild("slither_snake_rigged")
+
 	if not templateModel then
 		warn("❌ Snake template not found! Looking for 'SkinnedSnakeTemplate' or 'slither_snake_rigged' in ReplicatedStorage")
 		warn("❌ Please ensure your rigged snake model is placed directly in ReplicatedStorage")
@@ -185,88 +185,88 @@ function Snake:createSkinnedMesh()
 		for _, item in pairs(ReplicatedStorage:GetChildren()) do
 			warn("  - " .. item.Name .. " (" .. item.ClassName .. ")")
 		end
-		
+
 		-- FALLBACK: Create a simple part-based snake for now
 		warn("⚠️ FALLBACK: Creating simple part snake instead")
 		return self:createFallbackSnake()
 	end
-	
+
 	print("🦴 Found snake template:", templateModel.Name)
-	
-		-- Clone the template
+
+	-- Clone the template
 	self.model = templateModel:Clone()
 	self.model.Name = "Snake_" .. self.player.Name
 	self.model.Parent = workspace
-	
+
 	-- Do NOT scale the model - use the size from Blender
-	
+
 	-- Find the mesh part (should be named "Circle" based on the structure)
 	self.meshPart = self.model:FindFirstChild("Circle")
 	if not self.meshPart then
 		self.meshPart = self.model:FindFirstChildOfClass("MeshPart")
 	end
-	
+
 	if not self.meshPart then
 		warn("❌ No MeshPart found in snake model!")
 		return false
 	end
-	
+
 	-- Setup mesh properties for proper physics
 	self.meshPart.Anchored = false
 	self.meshPart.CanCollide = false  -- No collision with world
 	self.meshPart.CanQuery = false    -- Don't interfere with raycasts
 	self.meshPart.CanTouch = true     -- Still detect touches for gameplay
 	self.meshPart.Massless = true     -- Prevent physics issues
-	
+
 	-- Ensure proper collision group (if exists)
 	pcall(function()
 		self.meshPart.CollisionGroup = "SnakeBodies"
 	end)
-	
+
 	-- Set network ownership to player for smooth movement
 	if self.player then
 		pcall(function()
 			self.meshPart:SetNetworkOwner(self.player)
 		end)
 	end
-	
+
 	-- Tag for collision
 	CollectionService:AddTag(self.meshPart, "SnakeBody")
 	self.meshPart:SetAttribute("OwnerName", self.player.Name)
 	self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
-	
+
 	-- Find and organize bones
 	self:findAndOrganizeBones()
-	
+
 	-- Store initial poses from InitialPoses folder
 	self:storeInitialPoses()
-	
+
 	-- Temporarily anchor the root part to prevent flinging
 	local wasAnchored = self.rootPart.Anchored
 	self.rootPart.Anchored = true
-	
+
 	-- Position at character FIRST before welding
 	self.meshPart.CFrame = self.rootPart.CFrame
-	
+
 	-- Ensure no velocity before welding
 	self.meshPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
 	self.meshPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-	
+
 	-- Small wait to ensure physics settles
 	task.wait()
-	
+
 	-- Now weld to character
 	local weld = Instance.new("WeldConstraint")
 	weld.Part0 = self.meshPart
 	weld.Part1 = self.rootPart
 	weld.Parent = self.meshPart
-	
+
 	-- Restore anchor state
 	self.rootPart.Anchored = wasAnchored
-	
+
 	-- Add visual effects
 	self:addVisualEffects()
-	
+
 	return true
 end
 
@@ -274,22 +274,22 @@ function Snake:findAndOrganizeBones()
 	self.bones = {}
 	self.boneChain = {}
 	self.boneData = {}
-	
+
 	-- Find the first bone (should be named "Bone")
 	local firstBone = self.meshPart:FindFirstChild("Bone")
 	if not firstBone then
 		firstBone = self.meshPart:FindFirstChildOfClass("Bone")
 	end
-	
+
 	if not firstBone then
 		warn("❌ No bones found in mesh!")
 		return
 	end
-	
+
 	-- Follow the bone chain automatically
 	local currentBone = firstBone
 	local boneIndex = 1
-	
+
 	while currentBone do
 		table.insert(self.boneChain, currentBone)
 		self.boneData[currentBone.Name] = {
@@ -297,7 +297,7 @@ function Snake:findAndOrganizeBones()
 			index = boneIndex,
 			originalTransform = currentBone.Transform
 		}
-		
+
 		-- Find next bone in chain (child of current)
 		local nextBone = nil
 		for _, child in pairs(currentBone:GetChildren()) do
@@ -306,11 +306,11 @@ function Snake:findAndOrganizeBones()
 				break
 			end
 		end
-		
+
 		currentBone = nextBone
 		boneIndex = boneIndex + 1
 	end
-	
+
 	print(string.format("✅ Found %d bones in chain:", #self.boneChain))
 	for i, bone in ipairs(self.boneChain) do
 		print(string.format("  [%d] %s", i, bone.Name))
@@ -323,14 +323,14 @@ function Snake:storeInitialPoses()
 		warn("⚠️ InitialPoses folder not found")
 		return
 	end
-	
+
 	self.initialPoses = {}
-	
+
 	-- Store pose data for each bone
 	for _, boneInfo in pairs(self.boneData) do
 		local bone = boneInfo.bone
 		local boneName = bone.Name
-		
+
 		self.initialPoses[boneName] = {
 			composited = initialPosesFolder:FindFirstChild(boneName .. "_Composited"),
 			initial = initialPosesFolder:FindFirstChild(boneName .. "_Initial"),
@@ -348,7 +348,7 @@ function Snake:addVisualEffects()
 	self.headLight.Color = self.config.HeadColor
 	self.headLight.Shadows = false
 	self.headLight.Parent = self.meshPart
-	
+
 	-- Add particle emitter for boost
 	self.boostParticles = Instance.new("ParticleEmitter")
 	self.boostParticles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
@@ -364,7 +364,7 @@ end
 function Snake:initializeHistory()
 	local startPos = self.rootPart.Position
 	local startDir = self.rootPart.CFrame.LookVector
-	
+
 	for i = 1, HISTORY_SIZE do
 		self.positionHistory[i] = {
 			position = startPos - startDir * (i * 0.5),
@@ -376,7 +376,7 @@ end
 
 function Snake:updateHistory()
 	self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
-	
+
 	self.positionHistory[self.historyIndex] = {
 		position = self.rootPart.Position,
 		direction = self.rootPart.CFrame.LookVector,
@@ -392,61 +392,45 @@ end
 function Snake:updateBones(deltaTime)
 	if not self.boneChain or #self.boneChain == 0 then return end
 
-	-- For smooth skinned mesh deformation, we calculate bend angles between segments
-	local HISTORY_STEPS = 3      -- How far back to look for each bone
-	local SMOOTHING = 0.3        -- How smoothly bones follow (0.1 = smooth, 1.0 = instant)
-	
+	-- This is the single most important variable for the snake's look.
+	-- Lower number = tighter, more frequent curves.
+	-- Higher number = wider, more spread-out curves.
+	-- Start with a value around 3.
+	local BONE_SPACING_MULTIPLIER = 2
+
+	-- Loop through every bone in the snake, from head to tail
 	for i, bone in ipairs(self.boneChain) do
-		local boneInfo = self.boneData[bone.Name]
-		if not boneInfo then continue end
-		
-		-- Get historical positions for this bone
-		local stepsBack = i * HISTORY_STEPS
+
+		-- 1. Calculate how far back in the player's movement history this bone should look.
+		-- This creates the "follow the leader" effect.
+		local stepsBack = (i - 1) * BONE_SPACING_MULTIPLIER
+
+		-- 2. Get the CFrame (position and rotation) from that point in history.
 		local historicalData = self:getHistoricalData(stepsBack)
-		
-		if historicalData and i > 1 then
-			-- Get the previous bone's historical position
-			local prevStepsBack = (i - 1) * HISTORY_STEPS
-			local prevHistoricalData = self:getHistoricalData(prevStepsBack)
-			
-			if prevHistoricalData then
-				-- Calculate the angle between this segment and the previous
-				local currentDir = (historicalData.position - prevHistoricalData.position).Unit
-				local restDir = Vector3.new(0, 0, -1) -- Default forward direction
-				
-				-- Calculate rotation needed
-				local angle = math.acos(math.clamp(currentDir:Dot(restDir), -1, 1))
-				local axis = restDir:Cross(currentDir)
-				
-				if axis.Magnitude > 0.001 then
-					axis = axis.Unit
-					
-					-- Create rotation that bends this bone
-					local rotation = CFrame.fromAxisAngle(axis, angle * 0.5) -- Only bend halfway for smoothness
-					
-					-- Apply to transform (relative to parent bone)
-					local targetTransform = boneInfo.originalTransform * rotation
-					
-					-- Smooth interpolation
-					bone.Transform = bone.Transform:Lerp(targetTransform, SMOOTHING)
-				else
-					-- No rotation needed, use original transform
-					bone.Transform = bone.Transform:Lerp(boneInfo.originalTransform, SMOOTHING)
-				end
-			end
-		else
-			-- First bone or no history - use original transform
-			bone.Transform = bone.Transform:Lerp(boneInfo.originalTransform, SMOOTHING)
+
+		if historicalData then
+			-- 3. This is the magic. We set the bone's WorldCFrame directly.
+			-- This is far more stable than complex relative math.
+			-- The bone is told to go to the historical position and face the historical direction.
+			local targetCFrame = CFrame.lookAt(
+				historicalData.position,
+				historicalData.position + historicalData.direction
+			)
+
+			-- 4. To make the movement buttery smooth, we Lerp (interpolate) from the
+			-- bone's current position to its target position. This prevents jittering on turns.
+			local smoothingFactor = 0.5 -- A value between 0 (stiff) and 1 (instant)
+			bone.WorldCFrame = bone.WorldCFrame:Lerp(targetCFrame, smoothingFactor)
 		end
 	end
 end
 
 function Snake:updateLOD()
 	if not workspace.CurrentCamera then return end
-	
+
 	local camera = workspace.CurrentCamera
 	local distance = (camera.CFrame.Position - self.meshPart.Position).Magnitude
-	
+
 	local newLOD = "CULLED"
 	if distance < LOD_DISTANCES.HIGH then
 		newLOD = "HIGH"
@@ -455,7 +439,7 @@ function Snake:updateLOD()
 	elseif distance < LOD_DISTANCES.LOW then
 		newLOD = "LOW"
 	end
-	
+
 	if newLOD ~= self.lodLevel then
 		self.lodLevel = newLOD
 		self:applyLODSettings()
@@ -467,7 +451,7 @@ function Snake:applyLODSettings()
 		self.model.Parent = nil
 	else
 		self.model.Parent = workspace
-		
+
 		if self.lodLevel == "LOW" then
 			self.updateFrequency = 4
 		elseif self.lodLevel == "MEDIUM" then
@@ -482,22 +466,22 @@ function Snake:setupUpdateConnections()
 	-- Main update loop
 	self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
 		if not self.isAlive then return end
-		
+
 		self.frameCount = self.frameCount + 1
-		
+
 		-- Update position history
 		self:updateHistory()
-		
+
 		-- Update bones based on LOD
 		if self.frameCount % self.updateFrequency == 0 then
 			self:updateBones(deltaTime)
 		end
-		
+
 		-- Update LOD
 		if self.frameCount % 10 == 0 then
 			self:updateLOD()
 		end
-		
+
 		-- Keep mesh attached and check weld
 		if self.meshPart and self.meshPart.Parent then
 			-- Check if weld still exists
@@ -506,13 +490,13 @@ function Snake:setupUpdateConnections()
 				-- Weld broke, recreate it
 				warn("⚠️ Weld broke, recreating...")
 				if weld then weld:Destroy() end
-				
+
 				local newWeld = Instance.new("WeldConstraint")
 				newWeld.Part0 = self.meshPart
 				newWeld.Part1 = self.rootPart
 				newWeld.Parent = self.meshPart
 			end
-			
+
 			-- The weld should handle positioning automatically
 			-- Only update CFrame if not welded
 			if not weld then
@@ -520,7 +504,7 @@ function Snake:setupUpdateConnections()
 			end
 		end
 	end)
-	
+
 	-- Network updates (client only)
 	if RunService:IsClient() and self.isLocalPlayer then
 		self.networkConnection = RunService.Heartbeat:Connect(function()
@@ -545,19 +529,19 @@ end
 
 function Snake:destroy()
 	self.isAlive = false
-	
+
 	if self.updateConnection then
 		self.updateConnection:Disconnect()
 	end
-	
+
 	if self.networkConnection then
 		self.networkConnection:Disconnect()
 	end
-	
+
 	if self.model then
 		self.model:Destroy()
 	end
-	
+
 	print("❌ Snake destroyed for", self.player.Name)
 end
 
@@ -576,7 +560,7 @@ end
 
 function OptimizedSnakeSystemV9.createSnakeFromSavedState(character, config, savedState)
 	local snake = Snake.new(character, config)
-	
+
 	if savedState and snake then
 		if savedState.length then
 			snake.length = savedState.length
@@ -585,7 +569,7 @@ function OptimizedSnakeSystemV9.createSnakeFromSavedState(character, config, sav
 			snake.isAlive = savedState.isAlive
 		end
 	end
-	
+
 	return snake
 end
 
