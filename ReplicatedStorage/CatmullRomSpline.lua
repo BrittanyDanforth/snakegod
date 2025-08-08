@@ -107,8 +107,8 @@ function CatmullRomSpline.new(points, options)
 	self.uniform = options.uniform or false
 
 	self._arcSamples = nil       -- array of cumulative normalized t (0..1 across whole curve)
-	self._arcCumulative = nil    -- cumulative lengths (unnormalized)
-	self._totalLength = nil
+	self._arcCumulative = nil    -- cumulative lengths (normalized 0..1)
+	self._totalLength = nil      -- absolute studs length
 
 	return self
 end
@@ -212,6 +212,18 @@ function CatmullRomSpline:_mapUniformToNonUniform(t)
 	return s0 + (s1 - s0) * alpha
 end
 
+-- Convert absolute distance (studs) along the curve to parameter t in [0,1]
+function CatmullRomSpline:DistanceToT(distance)
+	if not self._totalLength then
+		self:_rebuildArcLengthTable()
+	end
+	local total = self._totalLength or 0
+	if total <= 1e-6 then return 0 end
+	local norm = clampFloat((distance or 0) / total, 0, 1)
+	-- Use the arc-length map to get correct parameterization even if uniform=false
+	return self:_mapUniformToNonUniform(norm)
+end
+
 -- Get a position on the curve at t in [0,1]
 function CatmullRomSpline:GetPoint(t)
 	t = clampFloat(t, 0, 1)
@@ -275,7 +287,7 @@ function CatmullRomSpline:GetLength()
 	return self._totalLength or 0
 end
 
--- Sample N positions along the curve (uniform in t or arc-length depending on SetUniform)
+-- Sample N positions along the curve
 function CatmullRomSpline:SamplePoints(count)
 	local n = math.max(2, math.floor(count or 50))
 	local pts = {}
