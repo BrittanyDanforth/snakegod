@@ -37,7 +37,7 @@ local PARTICLE_RATE = 100 -- Base particle emission rate
 local BASE_SPEED = 20 -- Base movement speed
 local BOOST_MULTIPLIER = 1.5 -- Speed multiplier when boosting
 local TURN_RATE = 2.5 -- Radians per second
-local WAVE_AMPLITUDE = 1.2 -- Side-to-side movement amplitude
+local WAVE_AMPLITUDE = 0.5 -- Reduced from 1.2 to prevent extreme positions
 local WAVE_FREQUENCY = 2.0 -- How fast the wave travels down the body
 
 -- Growth Constants
@@ -45,9 +45,13 @@ local GROWTH_RATE = 0.1 -- How fast the snake grows (units per food)
 local SCALE_PER_LENGTH = 0.005 -- How much the scale increases per length unit
 
 -- NEW smoothing/spacing constants for bones
-local DEFAULT_BONE_SPACING = 2.5 -- Studs between bones along the spline
-local BONE_BLEND_FACTOR = 0.6 -- 0..1 smoothing each frame (higher = snappier)
+local DEFAULT_BONE_SPACING = 2.0 -- Reduced from 2.5 for tighter following
+local BONE_BLEND_FACTOR = 0.8 -- Increased from 0.6 for smoother transitions
 local CONTROL_POINT_COUNT = 10 -- Control points to build the spline from recent motion
+
+-- NEW: Transform limits to prevent explosion
+local MAX_BONE_OFFSET = 10 -- Maximum distance a bone can be from its rest position
+local MAX_ROTATION_ANGLE = math.rad(45) -- Maximum rotation per bone
 
 -- LOD System for performance
 local LOD_DISTANCES = {
@@ -100,6 +104,7 @@ function SkinnedSnake.new(character, config)
 	self.previousUpVectors = {}
 	self.restBoneCFrames = {}
 	self.previousTangents = {}
+	self.debugMode = false -- Set to true to see bone debug info
 
 	-- Visual state
 	self.currentColorIndex = 1
@@ -259,11 +264,20 @@ function SkinnedSnake:createSkinnedMesh()
 	self.previousUpVectors = {}
 	self.restBoneCFrames = {}
 	self.previousTangents = {}
-	for _, bone in ipairs(self.bones) do
+	
+	-- Important: Store the initial transforms correctly
+	for i, bone in ipairs(self.bones) do
 		self.originalBoneTransforms[bone] = bone.Transform
-		self.previousTransforms[bone] = nil
+		self.previousTransforms[bone] = bone.Transform -- Start with rest pose
 		self.previousUpVectors[bone] = Vector3.new(0, 1, 0)
 		self.restBoneCFrames[bone] = bone.CFrame
+		self.previousTangents[bone] = Vector3.new(0, 0, -1)
+		
+		if self.debugMode then
+			print(string.format("Bone %d (%s) rest transform:", i, bone.Name))
+			print("  Position:", bone.Transform.Position)
+			print("  Rotation:", bone.Transform.Rotation)
+		end
 	end
 
 	-- Add visual effects
@@ -396,7 +410,25 @@ end
 local EPS = 1e-6
 
 local function isValidVector3(v)
-	return v and (v.X == v.X) and (v.Y == v.Y) and (v.Z == v.Z)
+	return v and (v.X == v.X) and (v.Y == v.Y) and (v.Z == v.Z) and 
+	       math.abs(v.X) < 1e6 and math.abs(v.Y) < 1e6 and math.abs(v.Z) < 1e6
+end
+
+local function isValidCFrame(cf)
+	local pos = cf.Position
+	local look = cf.LookVector
+	return isValidVector3(pos) and isValidVector3(look)
+end
+
+local function clampVector3(v, maxMagnitude)
+	if not isValidVector3(v) then
+		return Vector3.new()
+	end
+	local mag = v.Magnitude
+	if mag > maxMagnitude then
+		return v.Unit * maxMagnitude
+	end
+	return v
 end
 
 local function safeNormalize(v, fallback)
@@ -506,12 +538,23 @@ function SkinnedSnake:updateBones(deltaTime)
 	if not self.meshPart or not self.meshPart.Parent then return end
 
 	local meshCFrame = self.meshPart.CFrame
+	if not isValidCFrame(meshCFrame) then
+		warn("Invalid mesh CFrame detected!")
+		return
+	end
+
 	local chainPrevUp = Vector3.new(0, 1, 0)
 
 	local function setBoneFromWorld(bone, position, tangent, index)
+		-- Validate inputs
+		if not isValidVector3(position) or not isValidVector3(tangent) then
+			warn(string.format("Invalid bone data for bone %d", index))
+			return
+		end
+
 		-- Smooth tangent to prevent flips
 		local prevT = self.previousTangents[bone] or tangent
-		local smoothedT = safeNormalize(prevT * 0.6 + tangent * 0.4, tangent)
+		local smoothedT = safeNormalize(prevT * 0.7 + tangent * 0.3, tangent)
 		self.previousTangents[bone] = smoothedT
 
 		-- Build stable frame by parallel transport
@@ -522,55 +565,74 @@ function SkinnedSnake:updateBones(deltaTime)
 		-- World frame
 		local worldCFrame = safeCFrameFromTRU(position, tVec, rVec, uVec)
 
-		-- Subtle wave
-		local wave = math.clamp(math.sin((tick() * WAVE_FREQUENCY) - index * 0.3) * (WAVE_AMPLITUDE * 0.1), -0.2, 0.2)
+		-- Much more subtle wave (reduced amplitude)
+		local wave = math.clamp(math.sin((tick() * WAVE_FREQUENCY) - index * 0.3) * (WAVE_AMPLITUDE * 0.05), -0.1, 0.1)
 		worldCFrame = worldCFrame * CFrame.Angles(0, 0, wave)
 
 		-- Convert to object space, then to relative transform from rest pose
 		local desiredObjectCF = meshCFrame:ToObjectSpace(worldCFrame)
 		local restObjectCF = self.restBoneCFrames[bone] or CFrame.new()
+		
+		-- CRITICAL: Ensure we're getting valid transform
+		if not isValidCFrame(desiredObjectCF) or not isValidCFrame(restObjectCF) then
+			warn(string.format("Invalid CFrame for bone %d", index))
+			return
+		end
+		
 		local relativeTransform = restObjectCF:ToObjectSpace(desiredObjectCF)
+		
+		-- Clamp the transform to prevent extreme values
+		local pos = relativeTransform.Position
+		pos = clampVector3(pos, MAX_BONE_OFFSET)
+		
+		-- Extract and limit rotation
+		local x, y, z = relativeTransform:ToEulerAnglesYXZ()
+		x = math.clamp(x, -MAX_ROTATION_ANGLE, MAX_ROTATION_ANGLE)
+		y = math.clamp(y, -MAX_ROTATION_ANGLE, MAX_ROTATION_ANGLE)
+		z = math.clamp(z, -MAX_ROTATION_ANGLE, MAX_ROTATION_ANGLE)
+		
+		-- Reconstruct limited transform
+		relativeTransform = CFrame.new(pos) * CFrame.fromEulerAnglesYXZ(x, y, z)
 
-		-- Smooth transform
+		-- Smooth transform with stronger blending
 		local prevRel = self.previousTransforms[bone]
-		if prevRel then
+		if prevRel and isValidCFrame(prevRel) then
 			relativeTransform = prevRel:Lerp(relativeTransform, BONE_BLEND_FACTOR)
+		end
+
+		-- Final validation
+		if not isValidCFrame(relativeTransform) then
+			warn(string.format("Invalid final transform for bone %d, using identity", index))
+			relativeTransform = CFrame.new()
 		end
 
 		bone.Transform = relativeTransform
 		self.previousTransforms[bone] = relativeTransform
+		
+		if self.debugMode and index % 3 == 0 then
+			print(string.format("Bone %d transform: Pos: %.2f, %.2f, %.2f", 
+				index, relativeTransform.Position.X, relativeTransform.Position.Y, relativeTransform.Position.Z))
+		end
 	end
 
-	if CatmullRomSpline then
-		-- Spline-based sampling
-		local controlPoints = buildControlPointsFromHistory(self, CONTROL_POINT_COUNT)
-		if #controlPoints < 4 then return end
-
-		local spline = CatmullRomSpline.new(controlPoints)
-		if not spline then return end
-		spline:SetUniform(true)
-
-		local splineLength = spline:GetLength()
-		if splineLength <= 0 then return end
-
-		local totalBoneLength = math.max(0, (#self.bones - 1) * self.boneSpacing)
-		local startOffset = math.max(0, splineLength - totalBoneLength)
-
-		for i, bone in ipairs(self.bones) do
-			local distance = startOffset + (i - 1) * self.boneSpacing
-			local tParam = math.clamp(distance / splineLength, 0, 1)
-			local pos = spline:GetPoint(tParam)
-			local tan = safeNormalize(spline:GetTangent(tParam), Vector3.new(0, 0, -1))
-			setBoneFromWorld(bone, pos, tan, i)
-		end
-	else
-		-- History-distance fallback
-		for i, bone in ipairs(self.bones) do
-			local backDistance = (i - 1) * self.boneSpacing
-			local sample = getHistoryAtBackDistance(self, backDistance)
+	-- Use simpler history-based approach without spline for now
+	for i, bone in ipairs(self.bones) do
+		-- Scale bone spacing based on index to create natural taper
+		local spacingMultiplier = 1 + (i - 1) * 0.05 -- Slight increase per bone
+		local backDistance = (i - 1) * self.boneSpacing * spacingMultiplier
+		
+		local sample = getHistoryAtBackDistance(self, backDistance)
+		if sample then
 			local pos = sample.position
 			local tan = safeNormalize(sample.direction, Vector3.new(0, 0, -1))
 			setBoneFromWorld(bone, pos, tan, i)
+		else
+			-- If no valid sample, reset to rest pose
+			if self.previousTransforms[bone] then
+				local restTransform = self.originalBoneTransforms[bone] or CFrame.new()
+				bone.Transform = self.previousTransforms[bone]:Lerp(restTransform, 0.1)
+				self.previousTransforms[bone] = bone.Transform
+			end
 		end
 	end
 end
