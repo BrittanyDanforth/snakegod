@@ -1,5 +1,5 @@
--- Optimized Snake System V11 - SKINNED MESH REVOLUTION
--- Complete rewrite to use a single skinned mesh with bone-based animation
+-- Optimized Snake System V11.2 - SKINNED MESH WITH PARALLEL-TRANSPORT FRAMING
+-- Stable, NaN-safe bone animation with roll-lock and collision-safe assembly
 -- Zero gaps, maximum performance, and professional-grade visuals
 
 local Players = game:GetService("Players")
