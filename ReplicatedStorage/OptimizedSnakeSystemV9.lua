@@ -405,23 +405,98 @@ function Snake:getHistoricalData(stepsBack)
 	return self.positionHistory[index] or self.positionHistory[self.historyIndex]
 end
 
+-- Helper function for stable CFrame calculation (from Section 6.1)
+function Snake:createStableCFrame(position, lookAtPosition, upVector)
+	local lookVector = (lookAtPosition - position).Unit
+	
+	-- Ensure lookVector and upVector are not parallel
+	if math.abs(lookVector:Dot(upVector)) > 0.999 then
+		-- If they are parallel, fallback to a different axis
+		upVector = Vector3.new(1, 0, 0) 
+	end
+
+	local rightVector = upVector:Cross(lookVector).Unit
+	local newUpVector = lookVector:Cross(rightVector).Unit -- Recalculate for orthogonality
+
+	return CFrame.fromMatrix(
+		position,
+		rightVector,
+		newUpVector,
+		-lookVector -- Note: fromMatrix uses the back-vector (-Z)
+	)
+end
+
+-- Frame-rate independent damping (from Section 6.2.1)
+function Snake:damp(current, goal, smoothingFactor, dt)
+	local alpha = 1 - (smoothingFactor ^ dt)
+	return current:Lerp(goal, alpha)
+end
+
 function Snake:updateBones(deltaTime)
 	if not self.boneChain or #self.boneChain == 0 then return end
 
-	-- DIAGNOSTIC TEST: Keep bones in original position
-	-- If snake is smooth with this, the issue is our animation
-	-- If snake is still bumpy, the issue is the model/import
+	-- Following the recommended hybrid kinematic approach from Section 8.2
+	local SEGMENT_DISTANCE = 2.0  -- Distance between segments
+	local SMOOTHING_FACTOR = 0.85 -- Higher = slower/smoother movement
+	
+	-- The world up vector for stable orientation
+	local worldUp = Vector3.new(0, 1, 0)
 	
 	for i, bone in ipairs(self.boneChain) do
 		local boneInfo = self.boneData[bone.Name]
-		if boneInfo then
-			-- Just maintain original transform - no movement
-			bone.Transform = boneInfo.originalTransform
+		if not boneInfo then continue end
+		
+		-- Calculate how far back in history this bone should look
+		local stepsBack = (i - 1) * 3 -- Adjust multiplier for tighter/looser following
+		local historicalData = self:getHistoricalData(stepsBack)
+		
+		if historicalData then
+			-- Get position for this bone and the next
+			local currentPos = self.rootPart.Position
+			local targetPos = historicalData.position
+			
+			-- Calculate stable orientation using cross product method
+			if i < #self.boneChain then
+				-- For non-tail bones, look at the next bone's position
+				local nextStepsBack = i * 3
+				local nextData = self:getHistoricalData(nextStepsBack)
+				if nextData then
+					-- Calculate the direction this bone should face
+					local direction = (targetPos - nextData.position).Unit
+					
+					-- Calculate bend angle relative to rest pose
+					local restDirection = Vector3.new(0, 0, -1) -- Forward in bone space
+					local angle = math.acos(math.clamp(direction:Dot(restDirection), -1, 1))
+					
+					-- Only apply rotation if there's significant bend
+					if angle > 0.01 then
+						local axis = restDirection:Cross(direction)
+						if axis.Magnitude > 0.001 then
+							axis = axis.Unit
+							-- Apply rotation as offset from original transform
+							local rotation = CFrame.fromAxisAngle(axis, angle * 0.3) -- Dampened rotation
+							local targetTransform = boneInfo.originalTransform * rotation
+							
+							-- Frame-rate independent smoothing
+							bone.Transform = self:damp(bone.Transform, targetTransform, SMOOTHING_FACTOR, deltaTime)
+						else
+							-- No rotation needed
+							bone.Transform = self:damp(bone.Transform, boneInfo.originalTransform, SMOOTHING_FACTOR, deltaTime)
+						end
+					else
+						-- Return to rest pose when straight
+						bone.Transform = self:damp(bone.Transform, boneInfo.originalTransform, SMOOTHING_FACTOR, deltaTime)
+					end
+				end
+			else
+				-- Tail bone - just follow the previous bone smoothly
+				bone.Transform = self:damp(bone.Transform, boneInfo.originalTransform, SMOOTHING_FACTOR, deltaTime)
+			end
+		else
+			-- No history - maintain rest pose
+			bone.Transform = self:damp(bone.Transform, boneInfo.originalTransform, SMOOTHING_FACTOR, deltaTime)
 		end
 	end
-	
-	-- Once we confirm the model is smooth when static,
-	-- we can add back animation using Transform instead of WorldCFrame
 end
 
 function Snake:updateLOD()
@@ -463,7 +538,9 @@ end
 
 function Snake:setupUpdateConnections()
 	-- Main update loop
-	self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
+	-- Using PreRender for visual-only updates as recommended in Section 6.2.2
+	local updateEvent = RunService:IsClient() and RunService.PreRender or RunService.Heartbeat
+	self.updateConnection = updateEvent:Connect(function(deltaTime)
 		if not self.isAlive then return end
 
 		self.frameCount = self.frameCount + 1
