@@ -240,13 +240,29 @@ function Snake:createSkinnedMesh()
 
 	-- Store initial poses from InitialPoses folder
 	self:storeInitialPoses()
+	
+	-- CRITICAL: Initialize bones to lay flat immediately
+	-- This ensures the snake spawns in the correct position
+	for i, bone in ipairs(self.boneChain) do
+		local boneInfo = self.boneData[bone.Name]
+		if boneInfo then
+			-- Reset to original transform first
+			bone.Transform = boneInfo.originalTransform
+		end
+	end
 
 	-- Temporarily anchor the root part to prevent flinging
 	local wasAnchored = self.rootPart.Anchored
 	self.rootPart.Anchored = true
 
 	-- Position at character FIRST before welding
-	self.meshPart.CFrame = self.rootPart.CFrame
+	-- Check if model needs rotation to lay flat (snake should be horizontal)
+	-- You may need to adjust this rotation based on how your model was exported
+	self.meshPart.CFrame = self.rootPart.CFrame * CFrame.Angles(0, 0, 0) -- Try different rotations if needed
+	-- Common rotations to try:
+	-- * CFrame.Angles(math.rad(90), 0, 0)  -- Rotate 90 degrees on X axis
+	-- * CFrame.Angles(0, math.rad(90), 0)  -- Rotate 90 degrees on Y axis
+	-- * CFrame.Angles(0, 0, math.rad(90))  -- Rotate 90 degrees on Z axis
 
 	-- Ensure no velocity before welding
 	self.meshPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
