@@ -359,12 +359,6 @@ function SkinnedSnake:updateHistory()
     }
 end
 
-function SkinnedSnake:getHistoricalPosition(segmentsBack)
-    -- Get position from history for smooth following
-    local targetIndex = ((self.historyIndex - segmentsBack - 1) % HISTORY_SIZE) + 1
-    return self.positionHistory[targetIndex] or self.positionHistory[self.historyIndex]
-end
-
 -- Helper: sample history by traveled distance backwards from current index
 local function getHistoryAtBackDistance(self, targetBackDistance)
     if not self.positionHistory or self.historyIndex == 0 then
@@ -382,10 +376,15 @@ local function getHistoryAtBackDistance(self, targetBackDistance)
         if accumulated >= targetBackDistance then
             -- Interpolate between prev and current to hit exact distance
             local overshoot = accumulated - targetBackDistance
-            local t = segment > 0 and (1 - overshoot / segment) or 1
+            -- Epsilon guard to avoid division by zero
+            local t = (segment and segment > 1e-6) and (1 - overshoot / segment) or 1
+            -- Clamp t to [0,1]
+            if t ~= t then t = 1 end
+            t = math.clamp(t, 0, 1)
             local pos = prev.position:Lerp(current.position, t)
             local dir = (current.position - prev.position)
-            dir = dir.Magnitude > 1e-3 and dir.Unit or Vector3.new(0, 0, -1)
+            -- Safe direction fallback
+            dir = (dir and dir.Magnitude > 1e-6) and dir.Unit or (self.rootPart and self.rootPart.CFrame.LookVector or Vector3.new(0,0,-1))
             return { position = pos, direction = dir }
         end
         -- step back
@@ -518,6 +517,9 @@ function SkinnedSnake:updateBones(deltaTime)
     local chainPrevUp = Vector3.new(0, 1, 0)
 
     local function setBoneFromWorld(bone, position, tangent, index)
+        if not isValidVector3(position) then return end
+        if not isValidVector3(tangent) then return end
+
         -- Smooth tangent to prevent flips
         local prevT = self.previousTangents[bone] or tangent
         local smoothedT = safeNormalize(prevT * 0.6 + tangent * 0.4, tangent)
@@ -548,7 +550,7 @@ function SkinnedSnake:updateBones(deltaTime)
             local newPos = relativeTransform.Position
             local delta = (newPos - prevPos)
             local dMag = delta.Magnitude
-            if dMag > maxStep and dMag < 1e6 then
+            if dMag and dMag == dMag and dMag > maxStep and dMag < 1e6 then
                 local alpha = maxStep / dMag
                 relativeTransform = CFrame.new(prevPos:Lerp(newPos, alpha)) * (prevRel.Rotation:Lerp(relativeTransform.Rotation, math.clamp(BONE_BLEND_FACTOR, 0.1, 0.9)))
             end
@@ -570,10 +572,10 @@ function SkinnedSnake:updateBones(deltaTime)
 
         local spline = CatmullRomSpline.new(controlPoints)
         if not spline then return end
-        spline:SetUniform(true)
-
+        -- Ensure spline has measurable length
         local splineLength = spline:GetLength()
-        if splineLength <= 0 then return end
+        if not splineLength or splineLength ~= splineLength or splineLength <= 1e-6 then return end
+        spline:SetUniform(true)
 
         local totalBoneLength = math.max(0, (#self.bones - 1) * self.boneSpacing)
         local startOffset = math.max(0, splineLength - totalBoneLength)
@@ -583,16 +585,20 @@ function SkinnedSnake:updateBones(deltaTime)
             local tParam = math.clamp(distance / splineLength, 0, 1)
             local pos = spline:GetPoint(tParam)
             local tan = safeNormalize(spline:GetTangent(tParam), Vector3.new(0, 0, -1))
-            setBoneFromWorld(bone, pos, tan, i)
+            if isValidVector3(pos) and isValidVector3(tan) then
+                setBoneFromWorld(bone, pos, tan, i)
+            end
         end
     else
         -- History-distance fallback
         for i, bone in ipairs(self.bones) do
             local backDistance = (i - 1) * self.boneSpacing
             local sample = getHistoryAtBackDistance(self, backDistance)
-            local pos = sample.position
-            local tan = safeNormalize(sample.direction, Vector3.new(0, 0, -1))
-            setBoneFromWorld(bone, pos, tan, i)
+            if sample and isValidVector3(sample.position) and isValidVector3(sample.direction) then
+                local pos = sample.position
+                local tan = safeNormalize(sample.direction, Vector3.new(0, 0, -1))
+                setBoneFromWorld(bone, pos, tan, i)
+            end
         end
     end
 end
