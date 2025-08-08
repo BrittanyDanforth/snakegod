@@ -25,7 +25,7 @@ local WAVE_AMPLITUDE = 0.4
 local WAVE_FREQUENCY = 1.5
 local BASE_SPEED = 20
 local BOOST_MULTIPLIER = 1.5
-local CONTROL_POINT_COUNT = 20
+local CONTROL_POINT_COUNT = 40
 
 -- Visuals
 local BASE_SCALE = 1.0
@@ -381,8 +381,9 @@ function SkinnedSnake:updateBones(deltaTime)
 
 	local function setBoneFromWorld(bone, position, tangent, index)
 		if not isValidVector3(position) or not isValidVector3(tangent) then return end
+		-- gentler tangent smoothing (85/15)
 		local prevT = self.previousTangents[bone] or tangent
-		local smoothedT = safeNormalize(prevT*0.6 + tangent*0.4, tangent)
+		local smoothedT = safeNormalize(prevT*0.85 + tangent*0.15, tangent)
 		self.previousTangents[bone] = smoothedT
 
 		local tVec, rVec, uVec = orthonormalBasis(self.previousUpVectors[bone] or chainPrevUp, smoothedT)
@@ -391,15 +392,15 @@ function SkinnedSnake:updateBones(deltaTime)
 
 		-- Slither lateral offset with yaw-based amplitude and tail taper
 		local n = math.max(1, #self.bones)
-		local tailFactor = math.pow((index-1)/math.max(1,(n-1)), 1.25)
-		local yawScale = math.clamp(math.abs(self.yawRate) * 0.05, 0, 0.4) -- 0..0.4
-		local baseAmp = 0.05
+		local tailFactor = math.pow((index-1)/math.max(1,(n-1)), 1.35)
+		local yawScale = math.clamp(math.abs(self.yawRate) * 0.04, 0, 0.35)
+		local baseAmp = 0.04
 		local effAmp = baseAmp + yawScale
 		local wave = math.sin((tick()*WAVE_FREQUENCY) - index*0.35) * effAmp * tailFactor
-		local maxOffset = (self.boneSpacing or DEFAULT_BONE_SPACING) * 0.25
+		local maxOffset = (self.boneSpacing or DEFAULT_BONE_SPACING) * 0.22
 		local slitherPos = position + rVec * math.clamp(wave * (self.boneSpacing or DEFAULT_BONE_SPACING), -maxOffset, maxOffset)
 		local worldCFrame = safeCFrameFromTRU(slitherPos, tVec, rVec, uVec)
-		worldCFrame = worldCFrame * CFrame.Angles(0, math.clamp(wave*0.08, -0.15, 0.15), 0)
+		worldCFrame = worldCFrame * CFrame.Angles(0, math.clamp(wave*0.06, -0.12, 0.12), 0)
 
 		local desiredObjectCF = meshCFrame:ToObjectSpace(worldCFrame)
 		local restObjectCF = self.restBoneCFrames[bone] or CFrame.new()
@@ -407,18 +408,9 @@ function SkinnedSnake:updateBones(deltaTime)
 
 		local prevRel = self.previousTransforms[bone]
 		if prevRel then
-			local maxStep = (self.boneSpacing or DEFAULT_BONE_SPACING) * 2
-			local prevPos = prevRel.Position
-			local newPos = relativeTransform.Position
-			local delta = newPos - prevPos
-			local dMag = delta.Magnitude
-			if dMag and dMag == dMag and dMag > maxStep and dMag < 1e6 then
-				local alpha = maxStep / dMag
-				relativeTransform = CFrame.new(prevPos:Lerp(newPos, alpha)) * (prevRel.Rotation:Lerp(relativeTransform.Rotation, 0.5))
-			end
-			-- Per-bone smoothing: more on tail
-			local smooth = (0.25 + 0.45 * tailFactor) -- 0.25 head -> 0.7 tail
-			relativeTransform = prevRel:Lerp(relativeTransform, smooth)
+			-- Tail-damped smoothing: head reacts more, tail much smoother
+			local smooth = (0.35 + 0.5 * tailFactor) -- 0.35 head -> 0.85 tail
+			relativeTransform = prevRel:Lerp(relativeTransform, math.clamp(smooth, 0.25, 0.9))
 		end
 
 		bone.Transform = relativeTransform
