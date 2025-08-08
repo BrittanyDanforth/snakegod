@@ -10,6 +10,17 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local UserInputService = RunService:IsClient() and game:GetService("UserInputService") or nil
 
+-- Optional Catmull-Rom Spline for stabilized turning
+local CatmullRomSpline
+local HAS_SPLINE = false
+local okSpline, resSpline = pcall(function()
+	return require(ReplicatedStorage:WaitForChild("CatmullRomSpline", 2))
+end)
+if okSpline and resSpline then
+	CatmullRomSpline = resSpline
+	HAS_SPLINE = true
+end
+
 -- Constants for the skinned mesh system
 local MESH_ASSET_ID = "rbxassetid://YOUR_MESH_ID" -- Will be replaced with actual asset ID
 local BONE_COUNT = 15 -- Should match the number of bones in your Blender model
@@ -80,6 +91,13 @@ function SkinnedSnake.new(character, config)
     self.historyIndex = 0
     self.wavePhase = 0
     self.targetDirection = self.rootPart.CFrame.LookVector
+
+    -- Spline state (optional)
+    self.splineAvailable = HAS_SPLINE
+    self.spline = nil
+    self.splineDirty = false
+    self.lastSplineBuildTick = 0
+    self.splineBuildInterval = 0.05 -- seconds
     
     -- Visual state
     self.currentColorIndex = 1
@@ -266,6 +284,8 @@ function SkinnedSnake:initializeHistory()
             time = tick()
         }
     end
+    -- Mark spline dirty so the first build samples from initialized history
+    self.splineDirty = true
 end
 
 function SkinnedSnake:updateHistory()
@@ -278,6 +298,8 @@ function SkinnedSnake:updateHistory()
         lookVector = self.rootPart.CFrame.LookVector,
         time = tick()
     }
+    -- Defer spline rebuild to avoid per-frame allocations
+    self.splineDirty = true
 end
 
 function SkinnedSnake:getHistoricalPosition(segmentsBack)
@@ -286,34 +308,96 @@ function SkinnedSnake:getHistoricalPosition(segmentsBack)
     return self.positionHistory[targetIndex] or self.positionHistory[self.historyIndex]
 end
 
+function SkinnedSnake:rebuildSpline()
+    if not self.splineAvailable then return end
+    -- Build control points from recent history (coarsened)
+    local controlPoints = {}
+    local stride = 4 -- take every Nth history sample
+    local maxPoints = 24
+    local added = 0
+    for offset = 0, (HISTORY_SIZE - 1), stride do
+        local idx = ((self.historyIndex - offset - 1) % HISTORY_SIZE) + 1
+        local entry = self.positionHistory[idx]
+        if entry then
+            table.insert(controlPoints, 1, entry.position)
+            added += 1
+            if added >= maxPoints then break end
+        end
+    end
+    if #controlPoints < 4 then
+        self.spline = nil
+        self.splineDirty = false
+        self.lastSplineBuildTick = tick()
+        return
+    end
+    local ok, splineOrErr = pcall(function()
+        local s = CatmullRomSpline.new(controlPoints, { tension = 0.1, uniform = true })
+        s:SetUniform(true)
+        return s
+    end)
+    if ok then
+        self.spline = splineOrErr
+    else
+        warn("Spline build failed:", splineOrErr)
+        self.spline = nil
+    end
+    self.splineDirty = false
+    self.lastSplineBuildTick = tick()
+end
+
 function SkinnedSnake:updateBones(deltaTime)
     if not self.bones or #self.bones == 0 then return end
     
     -- Update wave phase for natural movement
     self.wavePhase = self.wavePhase + WAVE_FREQUENCY * deltaTime
+
+    -- Rebuild spline lazily when new history arrives
+    if self.splineAvailable and self.splineDirty and (tick() - self.lastSplineBuildTick) >= self.splineBuildInterval then
+        self:rebuildSpline()
+    end
+    local useSpline = (self.splineAvailable and self.spline ~= nil)
     
     -- Calculate how many segments each bone represents
     local segmentsPerBone = math.max(1, self.length / #self.bones)
     
     for i, bone in ipairs(self.bones) do
-        -- Get historical position for this bone
-        local segmentOffset = (i - 1) * segmentsPerBone
-        local historicalData = self:getHistoricalPosition(segmentOffset)
-        
-        -- Calculate the target position for this bone
-        local targetPos = historicalData.position
-        local targetLook = historicalData.lookVector
+        -- Determine target position and direction for this bone
+        local targetPos
+        local targetLook
+        if useSpline then
+            local t
+            if #self.bones > 1 then
+                t = math.max(0, 1 - (i - 1) / (#self.bones - 1))
+            else
+                t = 1
+            end
+            local pos = self.spline:GetPoint(t)
+            local tan = self.spline:GetTangent(t)
+            targetPos = pos
+            targetLook = tan
+        else
+            local segmentOffset = (i - 1) * segmentsPerBone
+            local historicalData = self:getHistoricalPosition(segmentOffset)
+            targetPos = historicalData.position
+            targetLook = historicalData.lookVector
+        end
         
         -- Add wave motion for natural slithering
         local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * WAVE_AMPLITUDE
-        local perpendicular = targetLook:Cross(Vector3.new(0, 1, 0)).Unit
+        local up = Vector3.new(0, 1, 0)
+        local perpendicular = targetLook:Cross(up)
+        if perpendicular.Magnitude > 1e-6 then
+            perpendicular = perpendicular.Unit
+        else
+            perpendicular = Vector3.new(1, 0, 0)
+        end
         
         -- Apply wave motion
         local wavePosition = targetPos + perpendicular * waveOffset
         
         -- Calculate bone transform
-        local boneOffset = i == 1 and 0 or (i - 1) / (#self.bones - 1)
-        local scaleFactor = 1 - (boneOffset * 0.3) -- Taper towards tail
+        local boneOffset = i == 1 and 0 or (i - 1) / ( #self.bones > 1 and (#self.bones - 1) or 1 )
+        local _scaleFactor = 1 - (boneOffset * 0.3) -- reserved for taper if needed
         
         -- Apply the transform to the bone
         if i == 1 then
@@ -322,9 +406,9 @@ function SkinnedSnake:updateBones(deltaTime)
         else
             -- Body bones follow with wave motion
             local localOffset = self.meshPart.CFrame:ToObjectSpace(CFrame.new(wavePosition))
-            bone.Transform = self.originalBoneTransforms[i] * 
-                           CFrame.new(localOffset.Position * 0.1) * 
-                           CFrame.Angles(0, waveOffset * 0.1, 0)
+            bone.Transform = self.originalBoneTransforms[i]
+                * CFrame.new(localOffset.Position * 0.1)
+                * CFrame.Angles(0, waveOffset * 0.1, 0)
         end
     end
 end
@@ -420,6 +504,25 @@ function SkinnedSnake:updateColors()
     end
 end
 
+-- Minimal update methods to satisfy client optional calls
+function SkinnedSnake:updateConfig(newConfig)
+    if not newConfig then return end
+    if newConfig.HeadColor then
+        self.config.HeadColor = newConfig.HeadColor
+        if self.headLight then self.headLight.Color = newConfig.HeadColor end
+        if self.boostParticles then self.boostParticles.Color = ColorSequence.new(newConfig.HeadColor) end
+    end
+    if newConfig.BodyColors and #newConfig.BodyColors > 0 then
+        self.config.BodyColors = newConfig.BodyColors
+    end
+end
+
+function SkinnedSnake:updateLength(newLength)
+    if typeof(newLength) == "number" then
+        self.length = math.clamp(newLength, MIN_SNAKE_LENGTH, MAX_SNAKE_LENGTH)
+    end
+end
+
 function SkinnedSnake:startUpdateLoop()
     self.updateConnection = RunService.Heartbeat:Connect(function(deltaTime)
         if not self.isAlive then return end
@@ -463,5 +566,15 @@ function SkinnedSnake:destroy()
     print("❌ Skinned Snake destroyed for", self.player.Name)
 end
 
--- Module return
-return SkinnedSnake
+-- Public module API expected by client
+local Module = {}
+
+function Module.init()
+    -- Reserved for future initialization
+end
+
+function Module.createSnake(character, config)
+    return SkinnedSnake.new(character, config)
+end
+
+return Module
