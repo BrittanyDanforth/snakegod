@@ -408,37 +408,20 @@ end
 function Snake:updateBones(deltaTime)
 	if not self.boneChain or #self.boneChain == 0 then return end
 
-	-- This is the single most important variable for the snake's look.
-	-- Lower number = tighter, more frequent curves.
-	-- Higher number = wider, more spread-out curves.
-	-- Start with a value around 3.
-	local BONE_SPACING_MULTIPLIER = 2
-
-	-- Loop through every bone in the snake, from head to tail
+	-- DIAGNOSTIC TEST: Keep bones in original position
+	-- If snake is smooth with this, the issue is our animation
+	-- If snake is still bumpy, the issue is the model/import
+	
 	for i, bone in ipairs(self.boneChain) do
-
-		-- 1. Calculate how far back in the player's movement history this bone should look.
-		-- This creates the "follow the leader" effect.
-		local stepsBack = (i - 1) * BONE_SPACING_MULTIPLIER
-
-		-- 2. Get the CFrame (position and rotation) from that point in history.
-		local historicalData = self:getHistoricalData(stepsBack)
-
-		if historicalData then
-			-- 3. This is the magic. We set the bone's WorldCFrame directly.
-			-- This is far more stable than complex relative math.
-			-- The bone is told to go to the historical position and face the historical direction.
-			local targetCFrame = CFrame.lookAt(
-				historicalData.position,
-				historicalData.position + historicalData.direction
-			)
-
-			-- 4. To make the movement buttery smooth, we Lerp (interpolate) from the
-			-- bone's current position to its target position. This prevents jittering on turns.
-			local smoothingFactor = 0.5 -- A value between 0 (stiff) and 1 (instant)
-			bone.WorldCFrame = bone.WorldCFrame:Lerp(targetCFrame, smoothingFactor)
+		local boneInfo = self.boneData[bone.Name]
+		if boneInfo then
+			-- Just maintain original transform - no movement
+			bone.Transform = boneInfo.originalTransform
 		end
 	end
+	
+	-- Once we confirm the model is smooth when static,
+	-- we can add back animation using Transform instead of WorldCFrame
 end
 
 function Snake:updateLOD()
