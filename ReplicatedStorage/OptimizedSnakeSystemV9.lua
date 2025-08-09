@@ -219,10 +219,13 @@ function SkinnedSnake:createSkinnedMesh()
     end
 
     -- Set up the mesh properties
-    self.meshPart.Anchored = false
+    self.meshPart.Anchored = true
     self.meshPart.CanCollide = false
-    self.meshPart.CanQuery = true
-    self.meshPart.CanTouch = true
+    self.meshPart.CanQuery = false
+    self.meshPart.CanTouch = false
+    if self.meshPart:IsA("BasePart") then
+        self.meshPart.Massless = true
+    end
 
     -- Track initial size and apply independent radius
     self.initialMeshSize = self.meshPart.Size
@@ -270,11 +273,7 @@ function SkinnedSnake:createSkinnedMesh()
     -- Add visual effects
     self:addVisualEffects()
 
-    -- Attach to root part
-    local weld = Instance.new("WeldConstraint")
-    weld.Part0 = self.meshPart
-    weld.Part1 = self.rootPart
-    weld.Parent = self.meshPart
+    -- No welds: we anchor the visual mesh and drive CFrame each frame
 end
 
 function SkinnedSnake:addVisualEffects()
@@ -389,17 +388,16 @@ function SkinnedSnake:updateBones(deltaTime)
         -- World-space frame aligned to tangent
         local C_world = CFrame.lookAt(Pw, Pw + T)
 
-        -- Convert to MeshPart object space and apply
-        local relative = self.meshPart.CFrame:ToObjectSpace(C_world)
+        -- Convert to MeshPart object space and apply relative to bind pose
+        local desiredLocal = self.meshPart.CFrame:ToObjectSpace(C_world)
 
         -- Per-bone taper radius (0..1 along chain)
         local u = (i - 1) / math.max(1, (boneCount - 1))
         local taper = 0.5 + math.sin(u * math.pi) * 0.5
         local finalRadius = math.max(0.01, self.radius * taper)
 
-        -- Apply final transform: keep orientation from spline; Roblox bones ignore non-uniform scale in Transform,
-        -- so we approximate radius via mesh XY size and keep Z via rest spacing influence by bone placements.
-        bone.Transform = relative
+        -- Apply final transform: Transform is relative to the bone's bind pose (bone.CFrame)
+        bone.Transform = bone.CFrame:Inverse() * desiredLocal
     end
 end
 
