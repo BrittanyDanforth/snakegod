@@ -12,7 +12,7 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 
 -- Get the module
-local OptimizedSnakeSystemV9 = require(ReplicatedStorage:WaitForChild("OptimizedSnakeSystemV9"))
+local OptimizedSnakeSystemV9 = require(ReplicatedStorage:WaitForChild("SimpleSegmentSnake"))
 
 -- Initialize the system on the client
 if OptimizedSnakeSystemV9.init then
