@@ -150,12 +150,33 @@ function SkinnedSnake:createSkinnedMesh()
     self.model = Instance.new("Model")
     self.model.Name = "SkinnedSnake_" .. self.player.Name
     self.model.Parent = workspace
-    
-    -- Load the skinned mesh from ReplicatedStorage
+
+    -- Load the user's mesh model (supports both Model and MeshPart)
     local meshTemplate = ReplicatedStorage:WaitForChild("Meshes"):WaitForChild("untitledsnakeeeee")
-    self.meshPart = meshTemplate:Clone()
-    self.meshPart.Name = "SnakeBody"
-    self.meshPart.Parent = self.model
+    local instance = meshTemplate:Clone()
+
+    if instance:IsA("Model") then
+        -- Parent the full model under our container so ancillary data (InitialPoses, AnimationController) stays intact
+        instance.Parent = self.model
+
+        -- Find the actual skinned mesh part named "Circle" (fallback to first MeshPart descendant)
+        local circle = instance:FindFirstChild("Circle")
+        if not circle then
+            for _, d in ipairs(instance:GetDescendants()) do
+                if d:IsA("MeshPart") then
+                    circle = d
+                    break
+                end
+            end
+        end
+        assert(circle ~= nil, "OptimizedSnakeSystemV9: Could not find MeshPart 'Circle' inside model 'untitledsnakeeeee'")
+        self.meshPart = circle
+    else
+        -- Direct MeshPart case
+        instance.Name = "SnakeBody"
+        instance.Parent = self.model
+        self.meshPart = instance
+    end
     
     -- Set up the mesh properties
     self.meshPart.Anchored = false
@@ -165,6 +186,8 @@ function SkinnedSnake:createSkinnedMesh()
     
     -- Track initial size and apply independent radius
     self.initialMeshSize = self.meshPart.Size
+    -- Avoid non-uniform XY scaling which was stretching the skinned mesh.
+    -- Keep the authoring size; radius only stored logically.
     self:applyRadiusScale(self.radius)
     
     -- Set up collision detection
@@ -173,7 +196,7 @@ function SkinnedSnake:createSkinnedMesh()
     self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
     
     -- Find the armature and bones
-    self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController")
+    self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController") or self.meshPart.Parent:FindFirstChildOfClass("AnimationController")
     if not self.armature then
         -- Get bones directly and robustly order them head-to-tail
         self.bones = {}
