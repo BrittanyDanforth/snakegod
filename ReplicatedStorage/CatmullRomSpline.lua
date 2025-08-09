@@ -1,6 +1,9 @@
 local CatmullRomSpline = {}
 CatmullRomSpline.__index = CatmullRomSpline
 
+-- Stable Catmull-Rom with arc-length remapping
+-- Version: 1.1 (tighter clamps, numeric guards)
+
 -- Defaults tuned for sharp turns stability
 local DEFAULT_TENSION = 0.08          -- Slightly tighter
 local DEFAULT_TANGENT_CLAMP = 0.75    -- Stronger clamp to reduce overshoot
@@ -159,6 +162,7 @@ function CatmullRomSpline:_rebuildArcLengthTable()
 			local t = j / steps
 			local pos = interpolateHermite(t, p0, p1, p2, p3, self.tension, self.tangentClamp)
 			local segLen = (pos - prevPos).Magnitude
+			if segLen ~= segLen or segLen == math.huge then segLen = 0 end -- guard NaN/inf
 			total = total + segLen
 			table.insert(cumulative, total)
 			-- Store global t across entire curve [0,1] for each sample

@@ -1,5 +1,6 @@
 -- THIS IS THE ENTIRE SCRIPT FOR: StarterPlayer > StarterPlayerScripts > ClientSnakeController
 -- Enhanced with zero-lag client-side prediction movement system
+-- Using OptimizedSnakeSystemV9 (non-stretching loader)
 
 print("[Client] ClientSnakeController started - Enhanced Movement System")
 
@@ -13,6 +14,7 @@ local Debris = game:GetService("Debris")
 
 -- Get the module
 local OptimizedSnakeSystemV9 = require(ReplicatedStorage:WaitForChild("OptimizedSnakeSystemV9"))
+print("[Client] Using visual module:", OptimizedSnakeSystemV9 and "OptimizedSnakeSystemV9" or "(nil)")
 
 -- Initialize the system on the client
 if OptimizedSnakeSystemV9.init then
