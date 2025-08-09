@@ -313,12 +313,18 @@ Players.PlayerAdded:Connect(function(player)
 	-- Connect character spawning
 	player.CharacterAdded:Connect(onCharacterAdded)
 
+	-- Auto-load character on join if not spawned yet
+	task.defer(function()
+		if player.Parent and not player.Character then
+			pcall(function()
+				player:LoadCharacter()
+			end)
+		end
+	end)
+
 	-- Handle existing character
 	if player.Character then
 		onCharacterAdded(player.Character)
-	else
-		-- Wait for character to spawn (when they click Play)
-		player.CharacterAdded:Connect(onCharacterAdded)
 	end
 end)
 
@@ -343,7 +349,10 @@ for _, player in pairs(Players:GetPlayers()) do
 	if player.Character then
 		onCharacterAdded(player.Character)
 	else
-		-- Wait for character to spawn (when they click Play)
+		-- Ensure character loads for players already in server (studio start)
+		pcall(function()
+			player:LoadCharacter()
+		end)
 		player.CharacterAdded:Connect(onCharacterAdded)
 	end
 end
