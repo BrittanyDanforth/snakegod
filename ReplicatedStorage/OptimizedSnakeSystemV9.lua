@@ -151,39 +151,71 @@ function SkinnedSnake:createSkinnedMesh()
     self.model.Name = "SkinnedSnake_" .. self.player.Name
     self.model.Parent = workspace
 
-    -- Load the skinned mesh from ReplicatedStorage
+    -- Prefer top-level Model in ReplicatedStorage matching MeshName (your exact project layout)
     local meshName = (self.config and self.config.MeshName) or "untitledsnakeeeee"
-    local meshesFolder = ReplicatedStorage:FindFirstChild("Meshes")
-    local meshTemplate
-    if meshesFolder then
-        meshTemplate = meshesFolder:FindFirstChild(meshName)
-        if not meshTemplate then
-            -- Try some fallbacks by common names
-            meshTemplate = meshesFolder:FindFirstChild("SkinnedSnake")
-                or meshesFolder:FindFirstChild("SnakeMesh")
-                or meshesFolder:FindFirstChild("SnakeBody")
+    local repoModel = ReplicatedStorage:FindFirstChild(meshName)
+    local chosenMeshPart = nil
+    local chosenAnimCtrl = nil
+
+    if repoModel and repoModel:IsA("Model") then
+        -- Find Circle (MeshPart) and AnimationController in this model
+        local circle = repoModel:FindFirstChild("Circle")
+        if circle and circle:IsA("BasePart") then
+            chosenMeshPart = circle:Clone()
+        else
+            -- Fallback: find any MeshPart under the model
+            for _, desc in ipairs(repoModel:GetDescendants()) do
+                if desc:IsA("MeshPart") then
+                    chosenMeshPart = desc:Clone()
+                    break
+                end
+            end
+        end
+        chosenAnimCtrl = repoModel:FindFirstChildOfClass("AnimationController")
+        if chosenAnimCtrl then
+            chosenAnimCtrl = chosenAnimCtrl:Clone()
         end
     end
-    if not meshTemplate then
-        warn("[SkinnedSnake] Could not find skinned mesh '" .. meshName .. "' under ReplicatedStorage/Meshes. Using placeholder body.")
-        -- Create a simple visible placeholder so the player sees something
-        local placeholder = Instance.new("Part")
-        placeholder.Name = "SnakeBody_Placeholder"
-        placeholder.Size = Vector3.new(4, 4, 10)
-        placeholder.Color = self.config.HeadColor or Color3.fromRGB(76, 217, 100)
-        placeholder.Material = Enum.Material.SmoothPlastic
-        placeholder.TopSurface = Enum.SurfaceType.Smooth
-        placeholder.BottomSurface = Enum.SurfaceType.Smooth
-        placeholder.Anchored = false
-        placeholder.CanCollide = false
-        placeholder.Parent = self.model
-        self.meshPart = placeholder
-        self.bones = {}
-        print("[SkinnedSnake] Placeholder body created. Add your skinned mesh to ReplicatedStorage/Meshes/" .. meshName .. " to enable bone animation.")
-    else
-        self.meshPart = meshTemplate:Clone()
+
+    if chosenMeshPart then
+        self.meshPart = chosenMeshPart
         self.meshPart.Name = "SnakeBody"
         self.meshPart.Parent = self.model
+        if chosenAnimCtrl then
+            chosenAnimCtrl.Parent = self.model
+        end
+    else
+        -- Legacy fallback: ReplicatedStorage/Meshes/<meshName>
+        local meshesFolder = ReplicatedStorage:FindFirstChild("Meshes")
+        local meshTemplate
+        if meshesFolder then
+            meshTemplate = meshesFolder:FindFirstChild(meshName)
+            if not meshTemplate then
+                meshTemplate = meshesFolder:FindFirstChild("SkinnedSnake")
+                    or meshesFolder:FindFirstChild("SnakeMesh")
+                    or meshesFolder:FindFirstChild("SnakeBody")
+            end
+        end
+        if meshTemplate and meshTemplate:IsA("BasePart") then
+            self.meshPart = meshTemplate:Clone()
+            self.meshPart.Name = "SnakeBody"
+            self.meshPart.Parent = self.model
+        else
+            warn("[SkinnedSnake] Could not find skinned mesh '" .. meshName .. "' (Model in ReplicatedStorage or item in ReplicatedStorage/Meshes). Using placeholder body.")
+            local placeholder = Instance.new("Part")
+            placeholder.Name = "SnakeBody_Placeholder"
+            placeholder.Size = Vector3.new(4, 4, 10)
+            placeholder.Color = self.config.HeadColor or Color3.fromRGB(76, 217, 100)
+            placeholder.Material = Enum.Material.SmoothPlastic
+            placeholder.TopSurface = Enum.SurfaceType.Smooth
+            placeholder.BottomSurface = Enum.SurfaceType.Smooth
+            placeholder.Anchored = false
+            placeholder.CanCollide = false
+            placeholder.Parent = self.model
+            self.meshPart = placeholder
+            self.bones = {}
+            print("[SkinnedSnake] Placeholder body created. Add your model at ReplicatedStorage/" .. meshName .. " with a MeshPart named 'Circle' and an AnimationController to enable bone animation.")
+        end
     end
 
     -- Set up the mesh properties
@@ -201,34 +233,28 @@ function SkinnedSnake:createSkinnedMesh()
     self.meshPart:SetAttribute("OwnerName", self.player.Name)
     self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
 
-    -- Find the armature and bones
-    self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController")
-    if not self.armature and self.meshPart:IsA("MeshPart") then
-        -- Look for bones directly under MeshPart (skinned mesh import structure)
-        self.bones = self.bones or {}
-        if #self.bones == 0 then
-            local function findBones(parent)
-                for _, child in pairs(parent:GetChildren()) do
-                    if child:IsA("Bone") then
-                        table.insert(self.bones, child)
-                    elseif child:IsA("Model") or child:IsA("Folder") then
-                        findBones(child)
-                    end
+    -- Find bones
+    self.armature = self.model:FindFirstChildOfClass("AnimationController")
+    self.bones = {}
+    -- Your hierarchy: Circle -> Bone -> Bone.001 -> ... -> Bone.012
+    local rootBone = self.meshPart:FindFirstChild("Bone")
+    if rootBone and rootBone:IsA("Bone") then
+        local currentBone = rootBone
+        while currentBone do
+            table.insert(self.bones, currentBone)
+            currentBone = currentBone:FindFirstChildOfClass("Bone")
+        end
+    else
+        -- Fallback: collect any bones under the mesh part
+        local function collectBones(parent)
+            for _, child in ipairs(parent:GetDescendants()) do
+                if child:IsA("Bone") then
+                    table.insert(self.bones, child)
                 end
             end
-            findBones(self.meshPart)
         end
-    elseif self.armature then
-        -- Get bones from armature
-        self.bones = {}
-        local rootBone = self.armature:FindFirstChild("Bone")
-        if rootBone then
-            local currentBone = rootBone
-            while currentBone do
-                table.insert(self.bones, currentBone)
-                currentBone = currentBone:FindFirstChildOfClass("Bone")
-            end
-        end
+        collectBones(self.meshPart)
+        table.sort(self.bones, function(a, b) return a.Name < b.Name end)
     end
 
     print("Found", self.bones and #self.bones or 0, "bones in the mesh")
@@ -244,7 +270,7 @@ function SkinnedSnake:createSkinnedMesh()
     -- Add visual effects
     self:addVisualEffects()
 
-    -- Create a WeldConstraint to attach mesh to root part
+    -- Attach to root part
     local weld = Instance.new("WeldConstraint")
     weld.Part0 = self.meshPart
     weld.Part1 = self.rootPart
