@@ -27,9 +27,19 @@ if not networkingFolder then
 	networkingFolder.Parent = ReplicatedStorage
 end
 
+-- Unified helper to get/create the remotes folder
+local function getRemoteFolder()
+	local folder = ReplicatedStorage:FindFirstChild("Remotes") or ReplicatedStorage:FindFirstChild("RemoteEvents")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "Remotes"
+		folder.Parent = ReplicatedStorage
+	end
+	return folder
+end
+
 -- Create/Get RemoteEvents for menu integration
-local remoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents") or Instance.new("Folder", ReplicatedStorage)
-remoteEvents.Name = "RemoteEvents"
+local remoteEvents = getRemoteFolder()
 
 local spawnSnake = remoteEvents:FindFirstChild("SpawnSnake") or Instance.new("RemoteEvent", remoteEvents)
 spawnSnake.Name = "SpawnSnake"
@@ -200,6 +210,11 @@ local function onCharacterAdded(character)
 		leaderstats = Instance.new("Folder")
 		leaderstats.Name = "leaderstats"
 		leaderstats.Parent = player
+
+		local length = Instance.new("IntValue")
+		length.Name = "Length"
+		length.Value = 55
+		length.Parent = leaderstats
 	end
 
 	local lengthValue = leaderstats:FindFirstChild("Length")
@@ -301,6 +316,9 @@ Players.PlayerAdded:Connect(function(player)
 	-- Handle existing character
 	if player.Character then
 		onCharacterAdded(player.Character)
+	else
+		-- Wait for character to spawn (when they click Play)
+		player.CharacterAdded:Connect(onCharacterAdded)
 	end
 end)
 
@@ -339,7 +357,7 @@ spawnSnake.OnServerEvent:Connect(function(player)
 end)
 
 -- Handle spawn requests from menu
-local respawnEvent = ReplicatedStorage:FindFirstChild("RespawnSnake")
+local respawnEvent = remoteEvents:FindFirstChild("RespawnSnake")
 if respawnEvent then
 	respawnEvent.OnServerEvent:Connect(function(player, username)
 		print("🎮 Respawn requested for:", player.Name)
@@ -418,7 +436,7 @@ RunService.Heartbeat:Connect(function()
 
 	-- Only send an update if there's actually data to send
 	if #allSnakeData > 0 then
-		-- Use the existing RemoteEvents folder
+		-- Use the unified remotes folder
 		local batchUpdateEvent = remoteEvents:FindFirstChild("BatchSnakeUpdate")
 		if not batchUpdateEvent then
 			batchUpdateEvent = Instance.new("RemoteEvent", remoteEvents)
