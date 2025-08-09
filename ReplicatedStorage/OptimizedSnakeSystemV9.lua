@@ -365,38 +365,63 @@ function SkinnedSnake:updateBones(deltaTime)
     -- Arc-length aware spacing along the path
     local boneCount = #self.bones
     local splineLength = math.max(self.spline:GetLength(), 0.001)
-    local segmentLength = splineLength / (boneCount - 1)
+    local segmentLength = splineLength / math.max(1, (boneCount - 1))
+
+    -- Parallel transport frame for roll-stable orientation
+    local prevTangent = nil
+    local up = Vector3.yAxis
+    local right = Vector3.xAxis
 
     for i, bone in ipairs(self.bones) do
         local distanceAlong = (i - 1) * segmentLength
-        local t = math.clamp(distanceAlong / splineLength, 0, 1)
+        local t = self.spline.DistanceToT and self.spline:DistanceToT(distanceAlong) or math.clamp(distanceAlong / splineLength, 0, 1)
 
         -- Sample point and tangent from spline
         local P = self.spline:GetPoint(t)
         local T = self.spline:GetTangent(t)
+        if T.Magnitude < 1e-6 then
+            T = prevTangent or Vector3.zAxis
+        else
+            T = T.Unit
+        end
+
+        if i == 1 then
+            -- Seed a stable frame
+            up = math.abs(T:Dot(Vector3.yAxis)) > 0.95 and Vector3.xAxis or Vector3.yAxis
+            right = T:Cross(up).Unit
+            up = right:Cross(T).Unit
+        else
+            -- Parallel transport previous frame towards new tangent
+            local axis = prevTangent:Cross(T)
+            local dot = math.clamp(prevTangent:Dot(T), -1, 1)
+            if axis.Magnitude > 1e-6 then
+                local angle = math.acos(dot)
+                local rot = CFrame.fromAxisAngle(axis.Unit, angle)
+                right = rot:VectorToWorldSpace(right)
+                up = rot:VectorToWorldSpace(up)
+            end
+            -- Re-orthonormalize
+            right = (T:Cross(up)).Unit
+            up = (right:Cross(T)).Unit
+        end
+        prevTangent = T
 
         -- Optional subtle lateral wave offset, perpendicular to tangent
-        local side = T:Cross(Vector3.new(0, 1, 0))
-        if side.Magnitude < 1e-3 then
-            side = Vector3.new(1, 0, 0)
-        else
-            side = side.Unit
-        end
+        local side = right
         local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * (WAVE_AMPLITUDE * 0.25)
         local Pw = P + side * waveOffset
 
-        -- World-space frame aligned to tangent
-        local C_world = CFrame.lookAt(Pw, Pw + T)
+        -- World-space frame aligned to tangent with stable roll
+        local C_world = CFrame.fromMatrix(Pw, right, up)
 
         -- Convert to MeshPart object space and apply relative to bind pose
         local desiredLocal = self.meshPart.CFrame:ToObjectSpace(C_world)
 
-        -- Per-bone taper radius (0..1 along chain)
-        local u = (i - 1) / math.max(1, (boneCount - 1))
-        local taper = 0.5 + math.sin(u * math.pi) * 0.5
-        local finalRadius = math.max(0.01, self.radius * taper)
+        -- Per-bone taper radius placeholder (non-uniform scaling not supported in Bone.Transform)
+        -- finalRadius computed but not applied to Transform due to engine constraints
+        -- local u = (i - 1) / math.max(1, (boneCount - 1))
+        -- local taper = 0.5 + math.sin(u * math.pi) * 0.5
 
-        -- Apply final transform: Transform is relative to the bone's bind pose (bone.CFrame)
         bone.Transform = bone.CFrame:Inverse() * desiredLocal
     end
 end
