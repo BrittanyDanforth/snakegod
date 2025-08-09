@@ -447,16 +447,29 @@ end
 
 function SkinnedSnake:updateColors()
     -- Cycle through body colors or apply rainbow mode
+    local color
     if self.rainbowMode then
         local hue = (tick() * 0.5) % 1
-        local color = Color3.fromHSV(hue, 1, 1)
-        self.headLight.Color = color
-        self.boostParticles.Color = ColorSequence.new(color)
+        color = Color3.fromHSV(hue, 1, 1)
     else
-        -- Normal color cycling
-        self.currentColorIndex = (self.currentColorIndex % #self.config.BodyColors) + 1
-        local color = self.config.BodyColors[self.currentColorIndex]
+        -- Normal color cycling with robust fallback
+        local list = (self.config and self.config.BodyColors) or {}
+        local count = typeof(list) == "table" and #list or 0
+        if count > 0 then
+            self.currentColorIndex = (self.currentColorIndex % count) + 1
+            local candidate = list[self.currentColorIndex]
+            if typeof(candidate) == "Color3" then
+                color = candidate
+            end
+        end
+        if not color then
+            color = (self.config and self.config.HeadColor) or Color3.fromRGB(76, 217, 100)
+        end
+    end
+    if self.headLight then
         self.headLight.Color = color
+    end
+    if self.boostParticles then
         self.boostParticles.Color = ColorSequence.new(color)
     end
 end
