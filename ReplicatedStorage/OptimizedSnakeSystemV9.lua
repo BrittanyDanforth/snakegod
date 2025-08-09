@@ -150,83 +150,130 @@ function SkinnedSnake:createSkinnedMesh()
     self.model = Instance.new("Model")
     self.model.Name = "SkinnedSnake_" .. self.player.Name
     self.model.Parent = workspace
-    
-    -- Load the skinned mesh from ReplicatedStorage
-    local meshTemplate = ReplicatedStorage:WaitForChild("Meshes"):WaitForChild("untitledsnakeeeee")
-    self.meshPart = meshTemplate:Clone()
-    self.meshPart.Name = "SnakeBody"
-    self.meshPart.Parent = self.model
-    
+
+    -- Prefer top-level Model in ReplicatedStorage matching MeshName (your exact project layout)
+    local meshName = (self.config and self.config.MeshName) or "untitledsnakeeeee"
+    local repoModel = ReplicatedStorage:FindFirstChild(meshName)
+    local chosenMeshPart = nil
+    local chosenAnimCtrl = nil
+
+    if repoModel and repoModel:IsA("Model") then
+        -- Find Circle (MeshPart) and AnimationController in this model
+        local circle = repoModel:FindFirstChild("Circle")
+        if circle and circle:IsA("BasePart") then
+            chosenMeshPart = circle:Clone()
+        else
+            -- Fallback: find any MeshPart under the model
+            for _, desc in ipairs(repoModel:GetDescendants()) do
+                if desc:IsA("MeshPart") then
+                    chosenMeshPart = desc:Clone()
+                    break
+                end
+            end
+        end
+        chosenAnimCtrl = repoModel:FindFirstChildOfClass("AnimationController")
+        if chosenAnimCtrl then
+            chosenAnimCtrl = chosenAnimCtrl:Clone()
+        end
+    end
+
+    if chosenMeshPart then
+        self.meshPart = chosenMeshPart
+        self.meshPart.Name = "SnakeBody"
+        self.meshPart.Parent = self.model
+        if chosenAnimCtrl then
+            chosenAnimCtrl.Parent = self.model
+        end
+    else
+        -- Legacy fallback: ReplicatedStorage/Meshes/<meshName>
+        local meshesFolder = ReplicatedStorage:FindFirstChild("Meshes")
+        local meshTemplate
+        if meshesFolder then
+            meshTemplate = meshesFolder:FindFirstChild(meshName)
+            if not meshTemplate then
+                meshTemplate = meshesFolder:FindFirstChild("SkinnedSnake")
+                    or meshesFolder:FindFirstChild("SnakeMesh")
+                    or meshesFolder:FindFirstChild("SnakeBody")
+            end
+        end
+        if meshTemplate and meshTemplate:IsA("BasePart") then
+            self.meshPart = meshTemplate:Clone()
+            self.meshPart.Name = "SnakeBody"
+            self.meshPart.Parent = self.model
+        else
+            warn("[SkinnedSnake] Could not find skinned mesh '" .. meshName .. "' (Model in ReplicatedStorage or item in ReplicatedStorage/Meshes). Using placeholder body.")
+            local placeholder = Instance.new("Part")
+            placeholder.Name = "SnakeBody_Placeholder"
+            placeholder.Size = Vector3.new(4, 4, 10)
+            placeholder.Color = self.config.HeadColor or Color3.fromRGB(76, 217, 100)
+            placeholder.Material = Enum.Material.SmoothPlastic
+            placeholder.TopSurface = Enum.SurfaceType.Smooth
+            placeholder.BottomSurface = Enum.SurfaceType.Smooth
+            placeholder.Anchored = false
+            placeholder.CanCollide = false
+            placeholder.Parent = self.model
+            self.meshPart = placeholder
+            self.bones = {}
+            print("[SkinnedSnake] Placeholder body created. Add your model at ReplicatedStorage/" .. meshName .. " with a MeshPart named 'Circle' and an AnimationController to enable bone animation.")
+        end
+    end
+
     -- Set up the mesh properties
-    self.meshPart.Anchored = false
+    self.meshPart.Anchored = true
     self.meshPart.CanCollide = false
-    self.meshPart.CanQuery = true
-    self.meshPart.CanTouch = true
-    
+    self.meshPart.CanQuery = false
+    self.meshPart.CanTouch = false
+    if self.meshPart:IsA("BasePart") then
+        self.meshPart.Massless = true
+    end
+
     -- Track initial size and apply independent radius
     self.initialMeshSize = self.meshPart.Size
     self:applyRadiusScale(self.radius)
-    
+
     -- Set up collision detection
     CollectionService:AddTag(self.meshPart, "SnakeBody")
     self.meshPart:SetAttribute("OwnerName", self.player.Name)
     self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
-    
-    -- Find the armature and bones
-    self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController")
-    if not self.armature then
-        -- Look for bones directly
-        self.bones = {}
-        local function findBones(parent)
-            for _, child in pairs(parent:GetChildren()) do
+
+    -- Find bones
+    self.armature = self.model:FindFirstChildOfClass("AnimationController")
+    self.bones = {}
+    -- Your hierarchy: Circle -> Bone -> Bone.001 -> ... -> Bone.012
+    local rootBone = self.meshPart:FindFirstChild("Bone")
+    if rootBone and rootBone:IsA("Bone") then
+        local currentBone = rootBone
+        while currentBone do
+            table.insert(self.bones, currentBone)
+            currentBone = currentBone:FindFirstChildOfClass("Bone")
+        end
+    else
+        -- Fallback: collect any bones under the mesh part
+        local function collectBones(parent)
+            for _, child in ipairs(parent:GetDescendants()) do
                 if child:IsA("Bone") then
                     table.insert(self.bones, child)
-                elseif child:IsA("Model") or child:IsA("Folder") then
-                    findBones(child)
                 end
             end
         end
-        findBones(self.meshPart)
-        
-        -- Sort bones by name or position
-        table.sort(self.bones, function(a, b)
-            return a.Name < b.Name
-        end)
-    else
-        -- Get bones from armature
-        self.bones = {}
-        local rootBone = self.armature:FindFirstChild("Bone")
-        if rootBone then
-            local currentBone = rootBone
-            while currentBone do
-                table.insert(self.bones, currentBone)
-                currentBone = currentBone:FindFirstChildOfClass("Bone")
-            end
-        end
+        collectBones(self.meshPart)
+        table.sort(self.bones, function(a, b) return a.Name < b.Name end)
     end
-    
-    print("Found", #self.bones, "bones in the mesh")
-    
+
+    print("Found", self.bones and #self.bones or 0, "bones in the mesh")
+
     -- Store original bone transforms
     self.originalBoneTransforms = {}
-    for i, bone in ipairs(self.bones) do
-        self.originalBoneTransforms[i] = bone.Transform
+    if self.bones then
+        for i, bone in ipairs(self.bones) do
+            self.originalBoneTransforms[i] = bone.Transform
+        end
     end
-    
+
     -- Add visual effects
     self:addVisualEffects()
-    
-    -- Create a WeldConstraint to attach mesh to root part
-    local weld = Instance.new("WeldConstraint")
-    weld.Part0 = self.meshPart
-    weld.Part1 = self.rootPart
-    weld.Parent = self.meshPart
-    
-    -- Position the mesh at the character
-    self.meshPart.CFrame = self.rootPart.CFrame
-    
-    -- After positioning, compute rest bone spacing metrics
-    self:computeRestBoneMetrics()
+
+    -- No welds: we anchor the visual mesh and drive CFrame each frame
 end
 
 function SkinnedSnake:addVisualEffects()
@@ -318,40 +365,64 @@ function SkinnedSnake:updateBones(deltaTime)
     -- Arc-length aware spacing along the path
     local boneCount = #self.bones
     local splineLength = math.max(self.spline:GetLength(), 0.001)
-    local segmentLength = splineLength / (boneCount - 1)
+    local segmentLength = splineLength / math.max(1, (boneCount - 1))
+
+    -- Parallel transport frame for roll-stable orientation
+    local prevTangent = nil
+    local up = Vector3.yAxis
+    local right = Vector3.xAxis
 
     for i, bone in ipairs(self.bones) do
         local distanceAlong = (i - 1) * segmentLength
-        local t = math.clamp(distanceAlong / splineLength, 0, 1)
+        local t = self.spline.DistanceToT and self.spline:DistanceToT(distanceAlong) or math.clamp(distanceAlong / splineLength, 0, 1)
 
         -- Sample point and tangent from spline
         local P = self.spline:GetPoint(t)
         local T = self.spline:GetTangent(t)
+        if T.Magnitude < 1e-6 then
+            T = prevTangent or Vector3.zAxis
+        else
+            T = T.Unit
+        end
+
+        if i == 1 then
+            -- Seed a stable frame
+            up = math.abs(T:Dot(Vector3.yAxis)) > 0.95 and Vector3.xAxis or Vector3.yAxis
+            right = T:Cross(up).Unit
+            up = right:Cross(T).Unit
+        else
+            -- Parallel transport previous frame towards new tangent
+            local axis = prevTangent:Cross(T)
+            local dot = math.clamp(prevTangent:Dot(T), -1, 1)
+            if axis.Magnitude > 1e-6 then
+                local angle = math.acos(dot)
+                local rot = CFrame.fromAxisAngle(axis.Unit, angle)
+                right = rot:VectorToWorldSpace(right)
+                up = rot:VectorToWorldSpace(up)
+            end
+            -- Re-orthonormalize
+            right = (T:Cross(up)).Unit
+            up = (right:Cross(T)).Unit
+        end
+        prevTangent = T
 
         -- Optional subtle lateral wave offset, perpendicular to tangent
-        local side = T:Cross(Vector3.new(0, 1, 0))
-        if side.Magnitude < 1e-3 then
-            side = Vector3.new(1, 0, 0)
-        else
-            side = side.Unit
-        end
+        local side = right
         local waveOffset = math.sin(self.wavePhase - (i * 0.5)) * (WAVE_AMPLITUDE * 0.25)
         local Pw = P + side * waveOffset
 
-        -- World-space frame aligned to tangent
-        local C_world = CFrame.lookAt(Pw, Pw + T)
+        -- World-space frame aligned to tangent with stable roll
+        local C_world = CFrame.fromMatrix(Pw, right, up)
 
-        -- Convert to MeshPart object space and apply
-        local relative = self.meshPart.CFrame:ToObjectSpace(C_world)
+        -- Convert to MeshPart object space and apply relative to bind pose
+        local desiredLocal = self.meshPart.CFrame:ToObjectSpace(C_world)
 
-        -- Per-bone taper radius (0..1 along chain)
-        local u = (i - 1) / math.max(1, (boneCount - 1))
-        local taper = 0.5 + math.sin(u * math.pi) * 0.5
-        local finalRadius = math.max(0.01, self.radius * taper)
+        -- Per-bone taper radius placeholder (non-uniform scaling not supported in Bone.Transform)
+        -- finalRadius computed but not applied to Transform due to engine constraints
+        -- local u = (i - 1) / math.max(1, (boneCount - 1))
+        -- local taper = 0.5 + math.sin(u * math.pi) * 0.5
 
-        -- Apply final transform: keep orientation from spline; Roblox bones ignore non-uniform scale in Transform,
-        -- so we approximate radius via mesh XY size and keep Z via rest spacing influence by bone placements.
-        bone.Transform = relative
+        bone.Transform = bone.CFrame:Inverse() * desiredLocal
     end
 end
 
@@ -425,16 +496,29 @@ end
 
 function SkinnedSnake:updateColors()
     -- Cycle through body colors or apply rainbow mode
+    local color
     if self.rainbowMode then
         local hue = (tick() * 0.5) % 1
-        local color = Color3.fromHSV(hue, 1, 1)
-        self.headLight.Color = color
-        self.boostParticles.Color = ColorSequence.new(color)
+        color = Color3.fromHSV(hue, 1, 1)
     else
-        -- Normal color cycling
-        self.currentColorIndex = (self.currentColorIndex % #self.config.BodyColors) + 1
-        local color = self.config.BodyColors[self.currentColorIndex]
+        -- Normal color cycling with robust fallback
+        local list = (self.config and self.config.BodyColors) or {}
+        local count = typeof(list) == "table" and #list or 0
+        if count > 0 then
+            self.currentColorIndex = (self.currentColorIndex % count) + 1
+            local candidate = list[self.currentColorIndex]
+            if typeof(candidate) == "Color3" then
+                color = candidate
+            end
+        end
+        if not color then
+            color = (self.config and self.config.HeadColor) or Color3.fromRGB(76, 217, 100)
+        end
+    end
+    if self.headLight then
         self.headLight.Color = color
+    end
+    if self.boostParticles then
         self.boostParticles.Color = ColorSequence.new(color)
     end
 end
