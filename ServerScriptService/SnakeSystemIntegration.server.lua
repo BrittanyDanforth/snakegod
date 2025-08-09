@@ -31,6 +31,30 @@ local function getRemotesFolder()
 end
 
 local remotesFolder = getRemotesFolder()
+local remoteEventsFolder = ReplicatedStorage:FindFirstChild("RemoteEvents")
+if not remoteEventsFolder then
+    remoteEventsFolder = Instance.new("Folder")
+    remoteEventsFolder.Name = "RemoteEvents"
+    remoteEventsFolder.Parent = ReplicatedStorage
+end
+
+local function ensureRemoteInFolder(folder, name)
+    if not folder then
+        folder = ReplicatedStorage:FindFirstChild("RemoteEvents")
+        if not folder then
+            folder = Instance.new("Folder")
+            folder.Name = "RemoteEvents"
+            folder.Parent = ReplicatedStorage
+        end
+    end
+    local ev = folder:FindFirstChild(name)
+    if not ev then
+        ev = Instance.new("RemoteEvent")
+        ev.Name = name
+        ev.Parent = folder
+    end
+    return ev
+end
 
 local function ensureRemoteEvent(name)
 	local ev = remotesFolder:FindFirstChild(name)
@@ -47,6 +71,13 @@ local spawnSnake = ensureRemoteEvent("SpawnSnake")
 local respawnSnake = ensureRemoteEvent("RespawnSnake")
 local updateMouseDirection = ensureRemoteEvent("UpdateMouseDirection")
 local updateBoostState = ensureRemoteEvent("UpdateBoostState")
+-- Backward compatibility: also ensure in RemoteEvents folder
+local spawnSnakeCompat = ensureRemoteInFolder(remoteEventsFolder, "SpawnSnake")
+local respawnSnakeCompat = ensureRemoteInFolder(remoteEventsFolder, "RespawnSnake")
+local updateMouseDirectionCompat = ensureRemoteInFolder(remoteEventsFolder, "UpdateMouseDirection")
+local updateBoostStateCompat = ensureRemoteInFolder(remoteEventsFolder, "UpdateBoostState")
+-- Proactively create BatchSnakeUpdate compat so clients waiting on RemoteEvents get it immediately
+local batchUpdateEventCompat = ensureRemoteInFolder(remoteEventsFolder, "BatchSnakeUpdate")
 
 -- Default configuration
 local DEFAULT_CONFIG = {
@@ -270,15 +301,17 @@ for _, player in pairs(Players:GetPlayers()) do
 end
 
 -- Play button spawn
-spawnSnake.OnServerEvent:Connect(function(player)
+local function handleSpawn(player)
 	print("🎮 Play button clicked - spawning", player.Name)
 	if not player.Character then
 		player:LoadCharacter()
 	end
-end)
+end
+spawnSnake.OnServerEvent:Connect(handleSpawn)
+if spawnSnakeCompat then spawnSnakeCompat.OnServerEvent:Connect(handleSpawn) end
 
 -- Respawn from menu
-respawnSnake.OnServerEvent:Connect(function(player, username)
+local function handleRespawn(player, username)
 	print("🎮 Respawn requested for:", player.Name)
 	if username and type(username) == "string" then
 		player:SetAttribute("SlitherUsername", username)
@@ -297,10 +330,28 @@ respawnSnake.OnServerEvent:Connect(function(player, username)
 		print("✅ Character loaded for:", player.Name)
 	end
 	print("🐍 Respawned player:", player.Name)
-end)
+end
+respawnSnake.OnServerEvent:Connect(handleRespawn)
+if respawnSnakeCompat then respawnSnakeCompat.OnServerEvent:Connect(handleRespawn) end
+
+-- Also listen for root-level remotes created by legacy UIs
+local function hookRootRemote(name, handler)
+    local existing = ReplicatedStorage:FindFirstChild(name)
+    if existing and existing:IsA("RemoteEvent") then
+        existing.OnServerEvent:Connect(handler)
+    end
+    ReplicatedStorage.ChildAdded:Connect(function(child)
+        if child.Name == name and child:IsA("RemoteEvent") then
+            child.OnServerEvent:Connect(handler)
+        end
+    end)
+end
+
+hookRootRemote("RespawnSnake", handleRespawn)
+hookRootRemote("SpawnSnake", handleSpawn)
 
 -- Mouse direction updates
-updateMouseDirection.OnServerEvent:Connect(function(player, direction)
+local function handleMouseDir(player, direction)
 	if player.Character and typeof(direction) == "Vector3" then
 		local validDirection = Vector3.new(
 			math.clamp(direction.X, -1, 1),
@@ -311,12 +362,15 @@ updateMouseDirection.OnServerEvent:Connect(function(player, direction)
 			player.Character:SetAttribute("MouseDirection", validDirection.Unit)
 		end
 	end
-end)
+end
+updateMouseDirection.OnServerEvent:Connect(handleMouseDir)
+if updateMouseDirectionCompat then updateMouseDirectionCompat.OnServerEvent:Connect(handleMouseDir) end
 
 -- Broadcast optimized batched data to clients
 local BROADCAST_RATE = 20
 local lastBroadcast = 0
 local batchUpdateEvent = ensureRemoteEvent("BatchSnakeUpdate")
+-- batchUpdateEventCompat ensured above at startup
 
 RunService.Heartbeat:Connect(function()
 	local now = tick()
@@ -341,6 +395,7 @@ RunService.Heartbeat:Connect(function()
 	end
 	if #allSnakeData > 0 then
 		batchUpdateEvent:FireAllClients(allSnakeData)
+		if batchUpdateEventCompat then batchUpdateEventCompat:FireAllClients(allSnakeData) end
 	end
 end)
 
