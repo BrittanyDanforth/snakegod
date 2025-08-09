@@ -98,6 +98,9 @@ local DEFAULT_CONFIG = {
 	BodyMaterial = Enum.Material.Neon,
 	GlowIntensity = 2,
 	GlowRange = 6,
+	-- New: pass mesh selection and radius to client
+	MeshName = "untitledsnakeeeee",
+	Radius = 1.0,
 }
 
 local function getSkinConfig(player)

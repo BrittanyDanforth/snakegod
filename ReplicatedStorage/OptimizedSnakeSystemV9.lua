@@ -150,49 +150,75 @@ function SkinnedSnake:createSkinnedMesh()
     self.model = Instance.new("Model")
     self.model.Name = "SkinnedSnake_" .. self.player.Name
     self.model.Parent = workspace
-    
+
     -- Load the skinned mesh from ReplicatedStorage
-    local meshTemplate = ReplicatedStorage:WaitForChild("Meshes"):WaitForChild("untitledsnakeeeee")
-    self.meshPart = meshTemplate:Clone()
-    self.meshPart.Name = "SnakeBody"
-    self.meshPart.Parent = self.model
-    
+    local meshName = (self.config and self.config.MeshName) or "untitledsnakeeeee"
+    local meshesFolder = ReplicatedStorage:FindFirstChild("Meshes")
+    local meshTemplate
+    if meshesFolder then
+        meshTemplate = meshesFolder:FindFirstChild(meshName)
+        if not meshTemplate then
+            -- Try some fallbacks by common names
+            meshTemplate = meshesFolder:FindFirstChild("SkinnedSnake")
+                or meshesFolder:FindFirstChild("SnakeMesh")
+                or meshesFolder:FindFirstChild("SnakeBody")
+        end
+    end
+    if not meshTemplate then
+        warn("[SkinnedSnake] Could not find skinned mesh '" .. meshName .. "' under ReplicatedStorage/Meshes. Using placeholder body.")
+        -- Create a simple visible placeholder so the player sees something
+        local placeholder = Instance.new("Part")
+        placeholder.Name = "SnakeBody_Placeholder"
+        placeholder.Size = Vector3.new(4, 4, 10)
+        placeholder.Color = self.config.HeadColor or Color3.fromRGB(76, 217, 100)
+        placeholder.Material = Enum.Material.SmoothPlastic
+        placeholder.TopSurface = Enum.SurfaceType.Smooth
+        placeholder.BottomSurface = Enum.SurfaceType.Smooth
+        placeholder.Anchored = false
+        placeholder.CanCollide = false
+        placeholder.Parent = self.model
+        self.meshPart = placeholder
+        self.bones = {}
+        print("[SkinnedSnake] Placeholder body created. Add your skinned mesh to ReplicatedStorage/Meshes/" .. meshName .. " to enable bone animation.")
+    else
+        self.meshPart = meshTemplate:Clone()
+        self.meshPart.Name = "SnakeBody"
+        self.meshPart.Parent = self.model
+    end
+
     -- Set up the mesh properties
     self.meshPart.Anchored = false
     self.meshPart.CanCollide = false
     self.meshPart.CanQuery = true
     self.meshPart.CanTouch = true
-    
+
     -- Track initial size and apply independent radius
     self.initialMeshSize = self.meshPart.Size
     self:applyRadiusScale(self.radius)
-    
+
     -- Set up collision detection
     CollectionService:AddTag(self.meshPart, "SnakeBody")
     self.meshPart:SetAttribute("OwnerName", self.player.Name)
     self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
-    
+
     -- Find the armature and bones
     self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController")
-    if not self.armature then
-        -- Look for bones directly
-        self.bones = {}
-        local function findBones(parent)
-            for _, child in pairs(parent:GetChildren()) do
-                if child:IsA("Bone") then
-                    table.insert(self.bones, child)
-                elseif child:IsA("Model") or child:IsA("Folder") then
-                    findBones(child)
+    if not self.armature and self.meshPart:IsA("MeshPart") then
+        -- Look for bones directly under MeshPart (skinned mesh import structure)
+        self.bones = self.bones or {}
+        if #self.bones == 0 then
+            local function findBones(parent)
+                for _, child in pairs(parent:GetChildren()) do
+                    if child:IsA("Bone") then
+                        table.insert(self.bones, child)
+                    elseif child:IsA("Model") or child:IsA("Folder") then
+                        findBones(child)
+                    end
                 end
             end
+            findBones(self.meshPart)
         end
-        findBones(self.meshPart)
-        
-        -- Sort bones by name or position
-        table.sort(self.bones, function(a, b)
-            return a.Name < b.Name
-        end)
-    else
+    elseif self.armature then
         -- Get bones from armature
         self.bones = {}
         local rootBone = self.armature:FindFirstChild("Bone")
@@ -204,29 +230,25 @@ function SkinnedSnake:createSkinnedMesh()
             end
         end
     end
-    
-    print("Found", #self.bones, "bones in the mesh")
-    
+
+    print("Found", self.bones and #self.bones or 0, "bones in the mesh")
+
     -- Store original bone transforms
     self.originalBoneTransforms = {}
-    for i, bone in ipairs(self.bones) do
-        self.originalBoneTransforms[i] = bone.Transform
+    if self.bones then
+        for i, bone in ipairs(self.bones) do
+            self.originalBoneTransforms[i] = bone.Transform
+        end
     end
-    
+
     -- Add visual effects
     self:addVisualEffects()
-    
+
     -- Create a WeldConstraint to attach mesh to root part
     local weld = Instance.new("WeldConstraint")
     weld.Part0 = self.meshPart
     weld.Part1 = self.rootPart
     weld.Parent = self.meshPart
-    
-    -- Position the mesh at the character
-    self.meshPart.CFrame = self.rootPart.CFrame
-    
-    -- After positioning, compute rest bone spacing metrics
-    self:computeRestBoneMetrics()
 end
 
 function SkinnedSnake:addVisualEffects()
