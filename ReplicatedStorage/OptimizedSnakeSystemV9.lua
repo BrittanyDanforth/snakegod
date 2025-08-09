@@ -34,7 +34,7 @@ local PARTICLE_RATE = 100 -- Base particle emission rate
 local BASE_SPEED = 20 -- Base movement speed
 local BOOST_MULTIPLIER = 1.5 -- Speed multiplier when boosting
 local TURN_RATE = 2.5 -- Radians per second
-local WAVE_AMPLITUDE = 1.2 -- Side-to-side movement amplitude
+local WAVE_AMPLITUDE = 0.3 -- Reduced to prevent visible coiling/overlap
 local WAVE_FREQUENCY = 2.0 -- How fast the wave travels down the body
 
 -- Growth Constants
@@ -175,25 +175,54 @@ function SkinnedSnake:createSkinnedMesh()
     -- Find the armature and bones
     self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController")
     if not self.armature then
-        -- Look for bones directly
+        -- Get bones directly and robustly order them head-to-tail
         self.bones = {}
-        local function findBones(parent)
+        local function collectBones(parent)
             for _, child in pairs(parent:GetChildren()) do
                 if child:IsA("Bone") then
                     table.insert(self.bones, child)
-                elseif child:IsA("Model") or child:IsA("Folder") then
-                    findBones(child)
+                else
+                    collectBones(child)
                 end
             end
         end
-        findBones(self.meshPart)
-        
-        -- Sort bones by name or position
-        table.sort(self.bones, function(a, b)
-            return a.Name < b.Name
-        end)
+        collectBones(self.meshPart)
+
+        -- Order bones by numeric suffix if present; otherwise by local Z along mesh
+        local function extractIndex(name)
+            local num = string.match(name, "%d+")
+            if num then
+                return tonumber(num)
+            end
+            -- Match Blender-style names like Bone.001
+            num = string.match(name, "%.(%d+)$")
+            if num then
+                return tonumber(num)
+            end
+            return nil
+        end
+
+        local haveNumeric = false
+        for _, b in ipairs(self.bones) do
+            if extractIndex(b.Name) then haveNumeric = true break end
+        end
+
+        if haveNumeric then
+            table.sort(self.bones, function(a, b)
+                return (extractIndex(a.Name) or math.huge) < (extractIndex(b.Name) or math.huge)
+            end)
+        else
+            -- Project each bone position onto the mesh's local Z axis and sort
+            local meshCF = self.meshPart.CFrame
+            local zAxis = meshCF.LookVector
+            table.sort(self.bones, function(a, b)
+                local pa = (meshCF:PointToObjectSpace(a.WorldCFrame.Position))
+                local pb = (meshCF:PointToObjectSpace(b.WorldCFrame.Position))
+                return pa.Z < pb.Z
+            end)
+        end
     else
-        -- Get bones from armature
+        -- Get bones from armature (single chain if present)
         self.bones = {}
         local rootBone = self.armature:FindFirstChild("Bone")
         if rootBone then
@@ -202,6 +231,19 @@ function SkinnedSnake:createSkinnedMesh()
                 table.insert(self.bones, currentBone)
                 currentBone = currentBone:FindFirstChildOfClass("Bone")
             end
+        else
+            -- Fallback: collect directly as above if root not found
+            self.bones = {}
+            local function collectBones(parent)
+                for _, child in pairs(parent:GetChildren()) do
+                    if child:IsA("Bone") then
+                        table.insert(self.bones, child)
+                    else
+                        collectBones(child)
+                    end
+                end
+            end
+            collectBones(self.meshPart)
         end
     end
     

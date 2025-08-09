@@ -2,8 +2,8 @@ local CatmullRomSpline = {}
 CatmullRomSpline.__index = CatmullRomSpline
 
 -- Defaults tuned for sharp turns stability
-local DEFAULT_TENSION = 0.1           -- Lower = tighter curve, less overshoot
-local DEFAULT_TANGENT_CLAMP = 0.9     -- Fraction of adjacent chord length
+local DEFAULT_TENSION = 0.08          -- Slightly tighter
+local DEFAULT_TANGENT_CLAMP = 0.75    -- Stronger clamp to reduce overshoot
 local MAX_SUBDIVISIONS = 64
 local MIN_SAMPLES_PER_SEGMENT = 8
 local MAX_SAMPLES_PER_SEGMENT = 64
