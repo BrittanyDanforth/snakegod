@@ -5,9 +5,30 @@ local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
 local TweenService = game:GetService("TweenService")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
+
+-- Lightweight cache for server-provided snake head positions
+local ServerSnakeHeads = {}
+
+-- Subscribe to BatchSnakeUpdate if present to avoid queue exhaustion
+local function subscribeBatchUpdates()
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes") or ReplicatedStorage:FindFirstChild("RemoteEvents")
+	if not remotes then return end
+	local evt = remotes:FindFirstChild("BatchSnakeUpdate")
+	if not evt then return end
+	evt.OnClientEvent:Connect(function(allSnakeData)
+		for _, data in ipairs(allSnakeData) do
+			if data.PlayerId and data.Position then
+				ServerSnakeHeads[data.PlayerId] = data.Position
+			end
+		end
+	end)
+end
+
+subscribeBatchUpdates()
 
 -- ==================================
 -- SLITHER.IO STYLE CONFIGURATION

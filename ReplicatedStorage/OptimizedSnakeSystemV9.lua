@@ -1,6 +1,7 @@
 -- Optimized Snake System V11 - SKINNED MESH REVOLUTION
--- Complete rewrite to use a single skinned mesh with bone-based animation
--- Zero gaps, maximum performance, and professional-grade visuals
+-- Version: 11.1 (non-stretching loader, robust model discovery)
+-- Notes: Loads user's `untitledsnakeeeee` model (with InitialPoses & AnimationController),
+--        uses MeshPart `Circle` bones, and avoids XY scaling to prevent stretching.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -34,7 +35,7 @@ local PARTICLE_RATE = 100 -- Base particle emission rate
 local BASE_SPEED = 20 -- Base movement speed
 local BOOST_MULTIPLIER = 1.5 -- Speed multiplier when boosting
 local TURN_RATE = 2.5 -- Radians per second
-local WAVE_AMPLITUDE = 1.2 -- Side-to-side movement amplitude
+local WAVE_AMPLITUDE = 0.3 -- Reduced to prevent visible coiling/overlap
 local WAVE_FREQUENCY = 2.0 -- How fast the wave travels down the body
 
 -- Growth Constants
@@ -150,12 +151,37 @@ function SkinnedSnake:createSkinnedMesh()
     self.model = Instance.new("Model")
     self.model.Name = "SkinnedSnake_" .. self.player.Name
     self.model.Parent = workspace
-    
-    -- Load the skinned mesh from ReplicatedStorage
-    local meshTemplate = ReplicatedStorage:WaitForChild("Meshes"):WaitForChild("untitledsnakeeeee")
-    self.meshPart = meshTemplate:Clone()
-    self.meshPart.Name = "SnakeBody"
-    self.meshPart.Parent = self.model
+
+    -- Locate `untitledsnakeeeee` either under ReplicatedStorage/Meshes or directly under ReplicatedStorage
+    local meshesFolder = ReplicatedStorage:FindFirstChild("Meshes")
+    local meshTemplate = meshesFolder and meshesFolder:FindFirstChild("untitledsnakeeeee") or ReplicatedStorage:FindFirstChild("untitledsnakeeeee")
+    assert(meshTemplate, "OptimizedSnakeSystemV9: Could not find ReplicatedStorage.Meshes.untitledsnakeeeee (or root)")
+
+    -- Clone user's mesh model
+    local instance = meshTemplate:Clone()
+
+    if instance:IsA("Model") then
+        instance.Parent = self.model
+        -- Find the actual skinned mesh part named "Circle" (fallback to first MeshPart descendant)
+        local circle = instance:FindFirstChild("Circle")
+        if not circle then
+            for _, d in ipairs(instance:GetDescendants()) do
+                if d:IsA("MeshPart") then
+                    circle = d
+                    break
+                end
+            end
+        end
+        assert(circle ~= nil, "OptimizedSnakeSystemV9: Could not find MeshPart 'Circle' inside model 'untitledsnakeeeee'")
+        self.meshPart = circle
+        print("[OptimizedSnakeSystemV9] Using user's mesh model 'untitledsnakeeeee' → MeshPart:", self.meshPart.Name)
+    else
+        -- Direct MeshPart case
+        instance.Name = "SnakeBody"
+        instance.Parent = self.model
+        self.meshPart = instance
+        print("[OptimizedSnakeSystemV9] Using direct MeshPart for snake body:", self.meshPart.Name)
+    end
     
     -- Set up the mesh properties
     self.meshPart.Anchored = false
@@ -163,7 +189,7 @@ function SkinnedSnake:createSkinnedMesh()
     self.meshPart.CanQuery = true
     self.meshPart.CanTouch = true
     
-    -- Track initial size and apply independent radius
+    -- Track initial size; avoid resizing to prevent stretching
     self.initialMeshSize = self.meshPart.Size
     self:applyRadiusScale(self.radius)
     
@@ -172,40 +198,70 @@ function SkinnedSnake:createSkinnedMesh()
     self.meshPart:SetAttribute("OwnerName", self.player.Name)
     self.meshPart:SetAttribute("PlayerUserId", self.player.UserId)
     
-    -- Find the armature and bones
-    self.armature = self.meshPart:FindFirstChildOfClass("Humanoid") or self.meshPart:FindFirstChildOfClass("AnimationController")
+    -- Find the armature and bones (prefer an AnimationController on model or mesh)
+    self.armature = self.meshPart:FindFirstChildOfClass("Humanoid")
+        or self.meshPart:FindFirstChildOfClass("AnimationController")
+        or self.meshPart.Parent:FindFirstChildOfClass("AnimationController")
+
     if not self.armature then
-        -- Look for bones directly
+        -- Get bones directly and robustly order them head-to-tail
         self.bones = {}
-        local function findBones(parent)
+        local function collectBones(parent)
             for _, child in pairs(parent:GetChildren()) do
                 if child:IsA("Bone") then
                     table.insert(self.bones, child)
-                elseif child:IsA("Model") or child:IsA("Folder") then
-                    findBones(child)
+                else
+                    collectBones(child)
                 end
             end
         end
-        findBones(self.meshPart)
-        
-        -- Sort bones by name or position
-        table.sort(self.bones, function(a, b)
-            return a.Name < b.Name
-        end)
+        collectBones(self.meshPart)
+
+        -- Order bones by numeric suffix if present; otherwise by local Z along mesh
+        local function extractIndex(name)
+            local num = string.match(name, "%d+") or string.match(name, "%.(%d+)$")
+            return num and tonumber(num) or nil
+        end
+        local haveNumeric = false
+        for _, b in ipairs(self.bones) do if extractIndex(b.Name) then haveNumeric = true break end end
+
+        if haveNumeric then
+            table.sort(self.bones, function(a, b)
+                return (extractIndex(a.Name) or math.huge) < (extractIndex(b.Name) or math.huge)
+            end)
+        else
+            local meshCF = self.meshPart.CFrame
+            table.sort(self.bones, function(a, b)
+                local pa = (meshCF:PointToObjectSpace(a.WorldCFrame.Position))
+                local pb = (meshCF:PointToObjectSpace(b.WorldCFrame.Position))
+                return pa.Z < pb.Z
+            end)
+        end
     else
-        -- Get bones from armature
+        -- Traverse a single chain if present, otherwise collect descendants
         self.bones = {}
-        local rootBone = self.armature:FindFirstChild("Bone")
+        local rootBone = self.armature:FindFirstChild("Bone") or self.meshPart:FindFirstChild("Bone")
         if rootBone then
             local currentBone = rootBone
             while currentBone do
                 table.insert(self.bones, currentBone)
                 currentBone = currentBone:FindFirstChildOfClass("Bone")
             end
+        else
+            local function collectBones(parent)
+                for _, child in pairs(parent:GetChildren()) do
+                    if child:IsA("Bone") then
+                        table.insert(self.bones, child)
+                    else
+                        collectBones(child)
+                    end
+                end
+            end
+            collectBones(self.meshPart)
         end
     end
     
-    print("Found", #self.bones, "bones in the mesh")
+    print("[OptimizedSnakeSystemV9] Found", #self.bones, "bones in the mesh")
     
     -- Store original bone transforms
     self.originalBoneTransforms = {}
@@ -216,7 +272,7 @@ function SkinnedSnake:createSkinnedMesh()
     -- Add visual effects
     self:addVisualEffects()
     
-    -- Create a WeldConstraint to attach mesh to root part
+    -- Attach mesh to the player's root
     local weld = Instance.new("WeldConstraint")
     weld.Part0 = self.meshPart
     weld.Part1 = self.rootPart
@@ -264,7 +320,6 @@ function SkinnedSnake:addVisualEffects()
     }
     self.boostParticles.Parent = self.meshPart
     
-    -- Add selection box for better visibility (optional)
     if self.isLocalPlayer then
         self.selectionBox = Instance.new("SelectionBox")
         self.selectionBox.Adornee = self.meshPart
@@ -289,10 +344,7 @@ function SkinnedSnake:initializeHistory()
 end
 
 function SkinnedSnake:updateHistory()
-    -- Shift history forward
     self.historyIndex = (self.historyIndex % HISTORY_SIZE) + 1
-    
-    -- Store current position
     self.positionHistory[self.historyIndex] = {
         position = self.rootPart.Position,
         lookVector = self.rootPart.CFrame.LookVector,
@@ -439,12 +491,10 @@ function SkinnedSnake:updateColors()
     end
 end
 
+-- Avoid resizing the MeshPart; only store logical radius
 function SkinnedSnake:applyRadiusScale(targetRadius)
-    -- Adjust mesh thickness independently by scaling X/Y relative to the template size
-    if not self.initialMeshSize then return end
     self.radius = targetRadius
-    local newSize = Vector3.new(self.initialMeshSize.X * targetRadius, self.initialMeshSize.Y * targetRadius, self.initialMeshSize.Z)
-    self.meshPart.Size = newSize
+    -- intentionally do not change self.meshPart.Size to avoid stretching
 end
 
 function SkinnedSnake:computeRestBoneMetrics()

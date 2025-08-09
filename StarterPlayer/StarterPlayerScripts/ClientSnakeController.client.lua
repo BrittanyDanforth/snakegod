@@ -1,5 +1,6 @@
 -- THIS IS THE ENTIRE SCRIPT FOR: StarterPlayer > StarterPlayerScripts > ClientSnakeController
 -- Enhanced with zero-lag client-side prediction movement system
+-- Using OptimizedSnakeSystemV9 (non-stretching loader)
 
 print("[Client] ClientSnakeController started - Enhanced Movement System")
 
@@ -13,6 +14,7 @@ local Debris = game:GetService("Debris")
 
 -- Get the module
 local OptimizedSnakeSystemV9 = require(ReplicatedStorage:WaitForChild("OptimizedSnakeSystemV9"))
+print("[Client] Using visual module:", OptimizedSnakeSystemV9 and "OptimizedSnakeSystemV9" or "(nil)")
 
 -- Initialize the system on the client
 if OptimizedSnakeSystemV9.init then
@@ -24,8 +26,20 @@ local Camera = workspace.CurrentCamera
 local mouse = player:GetMouse()
 local snakeVisuals = nil -- Variable to hold our snake instance
 
+-- Resolve remote folder (support both Remotes and RemoteEvents)
+local function getRemoteFolder(timeout)
+    timeout = timeout or 10
+    local start = tick()
+    repeat
+        local folder = ReplicatedStorage:FindFirstChild("Remotes") or ReplicatedStorage:FindFirstChild("RemoteEvents")
+        if folder then return folder end
+        task.wait(0.1)
+    until tick() - start > timeout
+    return nil
+end
+
 -- Create/get remote for sending input to server
-local remoteEvents = ReplicatedStorage:WaitForChild("Remotes", 10)
+local remoteEvents = getRemoteFolder(10)
 local mouseDirectionRemote = nil
 local boostRemote = nil
 if remoteEvents then
@@ -33,6 +47,19 @@ if remoteEvents then
     boostRemote = remoteEvents:FindFirstChild("UpdateBoostState")
 else
     warn("[Client] Remotes folder not found!")
+end
+
+-- Listen for server batch snake updates (fix Studio warnings)
+if remoteEvents then
+    local batchEvent = remoteEvents:FindFirstChild("BatchSnakeUpdate")
+    if batchEvent then
+        batchEvent.OnClientEvent:Connect(function(allSnakeData)
+            -- Consume server updates; optionally cache for future use
+            -- For now, we just acknowledge receipt to drain the queue
+            -- You can integrate LOD/other remote player visuals here later
+            -- Example: store the head positions for radar/minimap
+        end)
+    end
 end
 
 -- ===================================================================
@@ -635,7 +662,7 @@ if player.Character then
 end
 
 -- Setup death/revive remote handlers
-local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+local remotes = getRemoteFolder(5)
 if remotes then
     local stopMovementRemote = remotes:FindFirstChild("StopSnakeMovement")
     local resumeMovementRemote = remotes:FindFirstChild("ResumeSnakeMovement")
