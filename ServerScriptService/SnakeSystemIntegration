@@ -161,12 +161,12 @@ local function onCharacterAdded(character)
 
 	-- SERVER ONLY MANAGES DATA - NO VISUAL SNAKE CREATION!
 	print("[Server] Setting up snake data for", player.Name)
-	
+
 	-- Store configuration as attributes for the client to read
 	character:SetAttribute("SnakeConfig", game:GetService("HttpService"):JSONEncode(config))
 	character:SetAttribute("SnakeLength", config.InitialLength)
 	character:SetAttribute("SnakeActive", true)
-	
+
 	-- Create a simple data structure for server-side tracking (NOT a visual snake!)
 	local snakeData = {
 		player = player,
@@ -175,9 +175,9 @@ local function onCharacterAdded(character)
 		isAlive = true,
 		config = config
 	}
-	
+
 	activeSnakes[player] = snakeData
-	
+
 	-- Setup boost state tracking
 	local boostEvent = remoteEvents:FindFirstChild("UpdateBoostState")
 	if not boostEvent then
@@ -185,7 +185,7 @@ local function onCharacterAdded(character)
 		boostEvent.Name = "UpdateBoostState"
 		boostEvent.Parent = remoteEvents
 	end
-	
+
 	-- Listen for boost state changes from client
 	local boostConnection = boostEvent.OnServerEvent:Connect(function(eventPlayer, isBoosting)
 		if eventPlayer == player and activeSnakes[player] then
@@ -217,7 +217,7 @@ local function onCharacterAdded(character)
 	if lengthValue then
 		-- Set initial length
 		lengthValue.Value = config.InitialLength or 55
-		
+
 		-- Listen for changes and update attributes for client
 		lengthValue.Changed:Connect(function(newLength)
 			if activeSnakes[player] then
@@ -245,7 +245,7 @@ local function onCharacterAdded(character)
 			character:SetAttribute("SnakeConfig", game:GetService("HttpService"):JSONEncode(newConfig))
 		end
 	end)
-	
+
 	-- Store connections for cleanup
 	snakeData.connections = {
 		boost = boostConnection,
@@ -256,7 +256,7 @@ local function onCharacterAdded(character)
 	local deathConnection = humanoid.Died:Connect(function()
 		if activeSnakes[player] then
 			local snakeData = activeSnakes[player]
-			
+
 			-- Disconnect all connections
 			if snakeData.connections then
 				for _, conn in pairs(snakeData.connections) do
@@ -270,12 +270,12 @@ local function onCharacterAdded(character)
 			-- Mark as dead
 			snakeData.isAlive = false
 			character:SetAttribute("SnakeActive", false)
-			
+
 			-- Clean up data
 			activeSnakes[player] = nil
 		end
 	end)
-	
+
 	-- Add death connection to cleanup list
 	snakeData.connections.death = deathConnection
 end
@@ -308,14 +308,14 @@ end)
 Players.PlayerRemoving:Connect(function(player)
 	if activeSnakes[player] then
 		local snakeData = activeSnakes[player]
-		
+
 		-- Disconnect all connections
 		if snakeData.connections then
 			for _, conn in pairs(snakeData.connections) do
 				if conn then conn:Disconnect() end
 			end
 		end
-		
+
 		activeSnakes[player] = nil
 	end
 end)
@@ -375,7 +375,7 @@ updateMouseDirection.OnServerEvent:Connect(function(player, direction)
 			0,
 			math.clamp(direction.Z, -1, 1)
 		)
-		
+
 		-- Make sure it's not zero
 		if validDirection.Magnitude > 0 then
 			player.Character:SetAttribute("MouseDirection", validDirection.Unit)
@@ -390,43 +390,42 @@ end)
 local BROADCAST_RATE = 20 -- Updates per second
 local lastBroadcast = 0
 
-local function ensureBatchEvent()
-    local batchUpdateEvent = remoteEvents:FindFirstChild("BatchSnakeUpdate")
-    if not batchUpdateEvent then
-        batchUpdateEvent = Instance.new("RemoteEvent")
-        batchUpdateEvent.Name = "BatchSnakeUpdate"
-        batchUpdateEvent.Parent = remoteEvents
-    end
-    return batchUpdateEvent
-end
-
 RunService.Heartbeat:Connect(function()
-    local now = tick()
-    if now - lastBroadcast < (1 / BROADCAST_RATE) then
-        return -- Throttle updates to the specified rate
-    end
-    lastBroadcast = now
+	local now = tick()
+	if now - lastBroadcast < (1 / BROADCAST_RATE) then
+		return -- Throttle updates to the specified rate
+	end
+	lastBroadcast = now
 
-    local allSnakeData = {}
-    for player, snakeData in pairs(activeSnakes) do
-        if player.Parent and snakeData and snakeData.character and snakeData.character.Parent then
-            local rootPart = snakeData.character:FindFirstChild("HumanoidRootPart")
-            if rootPart then
-                local mouseDirection = snakeData.character:GetAttribute("MouseDirection") or Vector3.new(0, 0, -1)
-                table.insert(allSnakeData, {
-                    PlayerId = player.UserId,
-                    Position = rootPart.Position,
-                    LookVector = mouseDirection,
-                    Length = snakeData.length or 55,
-                    Name = player.Name
-                })
-            end
-        end
-    end
+	local allSnakeData = {}
 
-    if #allSnakeData > 0 then
-        ensureBatchEvent():FireAllClients(allSnakeData)
-    end
+	-- Collect data from all active snakes
+	for player, snakeData in pairs(activeSnakes) do
+		if player.Parent and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local rootPart = player.Character.HumanoidRootPart
+			local mouseDirection = player.Character:GetAttribute("MouseDirection") or Vector3.new(0, 0, -1)
+
+			table.insert(allSnakeData, {
+				PlayerId = player.UserId,
+				Position = rootPart.Position,
+				LookVector = mouseDirection,
+				Length = snakeData.length or DEFAULT_CONFIG.InitialLength,
+				Color = snakeData.color,
+				Name = player.Name
+			})
+		end
+	end
+
+	-- Only send an update if there's actually data to send
+	if #allSnakeData > 0 then
+		-- Use the existing RemoteEvents folder
+		local batchUpdateEvent = remoteEvents:FindFirstChild("BatchSnakeUpdate")
+		if not batchUpdateEvent then
+			batchUpdateEvent = Instance.new("RemoteEvent", remoteEvents)
+			batchUpdateEvent.Name = "BatchSnakeUpdate"
+		end
+		batchUpdateEvent:FireAllClients(allSnakeData)
+	end
 end)
 
-print("✅ Snake System Integration loaded!")
+print("✅ Snake System Integration loaded with multiplayer broadcasting!")
