@@ -1,0 +1,861 @@
+-- 🚀 NETWORK-OPTIMIZED SLITHER.IO MOVEMENT - ZERO PING SPIKES V2.0
+-- this goes INTO StarterPlayerScripts as Localscript
+-- ✅ RESPAWN-PROOF CLEANUP SYSTEM
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+
+-- 🔧 NETWORK-OPTIMIZED CONFIG SYSTEM
+local Config = {}
+local success, externalConfig = pcall(function()
+	return require(game.ReplicatedStorage:WaitForChild("SnakeConfig"))
+end)
+
+if success and externalConfig then
+	Config = externalConfig
+	print(" External config loaded successfully")
+else
+	print(" External config not found using defaults")
+	Config = {
+		BaseSpeed = 50, -- Increased for proper speed
+		BoostSpeed = 100, -- Proper boost speed
+		TurnSpeed = 5.1, -- Slightly reduced
+		CrawlSpeed = 8,
+		SlowSpeed = 18,
+		SuperSpeed = 55,
+		LudicrousSpeed = 90,
+		HeadSize = Vector3.new(2, 2, 2),
+		HeadColor = Color3.fromRGB(0, 255, 0),
+		SegmentSize = Vector3.new(1.5, 1.5, 1.5),
+		SegmentColor = Color3.fromRGB(0, 200, 0),
+		MaxSegments = 80, -- Reduced for better performance
+		SegmentGap = 3.0, -- Slightly increased for less dense updates
+		PathSmoothness = 0.85, -- Slightly reduced for better performance
+		UpdateRate = 30, -- Reduced from 60 to 30 FPS
+		LODDistance = 120 -- Increased for better culling
+	}
+end
+
+-- Validate and optimize config
+local function validateConfig()
+	local defaults = {
+		BaseSpeed = 35, BoostSpeed = 70, TurnSpeed = 4.5, SegmentGap = 3.0,
+		HeadSize = Vector3.new(2, 2, 2), HeadColor = Color3.fromRGB(0, 255, 0),
+		MaxSegments = 80, PathSmoothness = 0.85, UpdateRate = 30
+	}
+	for key, defaultValue in pairs(defaults) do
+		if Config[key] == nil then
+			Config[key] = defaultValue
+			print("️ Config missing " .. key .. ", using default")
+		end
+	end
+end
+validateConfig()
+
+-- Player setup
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+
+-- 📱 MOBILE SUPPORT
+-- Mobile detection and controls are handled through MobileHUD script
+-- Check _G.IsMobile flag and _G.PlayerSnakes for mobile input data
+
+-- 🎯 NETWORK-OPTIMIZED ZERO-GAP PATH SYSTEM
+local PathSystem = {}
+PathSystem.__index = PathSystem
+
+function PathSystem.new()
+	return setmetatable({
+		-- Core path data with network optimization
+		pathPoints = {},
+		totalDistance = 0,
+		segmentSpacing = Config.SegmentGap,
+
+		-- Network-optimized smoothing
+		smoothingBuffer = {},
+		smoothingRadius = 2.5, -- Reduced from 3
+
+		-- Enhanced performance optimization
+		lastRecordedPos = nil,
+		minRecordDistance = 0.5, -- Increased from 0.35 for less network traffic
+		networkUpdateCounter = 0,
+
+		-- Reduced memory usage
+		pointCount = 0,
+		maxPoints = 250, -- Reduced from 350 for better network performance
+
+		-- Smaller interpolation cache
+		interpolationCache = {},
+		cacheSize = 150, -- Reduced from 200
+		cacheDirty = false,
+
+		-- Network throttling
+		lastNetworkUpdate = 0,
+		networkUpdateInterval = 1/30, -- 30 FPS max for network updates
+	}, PathSystem)
+end
+
+-- 📍 NETWORK-OPTIMIZED PATH RECORDING
+function PathSystem:recordPoint(position, speed, time)
+	-- Dynamic recording rate based on speed (more frequent when boosting)
+	local dynamicInterval = speed > 50 and self.networkUpdateInterval * 0.5 or self.networkUpdateInterval
+
+	-- Network throttling
+	if time - self.lastNetworkUpdate < dynamicInterval then
+		return
+	end
+
+	-- Only record if we've moved enough (less distance required when boosting)
+	local dynamicMinDistance = speed > 50 and self.minRecordDistance * 0.5 or self.minRecordDistance
+	if self.lastRecordedPos and (position - self.lastRecordedPos).Magnitude < dynamicMinDistance then
+		return
+	end
+
+	-- Calculate distance from last point
+	local distanceFromLast = 0
+	if #self.pathPoints > 0 then
+		distanceFromLast = (position - self.pathPoints[#self.pathPoints].position).Magnitude
+	end
+
+	-- Create path point
+	local pathPoint = {
+		position = position,
+		speed = speed,
+		time = time,
+		distanceFromStart = self.totalDistance + distanceFromLast,
+		index = #self.pathPoints + 1
+	}
+
+	-- Add to path
+	table.insert(self.pathPoints, pathPoint)
+	self.totalDistance = pathPoint.distanceFromStart
+	self.pointCount = #self.pathPoints
+	self.lastNetworkUpdate = time
+
+	-- Maintain max points with better optimization
+	if self.pointCount > self.maxPoints then
+		local removed = table.remove(self.pathPoints, 1)
+		self.totalDistance = self.totalDistance - removed.distanceFromStart
+
+		-- Only update indices for recent points
+		local startIdx = math.max(1, #self.pathPoints - 8)
+		for i = startIdx, #self.pathPoints do
+			self.pathPoints[i].index = i
+		end
+	end
+
+	self.lastRecordedPos = position
+	self.cacheDirty = true
+end
+
+-- 🎯 OPTIMIZED POSITION CALCULATION
+function PathSystem:getPositionAtDistance(targetDistance)
+	if #self.pathPoints == 0 then
+		return nil -- Return nil if no points
+	end
+
+	-- Clamp distance
+	targetDistance = math.max(0, math.min(targetDistance, self.totalDistance))
+
+	-- Handle edge cases
+	if targetDistance <= 0 then
+		local first = self.pathPoints[1]
+		return {
+			position = first.position,
+			direction = (#self.pathPoints > 1) and (self.pathPoints[2].position - first.position).Unit or Vector3.new(0,0,-1),
+			speed = first.speed
+		}
+	end
+
+	if targetDistance >= self.totalDistance then
+		local last = self.pathPoints[#self.pathPoints]
+		return {
+			position = last.position,
+			direction = (#self.pathPoints > 1) and (last.position - self.pathPoints[#self.pathPoints - 1].position).Unit or Vector3.new(0,0,-1),
+			speed = last.speed
+		}
+	end
+
+	-- Optimized binary search
+	local left, right = 1, #self.pathPoints
+	while left < right do
+		local mid = math.floor((left + right) / 2)
+		if self.pathPoints[mid].distanceFromStart < targetDistance then
+			left = mid + 1
+		else
+			right = mid
+		end
+	end
+
+	-- Get interpolation points
+	local index = math.max(1, left - 1)
+	local p1 = self.pathPoints[index]
+	local p2 = self.pathPoints[math.min(index + 1, #self.pathPoints)]
+
+	-- Calculate interpolation factor
+	local segmentDistance = p2.distanceFromStart - p1.distanceFromStart
+	local t = (segmentDistance > 0) and ((targetDistance - p1.distanceFromStart) / segmentDistance) or 0
+
+	-- Interpolate position
+	local position = p1.position:Lerp(p2.position, t)
+
+	-- Calculate direction
+	local direction = (p2.position - p1.position).Unit
+	if direction.Magnitude < 0.1 then
+		direction = Vector3.new(0,0,-1)
+	end
+
+	-- Interpolate speed
+	local speed = p1.speed + (p2.speed - p1.speed) * t
+
+	return {
+		position = position,
+		direction = direction,
+		speed = speed,
+		t = t,
+		segmentIndex = index
+	}
+end
+
+-- 🎯 NETWORK-OPTIMIZED SMOOTHING
+function PathSystem:getSmoothedPositionAtDistance(targetDistance)
+	local baseResult = self:getPositionAtDistance(targetDistance)
+	if not baseResult then return nil end
+
+	-- Simplified smoothing for better network performance
+	if #self.pathPoints < 3 then
+		return baseResult
+	end
+
+	-- Simple linear smoothing instead of Catmull-Rom for better performance
+	local segmentIndex = baseResult.segmentIndex or 1
+	local prevIndex = math.max(1, segmentIndex - 1)
+	local nextIndex = math.min(segmentIndex + 1, #self.pathPoints)
+
+	if prevIndex == segmentIndex or nextIndex == segmentIndex then
+		return baseResult
+	end
+
+	local p0 = self.pathPoints[prevIndex].position
+	local p1 = self.pathPoints[segmentIndex].position
+	local p2 = self.pathPoints[nextIndex].position
+
+	-- Simple smoothing
+	local t = baseResult.t or 0
+	local smoothedPosition = p0:Lerp(p1, 0.3):Lerp(p1:Lerp(p2, t), 0.7)
+
+	return {
+		position = smoothedPosition,
+		direction = baseResult.direction,
+		speed = baseResult.speed
+	}
+end
+
+-- 🧹 SNAKE STATE & CONNECTION MANAGEMENT
+local heartbeatConnection
+local inputBeganConnection
+local inputEndedConnection
+local diedConnection
+
+local function cleanupSnake()
+	print(" Cleaning up old snake instance...")
+	if heartbeatConnection then
+		heartbeatConnection:Disconnect()
+		heartbeatConnection = nil
+	end
+	if inputBeganConnection then
+		inputBeganConnection:Disconnect()
+		inputBeganConnection = nil
+	end
+	if inputEndedConnection then
+		inputEndedConnection:Disconnect()
+		inputEndedConnection = nil
+	end
+	if diedConnection then
+		diedConnection:Disconnect()
+		diedConnection = nil
+	end
+
+	-- Clear global functions to prevent state leaks
+	_G.GetSnakePoint = nil
+	_G.GetSnakePointRaw = nil
+	_G.SnakePathSystem = nil
+
+
+	_G.SnakeSpeed = nil
+	_G.SnakeState = nil
+end
+
+-- ✨ INITIALIZATION FUNCTION FOR A NEW SNAKE/CHARACTER
+local function initializeForCharacter(character)
+	cleanupSnake()
+	print(" Initializing new snake for character: " .. character.Name)
+
+	local humanoid = character:WaitForChild("Humanoid")
+	local rootPart = character:WaitForChild("HumanoidRootPart")
+	local camera = workspace.CurrentCamera
+
+	-- Create a fresh path system and state for the new snake
+	local pathSystem = PathSystem.new()
+
+	-- 🎮 NETWORK-OPTIMIZED MOVEMENT STATE
+	-- FIX: Use negative Z direction as default (forward in Roblox)
+	local initialDirection = Vector3.new(0, 0, -1) -- Forward direction
+	local State = {
+		currentSpeed = Config.BaseSpeed,
+		targetSpeed = Config.BaseSpeed,
+		speedMode = "normal",
+		boosting = false,
+		smoothSpeed = Config.BaseSpeed,
+		currentDirection = initialDirection,
+		targetDirection = initialDirection,
+		debugMode = false,
+		lastDebugUpdate = 0,
+		speedMultiplier = player:GetAttribute("SpeedMultiplier") or 1, -- Gamepass multiplier
+		tempSpeedMultiplier = 1, -- Temporary boost multiplier
+		wallStuckTime = 0, -- Track time stuck at wall
+		lastPosition = rootPart.Position, -- Track if we're not moving
+		stats = {
+			fps = 0,
+			distance = 0,
+			pathPoints = 0,
+			totalDistance = 0
+		}
+	}
+
+	-- 🌟 NETWORK-OPTIMIZED EXPORT FUNCTIONS
+	_G.GetSnakePoint = function(distance)
+		return pathSystem:getSmoothedPositionAtDistance(distance)
+	end
+
+	_G.GetSnakePointRaw = function(distance)
+		return pathSystem:getPositionAtDistance(distance)
+	end
+
+	_G.SnakePathSystem = pathSystem
+	_G.SnakeSpeed = State.currentSpeed
+	_G.SnakeState = State
+
+	-- 🎨 NETWORK-OPTIMIZED HEAD SETUP
+	local function setupHead()
+		humanoid.WalkSpeed = 0
+		humanoid.JumpPower = 0
+		humanoid.JumpHeight = 0
+		humanoid.AutoRotate = false
+
+		-- Keep rootPart invisible but functional for orb collection
+		rootPart.Transparency = 1
+		rootPart.CanCollide = false -- Don't block movement
+		rootPart.CanTouch = true -- Enable touch detection for orbs!
+		rootPart.Size = Config.HeadSize -- Keep size for collision detection
+		rootPart.Shape = Enum.PartType.Ball -- Ball shape for proper collision
+
+		-- HeadGlow and lighting removed - CharacterSetup handles all visuals
+
+		-- Optimized trail
+		local attachment0 = Instance.new("Attachment")
+		attachment0.Position = Vector3.new(0, 0, 0.8) -- Reduced from 1
+		attachment0.Parent = rootPart
+
+		local attachment1 = Instance.new("Attachment")
+		attachment1.Position = Vector3.new(0, 0, -0.8) -- Reduced from -1
+		attachment1.Parent = rootPart
+
+		local trail = Instance.new("Trail")
+		trail.Attachment0 = attachment0
+		trail.Attachment1 = attachment1
+		trail.Color = ColorSequence.new(Config.HeadColor)
+		trail.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.5), -- Increased transparency
+			NumberSequenceKeypoint.new(1, 1)
+		})
+		trail.Lifetime = 0.3 -- Reduced from 0.4
+		trail.MinLength = 0.05 -- Reduced from 0.1
+		trail.FaceCamera = true
+		trail.Parent = rootPart
+
+		-- Hide body parts efficiently
+		for _, part in pairs(character:GetChildren()) do
+			if part:IsA("BasePart") and part ~= rootPart then
+				part.Transparency = 1
+				part.CanCollide = false
+			elseif part:IsA("Accessory") or part:IsA("Decal") then
+				part:Destroy()
+			end
+		end
+	end
+
+	-- 🚀 NETWORK-OPTIMIZED SPEED MODES
+	local speedModes = {
+		crawl = Config.CrawlSpeed or 15,
+		slow = Config.SlowSpeed or 30,
+		normal = Config.BaseSpeed,
+		super = Config.SuperSpeed or 75,
+		ludicrous = Config.LudicrousSpeed or 120
+	}
+
+	local function setSpeedMode(mode)
+		State.speedMode = mode
+		State.targetSpeed = speedModes[mode] or Config.BaseSpeed
+
+		-- Reduced visual feedback for better performance
+		local color = Config.HeadColor
+		if mode == "super" then
+			color = Color3.fromRGB(255, 255, 0)
+		elseif mode == "ludicrous" then
+			color = Color3.fromRGB(255, 0, 0)
+		end
+
+		-- Smaller flash effect
+		local flash = Instance.new("Part")
+		flash.Shape = Enum.PartType.Ball
+		flash.Size = Config.HeadSize * 2 -- Reduced from 2.5
+		flash.Material = Enum.Material.ForceField
+		flash.Color = color
+		flash.Transparency = 0.4 -- Increased transparency
+		flash.CanCollide = false
+		flash.Anchored = true
+		flash.Position = rootPart.Position
+		flash.Parent = workspace
+
+		local flashTween = TweenService:Create(flash,
+			TweenInfo.new(0.3, Enum.EasingStyle.Quad), -- Reduced from 0.4
+			{Size = Config.HeadSize * 4, Transparency = 1} -- Reduced from 5
+		)
+		flashTween:Play()
+		Debris:AddItem(flash, 0.3)
+	end
+
+	-- 🎮 NETWORK-OPTIMIZED INPUT HANDLING
+	local keybinds = {
+		[Enum.KeyCode.F1] = function() setSpeedMode("normal") end,
+		[Enum.KeyCode.F2] = function() setSpeedMode("super") end,
+		[Enum.KeyCode.F3] = function() setSpeedMode("slow") end,
+		[Enum.KeyCode.F4] = function() setSpeedMode("ludicrous") end,
+		[Enum.KeyCode.F5] = function() setSpeedMode("crawl") end,
+		[Enum.KeyCode.F7] = function() 
+			State.debugMode = not State.debugMode 
+			print("🔍 Debug Mode:", State.debugMode and "ON" or "OFF")
+		end,
+		[Enum.KeyCode.F8] = function()
+			-- Network-optimized test (fewer segments)
+			print("🧪 Testing segment positioning...")
+			local spacing = Config.SegmentGap
+			for i = 1, 10 do -- Reduced from 15
+				local distance = i * spacing
+				local point = _G.GetSnakePoint(distance)
+				if point then
+					local testPart = Instance.new("Part")
+					testPart.Name = "TestSegment" .. i
+					testPart.Shape = Enum.PartType.Ball
+					testPart.Size = Vector3.new(0.8, 0.8, 0.8) -- Smaller
+					testPart.Material = Enum.Material.Neon
+					testPart.Color = Color3.fromRGB(255, 100, 100)
+					testPart.Anchored = true
+					testPart.CanCollide = false
+					testPart.Position = point.position
+					testPart.Parent = workspace
+
+					-- Simplified GUI
+					local gui = Instance.new("BillboardGui")
+					gui.Size = UDim2.new(0, 60, 0, 30) -- Smaller
+					gui.Parent = testPart
+
+					local label = Instance.new("TextLabel")
+					label.Size = UDim2.new(1, 0, 1, 0)
+					label.BackgroundTransparency = 1
+					label.Text = tostring(math.floor(distance))
+					label.TextColor3 = Color3.fromRGB(255, 255, 255)
+					label.TextScaled = true
+					label.Parent = gui
+
+					Debris:AddItem(testPart, 6) -- Reduced from 8
+				end
+			end
+			print("✅ Test segments spawned - check for gaps!")
+		end
+	}
+
+	inputBeganConnection = UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then return end
+
+		if keybinds[input.KeyCode] then
+			keybinds[input.KeyCode]()
+			return
+		end
+
+		if input.KeyCode == Enum.KeyCode.LeftShift then
+			State.boosting = true
+			State.targetSpeed = Config.BoostSpeed
+
+			-- Send boost state to server for V6 optimization
+			local boostEvent = game.ReplicatedStorage:FindFirstChild("UpdateBoostState")
+			if boostEvent then
+				boostEvent:FireServer(true)
+			end
+
+			-- Reduced boost effect
+			local boostEffect = Instance.new("ParticleEmitter")
+			boostEffect.Name = "BoostEffect"
+			boostEffect.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+			boostEffect.Color = ColorSequence.new(Config.HeadColor)
+			boostEffect.Rate = 60 -- Reduced from 80
+			boostEffect.Lifetime = NumberRange.new(0.5) -- Reduced from 0.6
+			boostEffect.Speed = NumberRange.new(6) -- Reduced from 8
+			boostEffect.SpreadAngle = Vector2.new(35, 35) -- Reduced from 45
+			boostEffect.Parent = rootPart
+		end
+	end)
+
+	inputEndedConnection = UserInputService.InputEnded:Connect(function(input)
+		if input.KeyCode == Enum.KeyCode.LeftShift then
+			State.boosting = false
+			State.targetSpeed = speedModes[State.speedMode]
+
+			-- Send boost state to server for V6 optimization
+			local boostEvent = game.ReplicatedStorage:FindFirstChild("UpdateBoostState")
+			if boostEvent then
+				boostEvent:FireServer(false)
+			end
+
+			local boostEffect = rootPart:FindFirstChild("BoostEffect")
+			if boostEffect then
+				boostEffect.Enabled = false
+				Debris:AddItem(boostEffect, 0.8) -- Reduced from 1
+			end
+		end
+	end)
+
+	-- 🎯 NETWORK-OPTIMIZED MOUSE TRACKING
+	local function getMouseWorldPosition()
+		local unitRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
+		local planeY = rootPart.Position.Y
+		local planeNormal = Vector3.new(0, 1, 0)
+		local planePoint = Vector3.new(0, planeY, 0)
+
+		local rayDirection = unitRay.Direction
+		local rayOrigin = unitRay.Origin
+
+		local denom = planeNormal:Dot(rayDirection)
+		if math.abs(denom) > 1e-6 then
+			local t = (planePoint - rayOrigin):Dot(planeNormal) / denom
+			if t >= 0 then
+				local intersection = rayOrigin + t * rayDirection
+				return intersection
+			end
+		end
+
+		-- Fallback
+		local distance = 40 -- Reduced from 50
+		local worldPoint = rayOrigin + rayDirection * distance
+		return Vector3.new(worldPoint.X, planeY, worldPoint.Z)
+	end
+
+	-- 📊 NETWORK-OPTIMIZED FPS COUNTER
+	local fpsCounter = {frames = 0, lastUpdate = tick()}
+	local lastDebugTime = 0
+
+	-- 🚀 NETWORK-OPTIMIZED MAIN MOVEMENT LOOP
+	local lastPosition = rootPart.Position
+	local updateCounter = 0
+	local networkUpdateInterval = 1 -- Update EVERY frame for butter smooth movement
+
+	-- Use Heartbeat for movement updates (works on both client and server)
+	heartbeatConnection = RunService.Heartbeat:Connect(function(dt)
+		if not rootPart or not rootPart.Parent then
+			cleanupSnake()
+			return
+		end
+
+		updateCounter = updateCounter + 1
+
+		-- FPS tracking (throttled)
+		fpsCounter.frames = fpsCounter.frames + 1
+		if tick() - fpsCounter.lastUpdate >= 1 then
+			State.stats.fps = fpsCounter.frames
+			fpsCounter.frames = 0
+			fpsCounter.lastUpdate = tick()
+		end
+
+		-- Input handling (Mouse or Mobile)
+		-- Process input at network update rate (same as PC)
+		if updateCounter % networkUpdateInterval == 0 then
+			if _G.IsMobile and _G.PlayerSnakes and _G.PlayerSnakes[player] then
+				-- MOBILE CONTROLS (Touch-based like slither.io)
+				local snakeData = _G.PlayerSnakes[player]
+
+				-- Handle mobile touch movement - Slither.io style
+				if snakeData.touchPosition then
+					-- Convert touch position to world position ACCURATELY
+					local camera = workspace.CurrentCamera
+					local touchX = snakeData.touchPosition.X
+					local touchY = snakeData.touchPosition.Y
+
+					-- Create a ray from camera through touch point
+					local unitRay = camera:ScreenPointToRay(touchX, touchY)
+
+					-- Since our camera is looking down, we need to find where the ray hits the ground plane
+					local rayOrigin = unitRay.Origin
+					local rayDirection = unitRay.Direction
+
+					-- Find intersection with the Y plane at snake's height
+					local planeY = rootPart.Position.Y
+					local t = (planeY - rayOrigin.Y) / rayDirection.Y
+
+					-- Calculate the actual world position where finger is pointing
+					local worldTouchPosition = rayOrigin + rayDirection * t
+
+					-- Calculate direction from snake head to finger position
+					local toFinger = worldTouchPosition - rootPart.Position
+					toFinger = Vector3.new(toFinger.X, 0, toFinger.Z)
+
+					-- Only turn if finger is far enough from head (same as PC mouse)
+					if toFinger.Magnitude > 1.0 then -- Same threshold as PC
+						local newTargetDir = toFinger.Unit
+
+						-- ANTI-ZIGZAG: Prevent instant 180-degree turns (same as PC should have)
+						local dotProduct = State.currentDirection:Dot(newTargetDir)
+
+						-- If trying to turn more than 120 degrees instantly, limit it
+						if dotProduct < -0.5 then -- cos(120°) = -0.5
+							-- Calculate the maximum allowed turn angle
+							local rightVector = State.currentDirection:Cross(Vector3.new(0, 1, 0))
+							local crossProduct = rightVector:Dot(newTargetDir)
+
+							-- Limit to 120 degree turn
+							local maxTurnAngle = math.rad(120)
+							local turnDirection = crossProduct > 0 and 1 or -1
+
+							-- Create limited direction vector
+							local limitedAngle = math.atan2(State.currentDirection.Z, State.currentDirection.X) + (maxTurnAngle * turnDirection)
+							newTargetDir = Vector3.new(math.cos(limitedAngle), 0, math.sin(limitedAngle)).Unit
+						end
+
+						State.targetDirection = newTargetDir
+					end
+
+					-- Debug: Show where the touch is in world (red part shows finger position)
+					if not _G.TouchDebugPart then
+						_G.TouchDebugPart = Instance.new("Part")
+						_G.TouchDebugPart.Size = Vector3.new(1, 0.2, 1) -- Even smaller
+						_G.TouchDebugPart.Material = Enum.Material.Neon
+						_G.TouchDebugPart.BrickColor = BrickColor.new("Really red")
+						_G.TouchDebugPart.CanCollide = false
+						_G.TouchDebugPart.Anchored = true
+						_G.TouchDebugPart.Transparency = 0.5
+						_G.TouchDebugPart.Parent = workspace
+					end
+
+					-- Only show debug part when actively touching
+					_G.TouchDebugPart.Position = worldTouchPosition
+					_G.TouchDebugPart.Transparency = 0.5
+				else
+					-- Hide debug part when not touching
+					if _G.TouchDebugPart then
+						_G.TouchDebugPart.Transparency = 1 -- Fully invisible
+					end
+				end
+
+				-- Handle mobile boost
+				if snakeData.isBoosting and not State.boosting then
+					State.boosting = true
+					State.targetSpeed = Config.BoostSpeed
+
+					-- Add boost effect for mobile
+					local boostEffect = Instance.new("ParticleEmitter")
+					boostEffect.Name = "BoostEffect"
+					boostEffect.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+					boostEffect.Color = ColorSequence.new(Config.HeadColor)
+					boostEffect.Rate = 60
+					boostEffect.Lifetime = NumberRange.new(0.5)
+					boostEffect.Speed = NumberRange.new(6)
+					boostEffect.SpreadAngle = Vector2.new(35, 35)
+					boostEffect.Parent = rootPart
+				elseif not snakeData.isBoosting and State.boosting then
+					State.boosting = false
+					State.targetSpeed = speedModes[State.speedMode] or Config.BaseSpeed
+
+					-- Remove boost effect
+					local boostEffect = rootPart:FindFirstChild("BoostEffect")
+					if boostEffect then
+						boostEffect.Enabled = false
+						Debris:AddItem(boostEffect, 0.8)
+					end
+				end
+			else
+				-- MOUSE CONTROLS (Desktop)
+				local mousePos = getMouseWorldPosition()
+				local delta = mousePos - rootPart.Position
+				delta = Vector3.new(delta.X, 0, delta.Z)
+
+				if delta.Magnitude > 1.0 then -- Reduced for more responsive control
+					-- FIX: Ensure direction is normalized and valid
+					local newTargetDir = delta.Unit
+					if newTargetDir.Magnitude < 0.9 or newTargetDir.Magnitude > 1.1 then
+						-- Fallback if direction is invalid
+						newTargetDir = State.currentDirection
+					end
+
+					-- PROPER DIRECTION VALIDATION
+					State.targetDirection = newTargetDir
+				end
+			end
+		end
+
+		-- BUTTERY smooth direction changes (same for mobile and PC)
+		local turnRate = Config.TurnSpeed * dt * 0.9 -- Slightly slower for more realistic movement
+
+		-- Reduce turn rate when near walls to prevent shaking
+		if State.wallStuckTime > 0 then
+			turnRate = turnRate * 0.3  -- Much slower turning when stuck
+		end
+
+		-- PROPER DIRECTION INTERPOLATION - Never let it become invalid
+		if State.targetDirection.Magnitude > 0.001 and State.currentDirection.Magnitude > 0.001 then
+			-- Only interpolate if both directions are valid
+			local newDirection = State.currentDirection:Lerp(State.targetDirection, turnRate)
+
+			-- Always normalize after lerp
+			if newDirection.Magnitude > 0.001 then
+				State.currentDirection = newDirection.Unit
+			end
+		end
+
+		-- BUTTERY smooth speed changes
+		local speedRate = 15 * dt -- Consistent smooth acceleration
+		State.smoothSpeed = State.smoothSpeed + (State.targetSpeed - State.smoothSpeed) * speedRate
+
+		-- Apply movement DIRECTLY for proper speed (with gamepass multiplier)
+		-- Apply all speed multipliers
+		local tempMultiplier = player:GetAttribute("TempSpeedMultiplier") or 1
+		local actualSpeed = State.smoothSpeed * State.speedMultiplier * tempMultiplier
+		local moveDistance = actualSpeed * dt
+		local newPosition = rootPart.Position + State.currentDirection * moveDistance
+
+		-- WALL COLLISION CHECK - PREVENT PUSHING INTO WALLS
+		local raycastParams = RaycastParams.new()
+		raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+		raycastParams.FilterDescendantsInstances = {character}
+
+		-- Check multiple rays for better collision detection
+		local checkDistance = moveDistance + 8  -- Increased buffer
+		local raycast = workspace:Raycast(rootPart.Position, State.currentDirection * checkDistance, raycastParams)
+
+		if raycast and raycast.Instance then
+			local hitPart = raycast.Instance
+			if hitPart.Name:match("Wall") or hitPart.Name:match("Boundary") or (hitPart.CanCollide and hitPart.Parent ~= character) then
+				-- Calculate safe distance from wall
+				local distanceToWall = raycast.Distance
+				local safeDistance = 5  -- Keep 5 studs away from wall
+
+				if distanceToWall < safeDistance then
+					-- TOO CLOSE TO WALL - STOP AND TURN AWAY
+					newPosition = rootPart.Position  -- Don't move forward
+
+					-- Force turn away from wall
+					local wallNormal = raycast.Normal
+					local awayFromWall = wallNormal * 10  -- Push away strongly
+
+					-- Calculate a direction that moves away from the wall
+					local escapeDirection = (State.currentDirection + awayFromWall).Unit
+					State.targetDirection = escapeDirection
+
+					-- If still pushing into wall, do a harder turn
+					if State.currentDirection:Dot(wallNormal) < -0.5 then
+						-- We're facing directly into the wall - do a 90 degree turn
+						local rightVector = State.currentDirection:Cross(Vector3.new(0, 1, 0))
+						State.targetDirection = rightVector.Unit
+						State.currentDirection = State.targetDirection  -- Instant turn when stuck
+					end
+
+					-- Clear any physics interference
+					rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+					rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+				elseif distanceToWall < safeDistance * 2 then
+					-- GETTING CLOSE TO WALL - Start sliding
+					local wallNormal = raycast.Normal
+					local slideDirection = State.currentDirection - (State.currentDirection:Dot(wallNormal) * wallNormal)
+
+					if slideDirection.Magnitude > 0.1 then
+						slideDirection = slideDirection.Unit
+						State.targetDirection = slideDirection
+						newPosition = rootPart.Position + slideDirection * moveDistance * 0.7
+					end
+				end
+			end
+		end
+
+		-- STUCK DETECTION AND RECOVERY
+		local movementDelta = (newPosition - State.lastPosition).Magnitude
+		if movementDelta < 0.1 and State.smoothSpeed > 5 then
+			-- We're trying to move but stuck
+			State.wallStuckTime = State.wallStuckTime + dt
+
+			if State.wallStuckTime > 0.5 then
+				-- Been stuck for half a second - force escape
+				local escapeAngle = math.random() * math.pi * 2
+				State.currentDirection = Vector3.new(math.sin(escapeAngle), 0, math.cos(escapeAngle)).Unit
+				State.targetDirection = State.currentDirection
+				newPosition = rootPart.Position + State.currentDirection * 5
+				State.wallStuckTime = 0
+
+				if State.debugMode then
+					warn("🔄 Stuck detected! Auto-escaping...")
+				end
+			end
+		else
+			State.wallStuckTime = 0
+		end
+		State.lastPosition = newPosition
+
+		-- Update position and rotation
+		-- CRITICAL FIX: Set position and rotation properly
+		-- Clear any physics velocity that might interfere
+		rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+		rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+
+		-- Set CFrame with validated direction
+		rootPart.CFrame = CFrame.lookAt(newPosition, newPosition + State.currentDirection)
+
+		-- Record path point (throttled)
+		if updateCounter % networkUpdateInterval == 0 then
+			pathSystem:recordPoint(rootPart.Position, State.smoothSpeed, tick())
+		end
+
+		-- Update globals and stats
+		_G.SnakeSpeed = State.smoothSpeed
+		State.stats.distance = State.stats.distance + (rootPart.Position - lastPosition).Magnitude
+		State.stats.pathPoints = pathSystem.pointCount
+		State.stats.totalDistance = pathSystem.totalDistance
+		lastPosition = rootPart.Position
+
+		-- Debug output (heavily throttled)
+		if State.debugMode and tick() - lastDebugTime > 1 then -- Increased from 0.5
+			lastDebugTime = tick()
+			print(string.format(
+				"📊 FPS: %d | Speed: %.1f | Distance: %.1fm | Path Points: %d | Total Distance: %.1fm",
+				State.stats.fps,
+				State.smoothSpeed,
+				State.stats.distance,
+				State.stats.pathPoints,
+				State.stats.totalDistance
+				))
+		end
+	end)
+
+	-- Connect cleanup to humanoid death
+	diedConnection = humanoid.Died:Connect(cleanupSnake)
+
+	-- Initialize
+	setupHead()
+	setSpeedMode("normal")
+end
+
+-- Main execution logic
+player.CharacterAdded:Connect(initializeForCharacter)
+
+if player.Character then
+	initializeForCharacter(player.Character)
+end
